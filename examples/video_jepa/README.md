@@ -1,4 +1,4 @@
-# JEPA For Learning from a Video Sequence
+# Self-Supervised Representation Learning from Video Sequences
 
 This example demonstrates Joint Embedding Predictive Architecture (JEPA) for self-supervised representation learning on video sequences. The model learns to predict future video representations from past observations without requiring labeled data.
 

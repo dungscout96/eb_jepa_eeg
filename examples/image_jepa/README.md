@@ -1,13 +1,15 @@
-## Image JEPA
+## Self-Supervised Representation Learning from Unlabeled Images
 
-This example demonstrates how to train a Joint Embedding Predictive Architecture (JEPA) on individual images instead of video sequences. The model learns representations from individual frames of the Moving MNIST dataset and is evaluated using linear probing for digit classification.
+This example demonstrates how to train a Joint Embedding Predictive Architecture (JEPA) on unlabeled images. The model learns representations from individual frames of the CIFAR 10 dataset and is evaluated using linear probing for image classification.
+
+![Image JEPA Architecture](assets/arch_figure.png)
 
 ## Features
 
-- **Image-only training**: Treats individual frames as separate images rather than video sequences
-- **Linear probing evaluation**: Evaluates learned representations using a linear classifier for digit classification
-- **Same data, different approach**: Uses the same Moving MNIST dataset but processes frames individually
-- **Representation learning**: Learns meaningful representations through self-supervised learning
+- **Image-only training**: Training from unlabeled image data
+- **Representation learning**: Learns meaningful representations through self-supervised learning, avoids collapse using Variance-Covariance Regularization.
+- **Linear probing evaluation**: Evaluates learned representations using a linear classifier
+
 
 ## Architecture
 
