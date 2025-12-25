@@ -1,28 +1,22 @@
 # Energy Based Joint Embedding Predictive Architectures (JEPA)
-
-EB JEPA is an open source library and tutorial aimed at learning representations using joint embedding predictive arhictectures and planning using them.
-Examples include learning image (a), video (b), and action conidtioned video (c) predictive models representations, as well as planning with them (d).
 ![EB JEPA](docs/teaser.png)
 
-## Examples
+An open source library and tutorial aimed at learning representations for prediction and planning using joint embedding predictive arhictectures.
+Examples include learning image (a), video (b), and action conidtioned video (c) predictive models representations, as well as planning with them (d).
 
-### Image JEPA
+Each example is (almost) self-contained and training takes up to few hours on a single GPU card.
+
+### Image Representations
 
 This example demonstrates learning self-supervised representations from unlabeled images on CIFAR 10, and evaluated on image classification.
 ![Moving MNIST](examples/image_jepa/assets/arch_figure.png)
 
-
-### Video JEPA on [Moving MNIST](https://www.cs.toronto.edu/~nitish/unsupervised_video)
-
+### Predictive Video Representations
 ![Moving MNIST](examples/video_jepa/assets/viz.png)
 
-In this toy setting, a world model is trained given the MNIST image representation (or a sequence)
+A model is trained to predict the next image representation in a sequence
 
-Prediction targets:
-
-- next state representation
-
-### Action Conditioned Video JEPA on Two Rooms
+### Action Conditioned Prediction and Planning
 
 This example demonstrates a Joint Embedding Predictive Architecture (JEPA) for action-conditioned world modeling in the Two Rooms environment. The model learns to predict future states based on current observations and actions. These representations enable planning towards a goal observation embedding.
 
@@ -30,15 +24,6 @@ This example demonstrates a Joint Embedding Predictive Architecture (JEPA) for a
 |------------------|-----------------|
 | <img src="examples/ac_video_jepa/assets/top_randw_agent_steps_succ.gif" alt="Successful planning episode" width="155" /> | <img src="examples/ac_video_jepa/assets/top_randw_state.png" alt="Episode task definition" width="300" /> |
 | *Successful planning episode* | *Episode task definition: from init to goal state* |
-
-The world model is trained given:
-
-- image representation (or a sequence)
-- action
-
-Prediction targets:
-
-- next state representation
 
 ## Installation
 
