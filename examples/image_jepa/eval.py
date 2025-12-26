@@ -5,7 +5,7 @@ Evaluation utilities for self-supervised learning.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.cuda.amp import autocast
+from torch.amp import autocast
 
 
 class LinearProbe(nn.Module):
@@ -33,7 +33,7 @@ def evaluate_linear_probe(model, linear_probe, val_loader, device, use_amp=True)
             data = data.to(device, non_blocking=True)
             target = target.to(device, non_blocking=True)
             
-            with autocast(enabled=use_amp):
+            with autocast('cuda', enabled=use_amp):
                 features, _ = model(data)
 
             outputs = linear_probe(features.float())

@@ -17,11 +17,11 @@ import torchvision
 import torchvision.transforms as transforms
 from torchvision.datasets import CIFAR10
 from torch.optim.optimizer import required
+from torchvision.models import VisionTransformer
 import wandb
 from tqdm import tqdm
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 
-from eb_jepa.architectures import make_vit_small, make_vit_base
 from eb_jepa.losses import VICRegLoss, BCS
 from dataset import get_train_transforms, get_val_transforms, ImageDataset
 from eval import LinearProbe, evaluate_linear_probe
@@ -30,9 +30,9 @@ from eval import LinearProbe, evaluate_linear_probe
 class ResNet18(nn.Module):
     """ResNet-18 backbone implementation."""
     
-    def __init__(self, num_classes=10):
+    def __init__(self):
         super().__init__()
-        self.backbone = torchvision.models.resnet18(pretrained=False)
+        self.backbone = torchvision.models.resnet18()
         self.backbone.fc = nn.Identity()  # Remove final classification layer
         self.backbone.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=2, bias=False)
         self.backbone.maxpool = nn.Identity()
@@ -69,7 +69,7 @@ class ImageSSL(nn.Module):
 
 
 class LARS(optim.Optimizer):
-    """LARS optimizer implementation - identical to solo-learn."""
+    """LARS optimizer implementation."""
     
     def __init__(
         self,
@@ -172,7 +172,7 @@ class LARS(optim.Optimizer):
 
 
 class WarmupCosineScheduler:
-    """Warmup cosine learning rate scheduler - consistent with solo-learn implementation."""
+    """Warmup cosine learning rate scheduler"""
     
     def __init__(self, optimizer, warmup_epochs, max_epochs, base_lr, min_lr=0.0, warmup_start_lr=3e-5):
         self.optimizer = optimizer
@@ -207,8 +207,8 @@ def train_epoch(model, train_loader, optimizer, scheduler, linear_probe, scaler,
     for batch_idx, (views, target) in enumerate(pbar):
         view1, view2 = views[0].to(device, non_blocking=True), views[1].to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
-        
-        with autocast(enabled=use_amp):
+
+        with autocast('cuda', enabled=use_amp):
             features, z1 = model(view1)
             _, z2 = model(view2)          
             loss_dict = loss_fn(z1, z2)
@@ -260,7 +260,7 @@ def train_epoch(model, train_loader, optimizer, scheduler, linear_probe, scaler,
     return metrics
 
 
-def create_base_parser(description='VICReg Training on CIFAR-10'):
+def create_base_parser(description='Image SSL Training on CIFAR-10'):
     """Create base argument parser with common arguments.
     
     This can be extended by other scripts to add their own arguments.
@@ -287,8 +287,7 @@ def create_base_parser(description='VICReg Training on CIFAR-10'):
     parser.add_argument('--data_dir', type=str, default='./datasets', help='Directory to store datasets')
     
     # Logging parameters
-    parser.add_argument('--project_name', type=str, default='solo-learn', help='Wandb project name')
-    parser.add_argument('--run_name', type=str, default='vicreg-cifar10-scratch', help='Wandb run name')
+    parser.add_argument('--project_name', type=str, default='eb-jepa-image-ssl', help='Wandb project name')
     parser.add_argument('--log_interval', type=int, default=10, help='Logging interval in epochs')
     parser.add_argument('--save_interval', type=int, default=50, help='Checkpoint saving interval in epochs')
     
@@ -308,9 +307,8 @@ def parse_args():
     parser.add_argument('--loss_type', type=str, choices=['vicreg', 'bcs'], default='vicreg', help='Loss function type')
     
     # VICReg-specific loss weights
-    parser.add_argument('--sim_loss_weight', type=float, default=25.0, help='Similarity loss weight (VICReg)')
-    parser.add_argument('--var_loss_weight', type=float, default=25.0, help='Variance loss weight (VICReg)')
-    parser.add_argument('--cov_loss_weight', type=float, default=1.0, help='Covariance loss weight (VICReg)')
+    parser.add_argument('--var_loss_weight', type=float, default=1.0, help='Variance loss weight (VICReg)')
+    parser.add_argument('--cov_loss_weight', type=float, default=80.0, help='Covariance loss weight (VICReg)')
     
     # BCS-specific loss weight
     parser.add_argument('--lmbd', type=float, default=10.0, help='BCS loss weight (LE-JEPA)')
@@ -337,7 +335,7 @@ def main():
     wandb.init(
         project=args.project_name,
         config=vars(args),
-        name=args.run_name
+        name=f'{args.model_type}-{args.loss_type}-{args.seed}'
     )
     
     print("Loading CIFAR-10 dataset...")
@@ -378,14 +376,18 @@ def main():
     # Initialize model
     print("Initializing model...")
     if args.model_type == 'resnet':
-        backbone = ResNet18(num_classes=10)
+        backbone = ResNet18()
         features_dim = backbone.features_dim
     elif args.model_type == 'vit_s':
-        backbone = make_vit_small(img_size=32, patch_size=args.patch_size)
-        features_dim = backbone.embed_dim
+        features_dim = 384
+        model_kwargs = dict(image_size=32, patch_size=8, hidden_dim=features_dim, num_layers=12, num_heads=6, mlp_dim=4*features_dim)
+        backbone = VisionTransformer(**model_kwargs)
+        backbone.heads = nn.Identity()
     elif args.model_type == 'vit_b':
-        backbone = make_vit_base(img_size=32, patch_size=args.patch_size)
-        features_dim = backbone.embed_dim
+        features_dim = 768
+        model_kwargs = dict(image_size=32, patch_size=8, hidden_dim=features_dim, num_layers=12, num_heads=12, mlp_dim=4*features_dim)
+        backbone = VisionTransformer(**model_kwargs)
+        backbone.heads = nn.Identity()
 
     model = ImageSSL(backbone, features_dim=features_dim, proj_hidden_dim=args.proj_hidden_dim, proj_output_dim=args.proj_output_dim)
 
@@ -398,7 +400,7 @@ def main():
     linear_probe = LinearProbe(feature_dim=features_dim, num_classes=10).to(device)
     
     # Initialize mixed precision scaler
-    scaler = GradScaler()
+    scaler = GradScaler('cuda')
     
     
     optimizer = LARS(
@@ -425,7 +427,6 @@ def main():
     # Initialize loss function
     if args.loss_type == 'vicreg':
         loss_fn = VICRegLoss(
-            sim_loss_weight=args.sim_loss_weight,
             var_loss_weight=args.var_loss_weight,
             cov_loss_weight=args.cov_loss_weight
         )
@@ -457,8 +458,8 @@ def main():
         # Print progress
         if epoch % args.log_interval == 0:
             elapsed = time.time() - start_time
-            print(f'Epoch {epoch:4d} | VICReg: {train_metrics["loss"]:.4f} | '
-                  f'Linear Train: {train_metrics["linear_acc"]:.2f}% | '
+            metrics_str = ' | '.join(f'{k}: {v:.4f}' for k, v in train_metrics.items())
+            print(f'Epoch {epoch:4d} | {metrics_str} | '
                   f'Linear Val: {val_acc:.2f}% | '
                   f'LR: {optimizer.param_groups[0]["lr"]:.6f} | '
                   f'Time: {elapsed:.1f}s')
@@ -475,8 +476,8 @@ def main():
                 'loss': train_metrics['loss'],
                 'linear_val_acc': val_acc
             }
-            os.makedirs('trained_models/vicreg', exist_ok=True)
-            torch.save(checkpoint, f'trained_models/vicreg/checkpoint_epoch_{epoch}.pth')
+            os.makedirs('examples/image_jepa/trained_models/', exist_ok=True)
+            torch.save(checkpoint, f'examples/image_jepa/trained_models/checkpoint_epoch_{epoch}.pth')
     
     print("Training completed!")
     wandb.finish()

@@ -577,9 +577,8 @@ class VICRegLoss(nn.Module):
         cov_loss_weight: Weight for covariance loss
     """
     
-    def __init__(self, sim_loss_weight=25.0, var_loss_weight=25.0, cov_loss_weight=1.0):
+    def __init__(self, var_loss_weight=1.0, cov_loss_weight=1.0):
         super().__init__()
-        self.sim_loss_weight = sim_loss_weight
         self.var_loss_weight = var_loss_weight
         self.cov_loss_weight = cov_loss_weight
     
@@ -609,10 +608,10 @@ class VICRegLoss(nn.Module):
         z1_cov = torch.mm(z1_centered.T, z1_centered) / (batch_size - 1)
         z2_cov = torch.mm(z2_centered.T, z2_centered) / (batch_size - 1)
         
-        cov_loss = (z1_cov.pow(2).sum() - z1_cov.diagonal().pow(2).sum()) / z1_cov.size(0) + \
-                   (z2_cov.pow(2).sum() - z2_cov.diagonal().pow(2).sum()) / z2_cov.size(0)
+        cov_loss = (z1_cov.pow(2).sum() - z1_cov.diagonal().pow(2).sum()) / (z1_cov.size(0)**2 - z1_cov.size(0)) + \
+                   (z2_cov.pow(2).sum() - z2_cov.diagonal().pow(2).sum()) / (z2_cov.size(0)**2 - z2_cov.size(0))
         
-        total_loss = self.sim_loss_weight * sim_loss + self.var_loss_weight * var_loss + self.cov_loss_weight * cov_loss
+        total_loss = sim_loss + self.var_loss_weight * var_loss + self.cov_loss_weight * cov_loss
         
         return {"loss": total_loss, "invariance_loss": sim_loss, "var_loss": var_loss, "cov_loss": cov_loss}
 

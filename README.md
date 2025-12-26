@@ -27,7 +27,7 @@ This example demonstrates a Joint Embedding Predictive Architecture (JEPA) for a
 
 ## Installation
 
-We use [uv](https://docs.astral.sh/uv/guides/projects/) package manager to install and maintain packages. Once you have [installed uv](https://docs.astral.sh/uv/getting-started/installation/), run the following to create a new virtual environment.
+We use [uv](https://docs.astral.sh/uv/guides/projects/) package manager to install and maintain packages. Once you have [installed uv](pip install --upgrade uv/), run the following to create a new virtual environment.
 
 ```bash
 uv sync
