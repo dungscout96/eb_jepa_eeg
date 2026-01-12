@@ -12,7 +12,6 @@ meta:
   light_eval_only_mode: false
   ckpt_dir: checkpoints
   model_folder:
-    # /checkpoint/amaia/video/basileterv/experiment/eb_jepa/rand_imp_bs384AdamW_2nd_loss_sweep/impala_encskTrue_prskTrue_cov8_std16_simt12_idm1_spFalse_useprojFalse_idmprojFalse_simtprojFalse_1sttFalse_rolllast_dstc32_henc32_hpre32_lr0.001_wd1e-05_bs384_samplen17_size100000_cw0.35_wb0.0_duptraj0.0_fixwFalse_10-30_seed1
   load_model: true
   load_checkpoint: # e-9.pth.tar
   enable_plan_eval: true

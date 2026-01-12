@@ -376,27 +376,13 @@ if __name__ == "__main__":
             f"/checkpoint/amaia/video/basileterv/experiment/eb_jepa/{args.sweep}"
         )
         overrides["logging.wandb_group"] = args.sweep
-        # ######### HARDCODE PARAM GRID FOR SWEEP ##########
         param_grid = {
-            # "model.regularizer.spatial_as_samples": [False],
-            # "model.regularizer.cov_coeff": [8, 12],
-            # "model.regularizer.std_coeff": [8, 16],
-            # "model.regularizer.sim_coeff_t": [8, 12, 16],
-            # "model.regularizer.idm_coeff": [1, 2],
-            # "model.regularizer.cov_coeff": [1, 2],
+            "model.regularizer.cov_coeff": [8, 12],
+            "model.regularizer.std_coeff": [8, 16],
+            "model.regularizer.sim_coeff_t": [8, 12, 16],
+            "model.regularizer.idm_coeff": [1, 2],
             "meta.seed": [1, 1000, 10000],
-            # "model.regularizer.first_t_only": [True, False],
         }
-        # param_grid = {
-        #     "optim.weight_decay": [1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1],
-        #     "optim.lr": [0.00005, 0.0001, 0.0005, 0.001, 0.005],
-        #     "meta.seed": [1, 1000, 10000],  # Add as many seeds as you want
-        # "model.train_rollout": ["last", "all"]
-        # "optim.lr": [0.0001, 0.0003, 0.0007, 0.001, 0.003, 0.007],
-        # "optim.grad_clip_enc": [2, 4],
-        # "optim.grad_clip_pred": [2, 4],
-        # }
-        # ########################################################
         base_fname = args.fname
         if overrides:
             print(f"Base overrides: {overrides}")

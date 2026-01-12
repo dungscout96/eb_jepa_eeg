@@ -39,21 +39,24 @@ But to avoid collapse, we require the below **regularization loss** terms:
 - **Time Similarity (time-sim) Loss**: Temporal consistency across frames, smooth the representation landscape following a trajectory of the agent.
 - **Inverse Dynamics Model (IDM) Loss**: Used to avoid collapse due to spurious correlation ([Sobal et al. 2022]((https://arxiv.org/abs/2211.10831))) when training with random wall location, introduced for RL in ([Pathak et al. 2017]((https://arxiv.org/pdf/1705.05363))).
 The total loss is denoted
-$$
-L = L_{pred} + \beta L_{cov} + \alpha L_{var} + \delta L_{time-sim} + \omega L_{IDM}.
-$$
+
+$$L = L_{pred} + \beta L_{cov} + \alpha L_{var} + \delta L_{time-sim} + \omega L_{IDM}.$$
+
 Given target and predicted visual embeddings $Z, \hat{Z}^k \in \mathbb{R}^{H \times N \times D}$, where $H \leq T$ is the prediction horizon of the model, $N$ is the batch dimension, and $D$ the feature dimension, the prediction loss is
-$$
-\mathcal{L}_{\mathrm{sim}}= \sum_{k=1}^K \sum_{t=0}^H \frac{1}{N}\sum_{b=0}^N\|\hat{Z}^k_{t,b} - Z_{t,b} \|^2_2.
-$$
+
+$$\mathcal{L}_{\mathrm{sim}}= \sum_{k=1}^K \sum_{t=0}^H \frac{1}{N}\sum_{b=0}^N\|\hat{Z}^k_{t,b} - Z_{t,b} \|^2_2.$$
+
 Regularization losses are defined as follows
-$$
-\mathcal{L}_{\mathrm{var}} = \frac{1}{HD} \sum^H_{t=0} \sum^D_{j=0} \mathrm{max}(0, \gamma - \sqrt{\mathrm{Var}(Z_{t,:,j}) + \epsilon} ), \\
-C(Z_t) = \frac{1}{N-1}(Z_t-\bar{Z_t})^\top(Z_t-\bar{Z_t}),  \ \bar{Z} =  \frac{1}{N} \sum^N_{b=1} Z_{t,b}, \\
-\mathcal{L}_{\mathrm{cov}} = \frac{1}{H} \sum^{H}_{t=0} \frac{1}{D} \sum_{i \neq j} [C(Z_t)]^2_{i,j}, \\
-\mathcal{L}_{\mathrm{IDM}} = \sum^H_{t=0} \frac{1}{N} \sum^N_{b=0} \| a_{t,b} - \mathrm{MLP}(Z_{(t,b)}, Z_{(t+1,b)}) \|^2_2, \\
-\mathcal{L}_{\mathrm{time-sim}}= \sum_{t=0}^{H-1} \frac{1}{N}\sum_{b=0}^N\|Z_{t,b} - Z_{t+1,b} \|^2_2,
-$$
+
+$$\mathcal{L}_{\mathrm{var}} = \frac{1}{HD} \sum^H_{t=0} \sum^D_{j=0} \mathrm{max}(0, \gamma - \sqrt{\mathrm{Var}(Z_{t,:,j}) + \epsilon} )$$
+
+$$C(Z_t) = \frac{1}{N-1}(Z_t-\bar{Z_t})^\top(Z_t-\bar{Z_t}),  \ \bar{Z} =  \frac{1}{N} \sum^N_{b=1} Z_{t,b}$$
+
+$$\mathcal{L}_{\mathrm{cov}} = \frac{1}{H} \sum^{H}_{t=0} \frac{1}{D} \sum_{i \neq j} [C(Z_t)]^2_{i,j}$$
+
+$$\mathcal{L}_{\mathrm{IDM}} = \sum^H_{t=0} \frac{1}{N} \sum^N_{b=0} \| a_{t,b} - \mathrm{MLP}(Z_{(t,b)}, Z_{(t+1,b)}) \|^2_2$$
+
+$$\mathcal{L}_{\mathrm{time-sim}}= \sum_{t=0}^{H-1} \frac{1}{N}\sum_{b=0}^N\|Z_{t,b} - Z_{t+1,b} \|^2_2$$
 
 
 ### Training Data
@@ -106,10 +109,8 @@ In this evaluation, we sample a trajectory of the dataset, then:
 
 ### Planning evaluation
 In this evaluation, we perform goal-conditioned trajectory optimization. We optimize over the action space to minimize the below cost (where the $\hat{z}$ sequence is defined recursively):
-$$
-C(a, s_0, s_g) = \sum_{t=0}^H \| E_{\theta}(s_g) - P_{\theta}(\hat{z}_t, a_t) \|_2, \\
-\hat{z}_0 = E_{\theta}(s_0), \quad \hat{z}_{t+1} = P_{\theta}(\hat{z}_t, a_t), \quad t=0,\dots, H.
-$$
+$$C(a, s_0, s_g) = \sum_{t=0}^H \| E_{\theta}(s_g) - P_{\theta}(\hat{z}_t, a_t) \|_2, \\
+\hat{z}_0 = E_{\theta}(s_0), \quad \hat{z}_{t+1} = P_{\theta}(\hat{z}_t, a_t), \quad t=0,\dots, H.$$
 
 We define an **evaluation episode** as a pair $(s_0, s_g)$, the *task definition* along with the *plan* outputted by our agent and planning procedure, and whether this leads to $s_g$ (Success) or not (Failure).
 We display the success rate as an average over $N$ episodes, with $N=20$.
@@ -131,10 +132,10 @@ We use either of the below population-based optimizers to find $a$ that minimize
      - Sample $N$ action trajectories from the distribution $\mathcal{N}(\mu_j, (\sigma_j)^2 \textbf{I})$
      - Compute costs $c_i, i =1, \dots, K$ for each trajectory using the world model and the formula $C(a, s_0, s_g)$
      - For the top $K$ elite trajectories with lowest costs, calculate importance weights using softmax with temperature $\tau$ for the:
-       $$ w_i = \frac{\exp(\frac{c_{min} - c_i}{\tau})}{\sum_{j=1}^{K}\exp(\frac{c_{min} - c_j}{\tau})} $$
+       $$w_i = \frac{\exp(\frac{c_{min} - c_i}{\tau})}{\sum_{j=1}^{K}\exp(\frac{c_{min} - c_j}{\tau})}$$
      - Update mean and standard deviation using weighted averaging:
-       $$ \mu_{j} = \frac{\sum_{i=1}^{K}w_i a_i}{\sum_{i=1}^{k}w_i} $$
-       $$ \sigma_{j} = \sqrt{\frac{\sum_{i=1}^{K}w_i(a_i - \mu_{j})^2}{\sum_{i=1}^{K}w_i}} $$
+       $$\mu_{j} = \frac{\sum_{i=1}^{K}w_i a_i}{\sum_{i=1}^{k}w_i}$$
+       $$\sigma_{j} = \sqrt{\frac{\sum_{i=1}^{K}w_i(a_i - \mu_{j})^2}{\sum_{i=1}^{K}w_i}}$$
   3. Return the final action trajectory by sampling among the $K$ elite trajectories with probabilities $w_i, i=1, \dots, K$.
 - **Cross-Entropy Method (CEM)**: Same algorithm as MPPI but:
   1. Importance weights are $w_i =\frac{1}{K}$ for the $K$ elite trajectories
@@ -163,7 +164,7 @@ Our best model gets 97% Success in the Random Wall setup.
 
 | Model Architecture | Planner | SR (%) |
 |-------------------|---------|------------------|
-| Impala - RNN| MPPI   | $97 \pm 2 $ |
+| Impala - RNN| MPPI   | $97 \pm 2$ |
 
 #### Visualisation
 The below figure shows a successful planning episode with the MPPI planner, a model trained on the fix wall and evaluated on the same wall position.
@@ -187,11 +188,11 @@ We ablate the regularization loss terms, setting to zero each of these 4 loss te
 
 | Ablated loss term | SR (%) |
 |-------------------|------------------|
-| - | $ 97 \pm 2 $ |
-| var coeff ($\alpha$) | $ 47 \pm 3 $ |
-| cov coeff ($\beta$) | $ 46 \pm 3 $ |
-| time sim coeff ($\delta$) | $ 61 \pm 2 $ |
-| IDM coeff ($\omega$) | $ 1 \pm 1 $ |
+| - | $97 \pm 2$ |
+| var coeff ($\alpha$) | $47 \pm 3$ |
+| cov coeff ($\beta$) | $46 \pm 3$ |
+| time sim coeff ($\delta$) | $61 \pm 2$ |
+| IDM coeff ($\omega$) | $1 \pm 1$ |
 
 Key insights:
 1. As expected, models with $\omega=0$ collapse, due to the spurious correlation caveat mentioned in ([Sobal et al. 2022]((https://arxiv.org/abs/2211.10831))).
@@ -203,9 +204,9 @@ In the below table, we also compare planning optimizers in terms of success rate
 
 | Model Architecture | Planner | SR (%) | Episode time (s) |
 |-------------------|---------------|------------------|----|
-| Impala - RNN      | MPPI    |   $ 97 \pm 2 $   | 37   |
-| Impala - RNN      | CEM     |   $ 96 \pm 2 $   | 37  |
-| Impala - RNN      | MPPI - last     |   $ 89 \pm 2 $   | 37  |
+| Impala - RNN      | MPPI    |   $97 \pm 2$   | 37   |
+| Impala - RNN      | CEM     |   $96 \pm 2$   | 37  |
+| Impala - RNN      | MPPI - last     |   $89 \pm 2$   | 37  |
 
 Key insights:
 1. Defining the planning cost as in the above section, as a sum of the distances of the "imagined" embeddings to the goal embedding, brings a clear improvement (about 8% SR) compared to only using the distance of the last imagined embedding, which we denote as **"MPPI last"** in the above table. Summing over the intermediate states pushes the agent to reach the goal in as few actions as possible and yields a planning cost more robust to prediction compounding errors.
@@ -228,7 +229,7 @@ python -m examples.ac_video_jepa.launch_sbatch \
 
 | Loss coeff train sweep |
 |------------------|
-| <img src="assets/imp_randw_best_2nd_sweep.png" alt="Successful planning episode" width="500" /> |
+| <div align="center"><img src="assets/imp_randw_best_2nd_sweep.png" alt="Successful planning episode" width="500" /> |
 | *Wandb logging of success rate, losses and unroll eval metrics throughout a training sweep of regularization loss coefficients, on the random wall setup. Each curve is the average of 3 runs with different training seeds.* |
 
 ## References
