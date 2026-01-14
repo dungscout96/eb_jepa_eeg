@@ -3,11 +3,11 @@ logging:
   wandb_group:
   wandb_sweep:
   log_every: 10
-  exp_suffix: 11-4
+  exp_suffix: 26-01-14
   save_every_n_epochs: 1
   tqdm_silent: true
 meta:
-  quick_debug: false
+  quick_debug: true
   plan_eval_only_mode: false
   light_eval_only_mode: false
   ckpt_dir: checkpoints

@@ -10,7 +10,6 @@ import torch
 import torch.nn as nn
 import yaml
 from omegaconf import OmegaConf
-from ruamel.yaml import YAML
 from torch.amp import GradScaler, autocast
 from torch.optim import AdamW
 
@@ -23,15 +22,11 @@ from eb_jepa.architectures import (
 )
 from eb_jepa.datasets.utils import init_data
 from eb_jepa.jepa import JEPA, JEPAProbe
+from eb_jepa.logging import get_logger
 from eb_jepa.losses import SquareLossSeq, VC_IDM_Sim_Regularizer
 from eb_jepa.planning import main_eval, main_unroll_eval
 from eb_jepa.schedulers import CosineWithWarmup
 from examples.ac_video_jepa.heads import MLPXYHead
-
-yaml_rt = YAML(typ="rt")  # rt = round-trip mode
-yaml_rt.preserve_quotes = True
-
-from eb_jepa.logging import get_logger
 
 logging = get_logger(__name__)
 
@@ -51,12 +46,9 @@ def launch_plan_eval(
     num_eval_episodes=10,
     loader=None,
     prober=None,
-    # Planning hyperparameters
     plan_cfg=None,
 ):
-    """
-    Launch evaluation of the planning capabilities of the trained model.
-    """
+    """Evaluate the planning capabilities of the trained JEPA model."""
     logging.info(f"Evaluating at epoch {epoch} and iteration {global_step}")
     jepa.eval()
     eval_folder = folder / "plan_eval" / f"step-{global_step}{suffix}"
@@ -65,7 +57,7 @@ def launch_plan_eval(
     if plan_cfg is not None:
         plan_cfg_file = eval_folder / "plan_config.yaml"
         with open(plan_cfg_file, "w") as f:
-            yaml_rt.dump(plan_cfg, f)
+            yaml.dump(plan_cfg, f)
         logging.info(f"Planning configuration saved to {plan_cfg_file}")
 
     eval_results = main_eval(
@@ -97,9 +89,7 @@ def launch_unroll_eval(
     prober=None,
     cfg=None,
 ):
-    """
-    Launch evaluation of the unrolling capabilities of the trained model.
-    """
+    """Evaluate the unrolling (prediction) capabilities of the trained JEPA model."""
     jepa.eval()
     logging.info(f"Evaluating unroll at epoch {epoch} and iteration {global_step}")
     eval_folder = folder / "unroll_eval" / f"step-{global_step}{suffix}"
@@ -112,7 +102,6 @@ def launch_unroll_eval(
         prober=prober,
         cfg=cfg,
     )
-    # Improved logging with cleaner multi-line formatting
     steps = [0, 1, 2, 3]
     mean_values = " | ".join(
         [f"{i}: {eval_results[f'val_rollout/mean_mse/{i}']:.2f}" for i in steps]
@@ -120,35 +109,25 @@ def launch_unroll_eval(
     std_values = " | ".join(
         [f"{i}: {eval_results[f'val_rollout/std_mse/{i}']:.2f}" for i in steps]
     )
-
-    logging.info(
-        f"""Unroll evaluation results:
-    val_rollout/mean_mse: {mean_values}
-    val_rollout/std_mse: {std_values}"""
-    )
+    logging.info(f"Unroll eval - mean_mse: {mean_values} | std_mse: {std_values}")
     jepa.train()
 
     return eval_results
 
 
 def load_override_cfg(fname: str, kwargs_dict: Optional[dict] = None):
-    """Load configuration from a YAML file and override with a dictionary."""
-    # 1. Load config from file and convert to OmegaConf
-    assert fname and os.path.exists(fname)
+    """Load configuration from a YAML file and optionally override with a dictionary."""
+    assert fname and os.path.exists(fname), f"Config file not found: {fname}"
     with open(fname, "r") as f:
-        cfg_dict = yaml.safe_load(f)
-    cfg = OmegaConf.create(cfg_dict)
+        cfg = OmegaConf.create(yaml.safe_load(f))
     print(f"Loaded config from {fname}")
-    # 2. Override with CLI arguments
     if kwargs_dict:
         override_dict = {}
         for arg_name, arg_value in kwargs_dict.items():
             keys = arg_name.split(".")
             current = override_dict
             for key in keys[:-1]:
-                if key not in current:
-                    current[key] = {}
-                current = current[key]
+                current = current.setdefault(key, {})
             current[keys[-1]] = arg_value
         cfg = OmegaConf.merge(cfg, OmegaConf.create(override_dict))
     return cfg
@@ -177,18 +156,23 @@ def main(
     folder=None,
     **kwargs,
 ):
-    # Load config
+    """
+    Train an action-conditioned Video JEPA model.
+
+    Args:
+        fname: Path to the YAML config file.
+        cfg: Pre-loaded config object (optional, overrides fname).
+        folder: Experiment folder path (optional, auto-generated if not provided).
+        **kwargs: Config overrides in dot notation (e.g., model.henc=64).
+    """
     if cfg is None:
         cfg = load_override_cfg(fname, kwargs)
-    # 3. Folder definition
+    quick_debug = cfg.meta.get("quick_debug", False)
     if folder is None:
-        folder = get_experiment_folder(
-            cfg, cfg.data, quick_debug=cfg.meta.get("quick_debug")
-        )
+        folder = get_experiment_folder(cfg, cfg.data, quick_debug=quick_debug)
     os.makedirs(folder, exist_ok=True)
-    # 4. Quick debug mode settings
-    if cfg.meta.get("quick_debug"):
-        quick_debug = True
+
+    if quick_debug:
         cfg.logging.log_wandb = False
         cfg.meta.eval_every_itr = 2
         cfg.meta.light_eval_freq = 2
@@ -196,38 +180,30 @@ def main(
         cfg.data.num_workers = 0
         cfg.data.batch_size = 4
         cfg.logging.tqdm_silent = False
-    else:
-        quick_debug = False
+
     if cfg.meta.light_eval_only_mode:
         cfg.meta.light_eval_freq = 2
         cfg.logging.log_wandb = False
         cfg.data.batch_size = 4
         cfg.logging.tqdm_silent = False
+
     train_jepa = True
     train_probe = True
     if cfg.meta.get("light_eval_only_mode") or cfg.meta.get("plan_eval_only_mode"):
         train_jepa, train_probe, cfg.logging.log_wandb = False, False, False
-    # 5. Dataset
-    # TODO: if do not need data_config but only cfg.data, can be after folder definition
+
     loader, val_loader, data_config = init_data(
         env_name=cfg.data.env_name, cfg_data=dict(cfg.data)
     )
-    logging.info(f"Initialized loader with len {len(loader)}")
+    logging.info(f"Loader: {len(loader)} batches, batch_size={data_config.batch_size}")
     # Set seed
     torch.manual_seed(cfg.meta.seed)
     np.random.seed(cfg.meta.seed)
     random.seed(cfg.meta.seed)
 
-    # dtype
-    if cfg.data.dtype.lower() == "bfloat16":
-        dtype = torch.bfloat16
-        mixed_precision = True
-    elif cfg.data.dtype.lower() == "float16":
-        dtype = torch.float16
-        mixed_precision = True
-    else:
-        dtype = torch.float32
-        mixed_precision = False
+    dtype_map = {"bfloat16": torch.bfloat16, "float16": torch.float16}
+    dtype = dtype_map.get(cfg.data.dtype.lower(), torch.float32)
+    mixed_precision = dtype != torch.float32
 
     # -- ENV
     if cfg.meta.get("enable_plan_eval"):
@@ -412,29 +388,18 @@ def main(
         hcost=nn.MSELoss(),
     )
 
-    # -- OPTIMIZATION
-    # Create separate optimizers for JEPA and prober
-    jepa_optimizer = None
-    jepa_scheduler = None
+    jepa_optimizer, jepa_scheduler = None, None
     if train_jepa:
         jepa_optimizer = AdamW(
-            jepa.parameters(),
-            lr=cfg.optim.lr,
+            jepa.parameters(), lr=cfg.optim.lr,
             weight_decay=cfg.optim.get("weight_decay", 1e-6),
         )
         jepa_scheduler = CosineWithWarmup(jepa_optimizer, total_steps, warmup_ratio=0.1)
 
-    probe_optimizer = None
-    probe_scheduler = None
+    probe_optimizer, probe_scheduler = None, None
     if train_probe:
-        probe_optimizer = AdamW(
-            xy_head.parameters(),
-            lr=1e-3,
-            weight_decay=1e-5,
-        )
-        probe_scheduler = CosineWithWarmup(
-            probe_optimizer, total_steps, warmup_ratio=0.1
-        )
+        probe_optimizer = AdamW(xy_head.parameters(), lr=1e-3, weight_decay=1e-5)
+        probe_scheduler = CosineWithWarmup(probe_optimizer, total_steps, warmup_ratio=0.1)
 
     # -- LOAD CKPT
     start_epoch = 1

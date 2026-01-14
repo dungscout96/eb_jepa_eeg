@@ -455,7 +455,7 @@ class ImpalaEncoder(nn.Module):
         else:
             self.final_ln = nn.Identity()
 
-    def forward(self, x, y):
+    def forward(self, x):
         """
         x: (bs, ch, t, w, h)
         out: (bs, dim, t, 1, 1)

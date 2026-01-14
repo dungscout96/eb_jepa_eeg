@@ -92,12 +92,6 @@ python -m examples.ac_video_jepa.launch_sbatch \
   --sweep /sweep/common/folder \
   --fname examples/ac_video_jepa/cfgs/<train_cfg>.yaml \
   --use_wandb_sweep
-
-# Analyse results of training sweep
-python -m examples.ac_video_jepa.train_sweep \
-  --sweep-folder /sweep/common/folder \
-  --enc-type impala \
-  --average-over-seeds
 ```
 
 ## Evaluation
@@ -158,7 +152,7 @@ The unrolling of 90 actions by our best model is illustrated in the below figure
 | *Random wall train and eval* |
 
 ### Planning
-In all the below tables, we first obtain success rates as an average over $N=20$ planning episodes. For each model, we launch 3 training seeds, oveer which we average success rate. To account for variability across a single run, we also average the success rate of the last 3 training epochs. We display the **std over 3 seeds and the 3 last epoch checkpoints** for all below sections. This is automatically performed in `examples/ac_video_jepa/train_sweep.py`.
+In all the below tables, we first obtain success rates as an average over $N=20$ planning episodes. For each model, we launch 3 training seeds, oveer which we average success rate. To account for variability across a single run, we also average the success rate of the last 3 training epochs. We display the **std over 3 seeds and the 3 last epoch checkpoints** for all below sections.
 
 Our best model gets 97% Success in the Random Wall setup.
 

@@ -10,6 +10,7 @@ from examples.ac_video_jepa.main import get_experiment_folder, load_override_cfg
 
 
 def copy_code_folder(code_folder):
+    """Copy the code folder to the experiment directory, ignoring unnecessary files."""
     ignore_patterns = [
         "__pycache__",
         ".vscode",
@@ -27,20 +28,12 @@ def copy_code_folder(code_folder):
         ".venv",
         "eb_jepa.egg-info",
     ]
-    path_to_node_folder = {}
-
-    for path in ignore_paths:
-        split_path = path.split("/")
-        base_path = "/".join(split_path[:-1])
-        node_folder = split_path[-1]
-        path_to_node_folder[base_path] = node_folder
 
     def ignore_func(path, names):
         ignore_list = list(ignore_patterns)
         for ignore_path in ignore_paths:
             if ignore_path in names:
                 ignore_list.append(ignore_path)
-
         return ignore_list
 
     if not os.path.exists(code_folder):
@@ -48,13 +41,7 @@ def copy_code_folder(code_folder):
 
 
 def launch_job(fname: str, **kwargs):
-    """
-    Launch a single job with the given config and overrides.
-
-    Args:
-        fname: Path to the YAML config file
-        **kwargs: Configuration overrides
-    """
+    """Launch a single training job with the given config and overrides."""
     cfg = load_override_cfg(fname, kwargs)
     folder = get_experiment_folder(
         cfg, cfg.data, quick_debug=cfg.meta.get("quick_debug")
@@ -92,13 +79,6 @@ def launch_job(fname: str, **kwargs):
 
 
 def run_experiment(cfg, folder=None):
-    """
-    The actual experiment function that will be executed on the cluster.
-
-    Args:
-        cfg: Pre-loaded configuration object (OmegaConf)
-        code_folder: Path to the copied code folder
-    """
     print(f"Current working directory: {os.getcwd()}")
     return importlib.import_module("examples.ac_video_jepa.main").main(
         cfg=cfg, folder=folder
@@ -383,13 +363,12 @@ if __name__ == "__main__":
             "model.regularizer.idm_coeff": [1, 2],
             "meta.seed": [1, 1000, 10000],
         }
-        base_fname = args.fname
         if overrides:
             print(f"Base overrides: {overrides}")
 
         if args.use_wandb_sweep:
             sweep_id, jobs = launch_wandb_sweep(
-                base_fname,
+                args.fname,
                 param_grid,
                 method=args.sweep_method,
                 array_parallelism=args.array_parallelism,
@@ -397,7 +376,7 @@ if __name__ == "__main__":
             )
         else:
             jobs = launch_sweep(
-                base_fname, param_grid, args.array_parallelism, **overrides
+                args.fname, param_grid, args.array_parallelism, **overrides
             )
     else:
         job = launch_job(args.fname, **overrides)
