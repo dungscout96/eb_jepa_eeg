@@ -1,9 +1,14 @@
-import torch
 import torch.nn as nn
-from einops import rearrange
+
+from eb_jepa.nn_utils import TemporalBatchMixin, init_module_weights
 
 
-class ImageDecoder(nn.Module):
+class ImageDecoder(TemporalBatchMixin, nn.Module):
+    """
+    Simple 2D convolutional decoder for reconstructing images from representations.
+    Supports both 4D (B,C,H,W) and 5D (B,C,T,H,W) inputs via TemporalBatchMixin.
+    """
+
     def __init__(
         self,
         in_dim,
@@ -27,31 +32,9 @@ class ImageDecoder(nn.Module):
             nn.Conv2d(hidden_dim, out_dim, 3, 1, 1),
         )
 
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m):
-        if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d, nn.Linear)):
-            nn.init.trunc_normal_(m.weight, std=0.02)
-            if m.bias is not None:
-                nn.init.constant_(m.bias, 0)
+        self.apply(init_module_weights)
 
     def _forward(self, x):
         # x: (B,C,H,W)
         y = self.net(x)
         return y
-
-    def forward(self, x):
-        """
-        Supports either:
-          - 4D: (B, C, H, W)
-          - 5D: (B, C, T, H, W)  -> flattens T, applies _forward, then restores T
-        """
-        assert x.ndim in [4, 5], "Supports only 4D (B,C,H,W) or 5D (B,C,T,H,W) tensors"
-        if x.ndim == 5:
-            b = x.shape[0]
-            x = rearrange(x, "b c t h w -> (b t) c h w")
-            y = self._forward(x)
-            y = rearrange(y, "(b t) c h w -> b c t h w", b=b)
-            return y
-        else:
-            return self._forward(x)

@@ -14,7 +14,6 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import torchvision
-import torchvision.transforms as transforms
 from torchvision.datasets import CIFAR10
 from torch.optim.optimizer import required
 from torchvision.models import VisionTransformer
@@ -23,8 +22,8 @@ from tqdm import tqdm
 from torch.amp import autocast, GradScaler
 
 from eb_jepa.losses import VICRegLoss, BCS
-from dataset import get_train_transforms, get_val_transforms, ImageDataset
-from eval import LinearProbe, evaluate_linear_probe
+from examples.image_jepa.dataset import get_train_transforms, get_val_transforms, ImageDataset
+from examples.image_jepa.eval import LinearProbe, evaluate_linear_probe
 
 
 class ResNet18(nn.Module):

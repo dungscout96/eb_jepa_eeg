@@ -3,8 +3,9 @@ from typing import Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange
 from sklearn.metrics import average_precision_score
+
+from eb_jepa.nn_utils import TemporalBatchMixin, init_module_weights
 
 ######################################################
 # Basic architectural modules
@@ -22,7 +23,7 @@ class conv3d2(nn.Sequential):
                 h_d, out_d, kernel_size=(tk, sk, sk), stride=(ts, ss, ss), padding=pad
             ),
         )
-        self.apply(self._init_weights)
+        self.apply(init_module_weights)
         self.input_dim = in_d
         self.hidden_dim = h_d
         self.output_dim = out_d
@@ -34,11 +35,6 @@ class conv3d2(nn.Sequential):
             self.t_shift = 2 * (tk - 1)
         else:
             raise NameError("invalid padding for con3d2. Must be 'valid' or 'same'")
-
-    def _init_weights(self, m):
-        if isinstance(m, (nn.Conv3d, nn.Conv2d, nn.Linear)):
-            nn.init.trunc_normal_(m.weight, std=0.02)
-            nn.init.constant_(m.bias, 0)
 
 
 class ResidualBlock(nn.Module):
@@ -78,13 +74,15 @@ class ResidualBlock(nn.Module):
         return out
 
 
-class ResNet5(nn.Module):
+class ResNet5(TemporalBatchMixin, nn.Module):
     """
-    A lightweight ResNet with 5 layers (2 blocks)
+    A lightweight ResNet with 5 layers (2 blocks).
+    Supports both 4D (B,C,H,W) and 5D (B,C,T,H,W) inputs via TemporalBatchMixin.
     """
 
     def __init__(self, in_d, h_d, out_d, s1=1, s2=1, s3=1, avg_pool=False):
         super().__init__()
+        self.avg_pool = avg_pool
         self.conv1 = nn.Conv2d(
             in_d, h_d, kernel_size=3, stride=1, padding=1, bias=False
         )
@@ -95,29 +93,15 @@ class ResNet5(nn.Module):
         self.layer3 = ResidualBlock(h_d * 2, out_d, stride=s3)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1)) if avg_pool else torch.nn.Identity()
 
-    def _make_layer(self, block, out_channels, stride):
-        layer = block(self.in_channels, out_channels, stride)
-        self.in_channels = out_channels
-        return layer
-
     def _forward(self, x):
         out = self.relu(self.bn1(self.conv1(x)))
         out = self.layer1(out)
         out = self.layer2(out)
         out = self.layer3(out)
-        out = self.avgpool(out).flatten(1)
+        out = self.avgpool(out)
+        if self.avg_pool:
+            out = out.flatten(1)
         return out
-
-    def forward(self, x):
-        assert x.ndim in [4, 5], "Supports only 4D or 5D tensors"
-        if x.ndim == 5:
-            B = x.shape[0]
-            x = rearrange(x, "b c t h w -> (b t) c h w")
-            out = self._forward(x)
-            out = rearrange(out, "(b t) c h w -> b c t h w", b=B)
-            return out
-        else:
-            return self._forward(x)
 
 
 class SimplePredictor(nn.Module):
@@ -142,10 +126,11 @@ class StateOnlyPredictor(SimplePredictor):
         return self.predictor(combined_xa)
 
 
-class ResUNet(nn.Module):
+class ResUNet(TemporalBatchMixin, nn.Module):
     """
     A small UNet with residual encoder blocks and transposed-conv upsampling.
     Channels scale like h, 2h, 4h, 8h. Output keeps the input HxW.
+    Supports both 4D (B,C,H,W) and 5D (B,C,T,H,W) inputs via TemporalBatchMixin.
     """
 
     def __init__(self, in_d, h_d, out_d, is_rnn=False):
@@ -185,17 +170,6 @@ class ResUNet(nn.Module):
                 x, size=ref.shape[-2:], mode="bilinear", align_corners=False
             )
         return x
-
-    def forward(self, x):
-        assert x.ndim in [4, 5], "Supports only 4D or 5D tensors"
-        if x.ndim == 5:
-            B = x.shape[0]
-            x = rearrange(x, "b c t h w -> (b t) c h w")
-            out = self._forward(x)
-            out = rearrange(out, "(b t) c h w -> b c t h w", b=B)
-            return out
-        else:
-            return self._forward(x)
 
     def _forward(self, x):
         x0 = self.relu(self.bn1(self.conv1(x)))
@@ -245,42 +219,6 @@ class Projector(nn.Module):
         return self.net(x)
 
 
-class ResNetProj(nn.Module):
-    """
-    A lightweight ResNet with 5 layers (2 blocks)
-    """
-
-    def __init__(self, in_d, h_d, out_d, s1=1, s2=1):
-        super().__init__()
-        self.layer1 = ResidualBlock(in_d, h_d, stride=2)
-        self.layer2 = ResidualBlock(h_d, h_d * 2, stride=1)
-        self.layer3 = ResidualBlock(h_d * 2, h_d * 4, stride=2)
-        self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
-
-    def _make_layer(self, block, out_channels, stride):
-        layer = block(self.in_channels, out_channels, stride)
-        self.in_channels = out_channels
-        return layer
-
-    def _forward(self, x):
-        out = self.layer1(out)
-        out = self.layer2(out)
-        out = self.layer3(out)
-        out = self.avg_pool(out)
-        return out
-
-    def forward(self, x):
-        assert x.ndim in [4, 5], "Supports only 4D or 5D tensors"
-        if x.ndim == 5:
-            B = x.shape[0]
-            x = rearrange(x, "b c t h w -> (b t) c h w")
-            out = self._forward(x)
-            out = rearrange(out, "(b t) c h w -> b c t h w", b=B)
-            return out
-        else:
-            return self._forward(x)
-
-
 class Expander2D(nn.Module):
     """
     This class takes in input of shape (..., n) and expand it into planes (..., n, w, h)
@@ -300,21 +238,8 @@ class DetHead(nn.Module):
 
     def __init__(self, in_d, h_d, out_d):
         super().__init__()
-
-        # [8, 8, T, 64, 64] --> (8, 1, T, 64, 64)
-        self.apply(self._init_weights)
         self.head = nn.Sequential(conv3d2(in_d, h_d, out_d, 1, 1, 3, 1, "same"))
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m):
-        if isinstance(m, (nn.Conv3d, nn.ConvTranspose3d, nn.Linear)):
-            nn.init.trunc_normal_(m.weight, std=0.02)
-            nn.init.constant_(m.bias, 0)
-
-    def _init_weights(self, m):
-        if isinstance(m, (nn.Conv3d, nn.Conv2d, nn.Linear)):
-            nn.init.trunc_normal_(m.weight, std=0.02)
-            nn.init.constant_(m.bias, 0)
+        self.apply(init_module_weights)
 
     # x: output of predictor (or autoregressive)
     def forward(self, x):
@@ -348,13 +273,6 @@ class DetHead(nn.Module):
             scores.append(ap)
 
         return scores
-
-
-class JEPAModelDecoderWrapper(nn.Module):
-    def __init__(self, jepa_model, decoder):
-        super().__init__()
-        self.jepa_model = jepa_model
-        self.decoder = decoder
 
 
 class ResnetBlock(nn.Module):
@@ -557,13 +475,7 @@ class InverseDynamicsModel(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, action_dim),
         )
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            nn.init.trunc_normal_(m.weight, std=0.02)
-            if m.bias is not None:
-                nn.init.constant_(m.bias, 0)
+        self.apply(init_module_weights)
 
     def forward(self, state_t, state_t_plus_1):
         """

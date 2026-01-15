@@ -1,7 +1,6 @@
 import fire
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -86,7 +85,7 @@ def run(
             loc_map = batch["digit_location"]
 
             optimizer.zero_grad()
-            jepa_loss, regl, regldict, pl = jepa.forwardn(x, actions=None, nsteps=steps)
+            jepa_loss, regl, _, regldict, pl = jepa.forwardn(x, actions=None, nsteps=steps)
             recon_loss = pixel_decoder(x, x)
             det_loss = detection_head(x, loc_map)
             total_loss = jepa_loss + recon_loss + det_loss

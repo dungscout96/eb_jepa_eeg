@@ -1,6 +1,5 @@
 import math
-import random
-from typing import Any, Dict, NamedTuple, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import gymnasium as gym
 import numpy as np

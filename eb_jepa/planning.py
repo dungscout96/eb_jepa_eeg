@@ -1,4 +1,3 @@
-import logging
 import os
 import time
 from abc import ABC, abstractmethod
@@ -20,7 +19,7 @@ from tqdm import tqdm
 from eb_jepa.logging import get_logger
 from eb_jepa.visualize_samples import save_gif, save_gif_HWC, show_images, to3channels
 
-logging = get_logger(__name__)
+logger = get_logger(__name__)
 
 FIGSIZE_BASE = (4.0, 3.0)
 planner_name_map = {
@@ -64,7 +63,7 @@ def main_unroll_eval(
         try:
             x, a, loc, wall_x, door_y = next(loader_iter)
         except StopIteration:
-            logging.warning(
+            logger.warning(
                 f"Loader exhausted after {idx} samples (requested {num_samples})"
             )
             break
@@ -293,7 +292,7 @@ def create_comparison_gif(
 
     # Save as GIF
     imageio.mimsave(save_path, frames, fps=fps, loop=0)
-    logging.info(f"   ✓ Saved comparison GIF: {os.path.basename(save_path)}")
+    logger.info(f"   ✓ Saved comparison GIF: {os.path.basename(save_path)}")
 
     return frames
 
@@ -320,8 +319,8 @@ def main_eval(
         loc_prober=prober,
         env=env,
     )
-    logging.info(f"Agent created with planner {agent.planner.__class__.__name__}")
-    logging.info(f"Planning with {plan_cfg=}")
+    logger.info(f"Agent created with planner {agent.planner.__class__.__name__}")
+    logger.info(f"Planning with {plan_cfg=}")
 
     successes = []
     distances = []
@@ -450,7 +449,7 @@ def main_eval(
             show_frame_numbers=True,
             fps=20,
         )
-        logging.info(f"GIF saved to {save_path}")
+        logger.info(f"GIF saved to {save_path}")
         episode_end_time = time.time()  # Add this line
         episode_times.append(episode_end_time - episode_start_time)
     avg_episode_time = np.mean(episode_times)
@@ -488,7 +487,7 @@ class GCAgent:
             self.decode_each_iteration = False
             self.num_act_stepped = 1
             self.planner = None
-            logging.info("No plan_cfg provided in GCAgent, planner not initialized.")
+            logger.info("No plan_cfg provided in GCAgent, planner not initialized.")
         else:
             self.decode_each_iteration = plan_cfg.planner.get(
                 "decode_each_iteration", False
@@ -505,7 +504,7 @@ class GCAgent:
                     **plan_cfg.planner,
                 )
             else:
-                logging.info("No planner provided in GCAgent.")
+                logger.info("No planner provided in GCAgent.")
                 self.planner = None
 
         self.goal_state = None
@@ -788,7 +787,7 @@ class Planner(ABC):
         # costs: List[float] of length iterations
         # pred_frames_over_iterations: List[(T, H, W, C)] of length iterations
         if pred_frames_over_iterations is not None and plan_vis_path is not None:
-            import imageio
+            pass
 
             frames = []
             global_min_cost = np.min(costs)
@@ -876,7 +875,7 @@ class Planner(ABC):
             # Save GIF
             filename = f"{plan_vis_path}.gif"
             save_gif_HWC(frames, filename, fps=30)
-            logging.info(f"Plan decoding video saved to {plan_vis_path}")
+            logger.info(f"Plan decoding video saved to {plan_vis_path}")
 
             # Save last iteration frames as PDF
             last_pred_frames = pred_frames_over_iterations[-1]
@@ -891,7 +890,7 @@ class Planner(ABC):
                 first_channel_only=False,
                 clamp=False,
             )
-            logging.info(f"Last iteration frames saved to {pdf_filename}")
+            logger.info(f"Last iteration frames saved to {pdf_filename}")
 
 
 ### Specific planning optimizers ###

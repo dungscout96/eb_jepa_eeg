@@ -99,6 +99,15 @@ The example uses Moving MNIST, a synthetic dataset where:
 - Each video has a fixed number of frames
 - Ground truth digit locations are available for evaluation
 
+**Note**: The Moving MNIST dataset (~800MB) is automatically downloaded on first run from the University of Toronto servers. This requires internet access. If you're running on a cluster without internet access, you can manually download the dataset:
+
+```bash
+# Download from a machine with internet access
+wget https://www.cs.toronto.edu/~nitish/unsupervised_video/mnist_test_seq.npy
+
+# Then copy to your working directory before running the example
+```
+
 ## Evaluation
 
 The model is evaluated on:

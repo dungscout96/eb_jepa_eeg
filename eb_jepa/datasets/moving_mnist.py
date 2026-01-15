@@ -86,7 +86,8 @@ class MovingMNISTDet(MovingMNIST):
             context (torch.Tensor) (C, T, H, W): past greyscale video frames as context
             digit_location (torch.Tensor) (T, map_size, map_size): Coarse binary heatmap for digit locations
         """
-        super().__init__(transform, split)
+        super().__init__(split)
+        self.transform = transform
 
         # Precompute digit locations for all entries
         N, T = self.data.shape[:2]
