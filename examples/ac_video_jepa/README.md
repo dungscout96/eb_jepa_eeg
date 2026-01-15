@@ -1,5 +1,7 @@
 # Example - Action Conditioned Video JEPA
 
+![AC-JEPA](examples/ac_video_jepa/assets/train_plan_schema_crop.png)
+
 This example demonstrates a Joint Embedding Predictive Architecture (JEPA) for action-conditioned world modeling in the Two Rooms environment. The model learns to predict future states based on current observations and actions, enabling planning towards goal visual embeddings.
 
 | Planning Episode | Task Definition |
@@ -11,9 +13,6 @@ This example demonstrates a Joint Embedding Predictive Architecture (JEPA) for a
 Action Conditioned Video JEPA extends the `examples/video_jepa` example by incorporating actions into the representation learning and physical dynamics learning process. The image sequence is not fully deterministic, contrary to the video JEPA example. The model requires the action to be able to perfectly predict the next state.
 
 ## Training
-`TODO:`
-- figure of architecture (Amir)
-
 
 ### Architecture
 1. **Encoder**: Maps observations to latent representations. Options:
