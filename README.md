@@ -1,8 +1,45 @@
-# Energy Based Joint Embedding Predictive Architectures
+<h1 align="center">
+    <p>⚡ <b>EB-JEPA</b></p>
+</h1>
 
-![EB JEPA](docs/archi-schema-eb-jepa.png)
+<h2 align="center">
+    <p><i>Energy-Based Joint-Embedding Predictive Architectures</i></p>
+</h2>
 
-An open source library and tutorial for learning representations for prediction and planning using joint embedding predictive architectures.
+<div align="center" style="line-height: 1;">
+  <a href="https://github.com/facebookresearch/eb_jepa" target="_blank" style="margin: 2px;"><img alt="Github" src="https://img.shields.io/badge/Github-facebookresearch/eb__jepa-black?logo=github" style="display: inline-block; vertical-align: middle;"/></a>
+  <a href="https://arxiv.org/abs/2602.03604" target="_blank" style="margin: 2px;"><img alt="ArXiv" src="https://img.shields.io/badge/arXiv-2602.03604-b5212f?logo=arxiv" style="display: inline-block; vertical-align: middle;"/></a>
+</div>
+
+<br>
+
+<p align="center">
+  <b><a href="https://ai.facebook.com/research/">Meta AI Research, FAIR</a></b>
+</p>
+
+<p align="center">
+  <a href="https://x.com/BasileTerv987">Basile Terver</a>,
+  Randall Balestriero,
+  Megi Dervishi,
+  David Fan,
+  Quentin Garrido,
+  Tushar Nagarajan,
+  <br>
+  Koustuv Sinha,
+  Wancong Zhang,
+  Mike Rabbat,
+  Yann LeCun,
+  Amir Bar
+</p>
+
+<p align="center">
+  An open source library and tutorial for learning representations for<br>
+  prediction and planning using joint embedding predictive architectures.
+</p>
+
+<p align="center">
+  <img src="docs/archi-schema-eb-jepa.png" alt="EB-JEPA Architecture" width="800">
+</p>
 
 > Each example is (almost) self-contained and training takes up to a few hours on a single GPU card.
 
@@ -178,7 +215,32 @@ pytest tests/
 
 ## 👩‍💻 Development
 
-- The dev dependencies include `black` and `isort`, which must be run before contributing to this repo.
+Before contributing, please format your code with the following tools:
+
+```bash
+# Remove unused imports
+autoflake --remove-all-unused-imports -r --in-place .
+# Sort imports
+python -m isort eb_jepa examples tests
+# Format code
+python -m black eb_jepa examples tests
+```
+
+## 📚 Citing EB-JEPA
+
+If you find this repository useful, please consider giving a ⭐ and citing:
+
+```bibtex
+@misc{terver2026lightweightlibraryenergybasedjointembedding,
+      title={A Lightweight Library for Energy-Based Joint-Embedding Predictive Architectures},
+      author={Basile Terver and Randall Balestriero and Megi Dervishi and David Fan and Quentin Garrido and Tushar Nagarajan and Koustuv Sinha and Wancong Zhang and Mike Rabbat and Yann LeCun and Amir Bar},
+      year={2026},
+      eprint={2602.03604},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2602.03604},
+}
+```
 
 ## 📄 License
 
