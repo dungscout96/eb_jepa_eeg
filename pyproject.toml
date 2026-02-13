@@ -59,3 +59,7 @@ dev = [
     "pytest>=8.4.1",
     "autoflake",
 ]
+eeg = [
+    "braindecode @ git+https://github.com/braindecode/braindecode.git",
+    "eegdash"
+]
