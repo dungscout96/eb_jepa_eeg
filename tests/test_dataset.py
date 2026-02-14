@@ -1,4 +1,4 @@
-from eb_jepa.datasets.hbn import HBNDataset
+from eb_jepa.datasets.hbn import HBNDataset, collate_fn
 from torch.utils.data import DataLoader
 
 def test_hbn_dataset():
@@ -10,9 +10,10 @@ def test_hbn_dataset():
         batch_size=bs,
         shuffle=True,
         num_workers=0,
+        collate_fn=collate_fn,
     )
-    batch = next(iter(train_loader))
-    assert len(batch) == 3, "Batch should contain data, labels, and window index"
-    assert batch[0].ndim == 3, "Data should be 3-dimensional (batch, channels, time)"
-    assert batch[0].shape[0] == bs, f"Batch size should be {bs}"
-    assert batch[1].ndim == 1, "Labels should be 1-dimensional (batch,)"
+    data, mask = next(iter(train_loader))
+    assert data.ndim == 4, "Data should be 4-dimensional (batch, windows, channels, time)"
+    assert data.shape[0] == bs, f"Batch size should be {bs}"
+    assert mask.ndim == 2, "Mask should be 2-dimensional (batch, windows)"
+    assert mask.shape[0] == bs, f"Mask batch size should be {bs}"

@@ -1,8 +1,9 @@
 from eegdash.dataset import EEGDashDataset, EEGChallengeDataset
-from braindecode.datasets import BaseConcatDataset
+from braindecode.datasets import BaseConcatDataset  # noqa: F401
 
 from pathlib import Path
 from torch.utils.data import Dataset
+import torch
 import os
 
 DATA_DIR = Path("/u/dtyoung/.cache/eb_jepa/datasets/eegdash_cache")
@@ -46,6 +47,8 @@ def preprocess_dataset(dataset):
     return windowed
 
 class HBNDataset(Dataset):
+    """Dataset where each item is all windows from a single recording stacked as WxCxT."""
+
     def __init__(self, split="train"):
         if split == "train":
             releases = TRAIN_RELEASES
@@ -56,16 +59,31 @@ class HBNDataset(Dataset):
         else:
             raise ValueError(f"Invalid split '{split}'. Must be 'train', 'val', or 'test'.")
 
-        datasets = []
+        self.recordings = []
         for release, dataset_name in releases.items():
             dataset = load_or_download(release, dataset_name)
             windowed_dataset = preprocess_dataset(dataset)
-            datasets.append(windowed_dataset)
-
-        self.dataset = BaseConcatDataset(datasets)
+            # Each sub-dataset in the BaseConcatDataset is one recording
+            for recording_ds in windowed_dataset.datasets:
+                self.recordings.append(recording_ds)
 
     def __len__(self):
-        return self.dataset.__len__()
+        return len(self.recordings)
 
     def __getitem__(self, idx):
-        return self.dataset.__getitem__(idx)
+        recording = self.recordings[idx]
+        windows = torch.stack([torch.from_numpy(recording[i][0]) for i in range(len(recording))])
+        return windows, len(recording)
+
+
+def collate_fn(batch):
+    """Pad recordings to the max window count in the batch. Returns (data, padding_mask)."""
+    windows_list, lengths = zip(*batch)
+    max_w = max(lengths)
+    C, T = windows_list[0].shape[1], windows_list[0].shape[2]
+    padded = torch.zeros(len(batch), max_w, C, T, dtype=windows_list[0].dtype)
+    mask = torch.zeros(len(batch), max_w, dtype=torch.bool)
+    for i, (w, l) in enumerate(zip(windows_list, lengths)):
+        padded[i, :l] = w
+        mask[i, :l] = True
+    return padded, mask
