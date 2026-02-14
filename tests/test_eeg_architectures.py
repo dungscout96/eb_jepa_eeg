@@ -31,3 +31,23 @@ def test_eeg_encoder():
 
     # Check output shape
     assert output.shape == (batch_size, out_d), f"Expected output shape {(batch_size, out_d)}, got {output.shape}"
+
+def test_eeg_predictor():
+    """Test EEGPredictor with a sample input."""
+    in_d = 256  # Input dimension from the encoder
+    h_d = 128  # Hidden dimension (not used in this predictor but required by interface)
+    out_d = 256  # Output dimension of the predictor
+
+    from eb_jepa.architectures import MLPEEGPredictor
+    predictor = MLPEEGPredictor(in_d, h_d, out_d)
+
+    # Create a sample input tensor with shape [B, D]
+    batch_size = 8
+    n_windows = 16 # predictor must be able to take in window dimension as well.
+    x = torch.randn(batch_size, 1, n_windows, in_d)
+
+    # Forward pass through the predictor
+    output = predictor(x)
+
+    # Check output shape
+    assert output.shape == (batch_size, n_windows-1, out_d), f"Expected output shape {(batch_size, n_windows-1, out_d)}, got {output.shape}"

@@ -4,6 +4,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from einops import rearrange
 from sklearn.metrics import average_precision_score
 
 from eb_jepa.nn_utils import TemporalBatchMixin, init_module_weights
@@ -497,3 +498,58 @@ class EEGEncoder(TemporalBatchMixin, nn.Module):
     def _forward(self, x):
         out = self.encoder(x.squeeze(1))  # Remove singleton input dim for EEG data vs image
         return out
+
+class MLPEEGPredictor(nn.Module):
+    """Simple MLP predictor for EEG data.
+    TODO: Real architecture needs to be able to take in window dimension. This is just a placeholder to get the code running.
+You're right to question it — the variable names are misleading. It's not concatenating the future. Let me trace the indexing through the training loop.
+
+In jepa.py:142-155, parallel unroll with context_length=2:
+
+
+state = encoder(observations)        # [B, C, T, ...] — all ground truth
+predicted_states = state              # start with GT
+
+# Inside StateOnlyPredictor:
+prev  = state[:, :, :-1]             # frames [0, 1, 2, ..., T-2]
+next  = state[:, :, 1:]              # frames [1, 2, 3, ..., T-1]
+# output has T-1 predictions
+
+# Back in unroll:
+predicted = predictor(...)[:, :, :-1] # trim → T-2 predictions
+predicted = cat(state[:, :, :2], predicted)  # prepend 2 GT frames
+After alignment, the prediction at position i came from the pair (frame_{i-2}, frame_{i-1}) and is trained to match frame_i. So:
+
+output position	input pair	target
+2	(frame_0, frame_1)	frame_2
+3	(frame_1, frame_2)	frame_3
+...	...	...
+Both inputs are in the past relative to the target. The pair is (2 steps ago, 1 step ago) → predict now. The names prev_state and next_state are relative to each other, not relative to the prediction target. A clearer naming would be:
+
+
+two_ago = x[:, :, :-1]   # t-2 relative to prediction
+one_ago = x[:, :, 1:]    # t-1 relative to prediction
+So your intuition is correct — it predicts from current and past, not from the future. The code just names the pair members confusingly.    
+    """
+
+    def __init__(self, in_d, h_d, out_d):
+        super().__init__()
+        self.predictor = nn.Sequential(
+            nn.Linear(in_d * 2, h_d),
+            nn.ReLU(),
+            nn.Linear(h_d, out_d),
+        )
+        self.is_rnn = False
+        self.context_length = 0
+
+    def forward(self, x):
+        # action not used on purpose
+        prev_state = x[:, :, :-1]  # [B, C, T-1]
+        next_state = x[:, :, 1:]  # [B, C, T-1]
+        combined_xa = torch.cat((prev_state, next_state), dim=1)
+        b, c, t, d = combined_xa.shape
+        combined_xa = rearrange(combined_xa, "b c t d -> (b t) (c d)")
+        print("Combined input shape to predictor:", combined_xa.shape)  # Debug print
+        output = self.predictor(combined_xa)
+        output = rearrange(output, "(b t) d -> b t d", b=b, t=t)
+        return output
