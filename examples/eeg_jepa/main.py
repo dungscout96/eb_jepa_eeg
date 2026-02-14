@@ -17,7 +17,7 @@ from tqdm import tqdm
 from eb_jepa.architectures import (
     DetHead,
     Projector,
-    ResNet5,
+    EEGEncoder,
     ResUNet,
     StateOnlyPredictor,
 )
@@ -127,7 +127,7 @@ def run(
 
     # Initialize Video JEPA model
     logger.info("Initializing model...")
-    encoder = ResNet5(cfg.model.dobs, cfg.model.henc, cfg.model.dstc)
+    encoder = EEGEncoder(cfg.model.dobs, cfg.model.henc, cfg.model.dstc)
     predictor_model = ResUNet(2 * cfg.model.dstc, cfg.model.hpre, cfg.model.dstc)
     predictor = StateOnlyPredictor(predictor_model, context_length=2)
     projector = Projector(f"{cfg.model.dstc}-{cfg.model.dstc*4}-{cfg.model.dstc*4}")

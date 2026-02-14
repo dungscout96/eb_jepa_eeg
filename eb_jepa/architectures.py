@@ -1,3 +1,4 @@
+import importlib
 from typing import Optional
 
 import torch
@@ -481,3 +482,18 @@ class InverseDynamicsModel(nn.Module):
         """
         combined_states = torch.cat([state_t, state_t_plus_1], dim=1)
         return self.model(combined_states)
+
+class EEGEncoder(TemporalBatchMixin, nn.Module):
+    """
+    EEG encoder that wraps a Braindecode model specified by name.
+    Supports both 4D [B, 1, C, W] and 5D [B, 1, T, C, W] inputs via TemporalBatchMixin.
+    """
+    def __init__(self, in_d, h_d, out_d, name: str="REVE", chs_info=None):
+        super().__init__()
+        import importlib
+        module = importlib.import_module("braindecode.models")
+        self.encoder = getattr(module, name)(n_chans=in_d, n_outputs=out_d, n_times=1000, chs_info=chs_info)
+
+    def _forward(self, x):
+        out = self.encoder(x.squeeze(1))  # Remove singleton input dim for EEG data vs image
+        return out
