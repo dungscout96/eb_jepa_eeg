@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from einops import rearrange
 from sklearn.metrics import average_precision_score
 
-from eb_jepa.nn_utils import TemporalBatchMixin, init_module_weights
+from eb_jepa.nn_utils import TemporalBatchMixin, GlobalFeatureTemporalBatchMixin, init_module_weights
 
 
 class conv3d2(nn.Sequential):
@@ -484,7 +484,7 @@ class InverseDynamicsModel(nn.Module):
         combined_states = torch.cat([state_t, state_t_plus_1], dim=1)
         return self.model(combined_states)
 
-class EEGEncoder(TemporalBatchMixin, nn.Module):
+class EEGEncoder(GlobalFeatureTemporalBatchMixin, nn.Module):
     """
     EEG encoder that wraps a Braindecode model specified by name.
     Supports both 4D [B, 1, C, W] and 5D [B, 1, T, C, W] inputs via TemporalBatchMixin.
@@ -496,7 +496,10 @@ class EEGEncoder(TemporalBatchMixin, nn.Module):
         self.encoder = getattr(module, name)(n_chans=in_d, n_outputs=out_d, n_times=1000, chs_info=chs_info)
 
     def _forward(self, x):
+        if x.shape[1] != 1:
+            raise ValueError(f"Expected input with shape [B, 1, C, W], got {x.shape}")
         out = self.encoder(x.squeeze(1))  # Remove singleton input dim for EEG data vs image
+        out = out.unsqueeze(1)  # Add back singleton dim for compatibility with CV framework
         return out
 
 class MLPEEGPredictor(nn.Module):

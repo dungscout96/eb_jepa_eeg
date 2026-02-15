@@ -12,25 +12,55 @@ MOCK_CHS_INFO = [{"ch_name": ch} for ch in [
     "F5", "F6", "FC5", "FC6",
 ]]
 
-def test_eeg_encoder():
+def create_eeg_encoder(in_d=64, h_d=128, out_d=256, name="REVE", device="cpu"):
+    """Helper function to create an EEGEncoder with mock channel info."""
+    encoder = EEGEncoder(in_d, h_d, out_d, name, chs_info=MOCK_CHS_INFO)
+    return encoder.to(device)
+
+def test_eeg_encoder_4d():
     """Test EEGEncoder with a sample input."""
     in_d = 64  # Number of EEG channels
     h_d = 128  # Hidden dimension (not used in this encoder but required by interface)
     out_d = 256  # Output dimension of the encoder
     name = "REVE"  # Name of the Braindecode model to use
 
-    encoder = EEGEncoder(in_d, h_d, out_d, name, chs_info=MOCK_CHS_INFO)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    encoder = create_eeg_encoder(in_d, h_d, out_d, name, device=device)
 
     # Create a sample input tensor with shape [B, 1, C, W]
     batch_size = 8
     time_steps = 1000
     x = torch.randn(batch_size, 1, in_d, time_steps)
+    x = x.to(device)
 
     # Forward pass through the encoder
     output = encoder(x)
 
     # Check output shape
-    assert output.shape == (batch_size, out_d), f"Expected output shape {(batch_size, out_d)}, got {output.shape}"
+    assert output.shape == (batch_size, 1, out_d), f"Expected output shape {(batch_size, 1, out_d)}, got {output.shape}"
+
+def test_eeg_encoder_5d():
+    """Test EEGEncoder with a sample input."""
+    in_d = 64  # Number of EEG channels
+    h_d = 128  # Hidden dimension (not used in this encoder but required by interface)
+    out_d = 256  # Output dimension of the encoder
+    name = "REVE"  # Name of the Braindecode model to use
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    encoder = create_eeg_encoder(in_d, h_d, out_d, name, device=device)
+
+    # Create a sample input tensor with shape [B, 1, C, W]
+    batch_size = 8
+    time_steps = 1000
+    n_windows = 16
+    x = torch.randn(batch_size, 1, n_windows, in_d, time_steps)
+    x = x.to(device)
+
+    # Forward pass through the encoder
+    output = encoder(x)
+
+    # Check output shape
+    assert output.shape == (batch_size, 1, n_windows, out_d), f"Expected output shape {(batch_size, 1, n_windows, out_d)}, got {output.shape}"
 
 def test_eeg_predictor():
     """Test EEGPredictor with a sample input."""
