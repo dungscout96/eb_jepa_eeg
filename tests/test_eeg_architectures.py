@@ -47,7 +47,7 @@ def test_eeg_predictor():
     x = torch.randn(batch_size, 1, n_windows, in_d)
 
     # Forward pass through the predictor
-    output = predictor(x)
+    output = predictor(x, None)
 
     # Check output shape
-    assert output.shape == (batch_size, n_windows-1, out_d), f"Expected output shape {(batch_size, n_windows-1, out_d)}, got {output.shape}"
+    assert output.shape == (batch_size, 1, n_windows-1, out_d), f"Expected output shape {(batch_size, 1, n_windows-1, out_d)}, got {output.shape}"

@@ -500,36 +500,16 @@ class EEGEncoder(TemporalBatchMixin, nn.Module):
         return out
 
 class MLPEEGPredictor(nn.Module):
-    """Simple MLP predictor for EEG data.
-    TODO: Real architecture needs to be able to take in window dimension. This is just a placeholder to get the code running.
-You're right to question it — the variable names are misleading. It's not concatenating the future. Let me trace the indexing through the training loop.
+    """MLP predictor for flat EEG embeddings.
 
-In jepa.py:142-155, parallel unroll with context_length=2:
+    Pairs consecutive timesteps and predicts the next embedding.
+    Input x: [B, 1, T, D], Output: [B, 1, T-1, D]
 
-
-state = encoder(observations)        # [B, C, T, ...] — all ground truth
-predicted_states = state              # start with GT
-
-# Inside StateOnlyPredictor:
-prev  = state[:, :, :-1]             # frames [0, 1, 2, ..., T-2]
-next  = state[:, :, 1:]              # frames [1, 2, 3, ..., T-1]
-# output has T-1 predictions
-
-# Back in unroll:
-predicted = predictor(...)[:, :, :-1] # trim → T-2 predictions
-predicted = cat(state[:, :, :2], predicted)  # prepend 2 GT frames
-After alignment, the prediction at position i came from the pair (frame_{i-2}, frame_{i-1}) and is trained to match frame_i. So:
-
-output position	input pair	target
-2	(frame_0, frame_1)	frame_2
-3	(frame_1, frame_2)	frame_3
-...	...	...
-Both inputs are in the past relative to the target. The pair is (2 steps ago, 1 step ago) → predict now. The names prev_state and next_state are relative to each other, not relative to the prediction target. A clearer naming would be:
-
-
-two_ago = x[:, :, :-1]   # t-2 relative to prediction
-one_ago = x[:, :, 1:]    # t-1 relative to prediction
-So your intuition is correct — it predicts from current and past, not from the future. The code just names the pair members confusingly.    
+    Args:
+        in_d: Embedding dimension D
+        h_d: Hidden dimension
+        out_d: Output embedding dimension (typically same as in_d)
+    TODO: This is a simple predictor for testing. For better performance, consider adding temporal convolutions or an RNN predictor that can capture longer-range dependencies.
     """
 
     def __init__(self, in_d, h_d, out_d):
@@ -540,16 +520,15 @@ So your intuition is correct — it predicts from current and past, not from the
             nn.Linear(h_d, out_d),
         )
         self.is_rnn = False
-        self.context_length = 0
+        self.context_length = 2
 
-    def forward(self, x):
-        # action not used on purpose
-        prev_state = x[:, :, :-1]  # [B, C, T-1]
-        next_state = x[:, :, 1:]  # [B, C, T-1]
-        combined_xa = torch.cat((prev_state, next_state), dim=1)
-        b, c, t, d = combined_xa.shape
-        combined_xa = rearrange(combined_xa, "b c t d -> (b t) (c d)")
-        print("Combined input shape to predictor:", combined_xa.shape)  # Debug print
-        output = self.predictor(combined_xa)
-        output = rearrange(output, "(b t) d -> b t d", b=b, t=t)
-        return output
+    def forward(self, x, a):
+        # x: [B, 1, T, D], a: unused (state-only prediction)
+        two_ago = x[:, :, :-1]  # [B, 1, T-1, D]
+        one_ago = x[:, :, 1:]   # [B, 1, T-1, D]
+        combined = torch.cat((two_ago, one_ago), dim=1)  # [B, 2, T-1, D]
+        b, c, t, d = combined.shape
+        combined = rearrange(combined, "b c t d -> (b t) (c d)")  # [B*(T-1), 2*D]
+        output = self.predictor(combined)  # [B*(T-1), out_d]
+        output = rearrange(output, "(b t) d -> b t d", b=b)  # [B, T-1, out_d]
+        return output.unsqueeze(1)  # [B, 1, T-1, out_d]
