@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from einops import rearrange
 from sklearn.metrics import average_precision_score
 
-from eb_jepa.nn_utils import TemporalBatchMixin, GlobalFeatureTemporalBatchMixin, init_module_weights
+from eb_jepa.nn_utils import TemporalBatchMixin, init_module_weights
 
 
 class conv3d2(nn.Sequential):
@@ -484,25 +484,43 @@ class InverseDynamicsModel(nn.Module):
         combined_states = torch.cat([state_t, state_t_plus_1], dim=1)
         return self.model(combined_states)
 
-class EEGEncoder(GlobalFeatureTemporalBatchMixin, nn.Module):
+class EEGEncoder(TemporalBatchMixin, nn.Module):
     """
     EEG encoder that wraps a Braindecode model specified by name.
     Supports both 4D [B, 1, C, W] and 5D [B, 1, T, C, W] inputs via TemporalBatchMixin.
     """
-    def __init__(self, in_d, h_d, out_d, name: str="REVE", chs_info=None):
+    def __init__(self, in_d, h_d, out_d, name: str="REVE", chs_info=None, attention_pooling=False):
         super().__init__()
         import importlib
         module = importlib.import_module("braindecode.models")
-        self.encoder = getattr(module, name)(n_chans=in_d, n_outputs=out_d, n_times=1000, chs_info=chs_info)
+        self.encoder = getattr(module, name)(n_chans=in_d, n_outputs=out_d, n_times=1000, chs_info=chs_info, attention_pooling=attention_pooling)
 
     def _forward(self, x):
+        """
+        Forward pass for the encoder that handles EEG data input.
+
+        Removes the singleton dimension from EEG input, processes through the encoder,
+        and restores the singleton dimensions for compatibility with the computer vision framework.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape [B, 1, C, W] where B is batch size,
+                              1 is the singleton input dimension, C is channels, and W is width.
+
+        Returns:
+            torch.Tensor: Output tensor of shape [B, C, 1, 1] with restored singleton dimensions
+                          for compatibility with CV framework operations.
+
+        Raises:
+            ValueError: If input tensor shape[1] is not equal to 1.
+        """
         if x.shape[1] != 1:
             raise ValueError(f"Expected input with shape [B, 1, C, W], got {x.shape}")
         out = self.encoder(x.squeeze(1))  # Remove singleton input dim for EEG data vs image
-        out = out.unsqueeze(1)  # Add back singleton dim for compatibility with CV framework
+        if out.ndim == 2:
+            out = out.unsqueeze(2).unsqueeze(3)  # Add singleton dims back for compatibility with CV framework
         return out
 
-class MLPEEGPredictor(nn.Module):
+class MLPEEGPredictor(TemporalBatchMixin, nn.Module):
     """MLP predictor for flat EEG embeddings.
 
     Pairs consecutive timesteps and predicts the next embedding.
@@ -518,20 +536,15 @@ class MLPEEGPredictor(nn.Module):
     def __init__(self, in_d, h_d, out_d):
         super().__init__()
         self.predictor = nn.Sequential(
-            nn.Linear(in_d * 2, h_d),
+            nn.Linear(in_d, h_d),
             nn.ReLU(),
             nn.Linear(h_d, out_d),
         )
         self.is_rnn = False
-        self.context_length = 2
 
-    def forward(self, x, a):
-        # x: [B, 1, T, D], a: unused (state-only prediction)
-        two_ago = x[:, :, :-1]  # [B, 1, T-1, D]
-        one_ago = x[:, :, 1:]   # [B, 1, T-1, D]
-        combined = torch.cat((two_ago, one_ago), dim=1)  # [B, 2, T-1, D]
-        b, c, t, d = combined.shape
-        combined = rearrange(combined, "b c t d -> (b t) (c d)")  # [B*(T-1), 2*D]
-        output = self.predictor(combined)  # [B*(T-1), out_d]
-        output = rearrange(output, "(b t) d -> b t d", b=b)  # [B, T-1, out_d]
-        return output.unsqueeze(1)  # [B, 1, T-1, out_d]
+    def _forward(self, x):
+        if x.shape[2] != 1 or x.shape[3] != 1:
+            raise ValueError(f"Expected input with shape [B, C, 1, 1], got {x.shape}")
+        output = self.predictor(x.squeeze(2, 3))
+        output = output.unsqueeze(2).unsqueeze(3)  # [B, D, 1, 1]
+        return output

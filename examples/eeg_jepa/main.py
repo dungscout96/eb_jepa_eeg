@@ -18,7 +18,7 @@ from eb_jepa.architectures import (
     DetHead,
     Projector,
     EEGEncoder,
-    ResUNet,
+    MLPEEGPredictor,
     StateOnlyPredictor,
 )
 from eb_jepa.datasets.hbn import HBNDataset
@@ -125,10 +125,10 @@ def run(
         val_samples=len(val_set),
     )
 
-    # Initialize Video JEPA model
+    # Initialize Video EEG JEPA model
     logger.info("Initializing model...")
     encoder = EEGEncoder(cfg.model.dobs, cfg.model.henc, cfg.model.dstc)
-    predictor_model = ResUNet(2 * cfg.model.dstc, cfg.model.hpre, cfg.model.dstc)
+    predictor_model = MLPEEGPredictor(cfg.model.dstc*2, cfg.model.hpre, cfg.model.dstc)
     predictor = StateOnlyPredictor(predictor_model, context_length=2)
     projector = Projector(f"{cfg.model.dstc}-{cfg.model.dstc*4}-{cfg.model.dstc*4}")
     regularizer = VCLoss(cfg.loss.std_coeff, cfg.loss.cov_coeff, proj=projector)
