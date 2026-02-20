@@ -53,7 +53,7 @@ def get_window_movie_metadata(
     movie_timestamp = window_onset / sfreq
     # compute the corresponding frame index in the movie
     frame_index = int(movie_timestamp * MOVIE_METADATA[movie]["fps"])
-    features = movie_features.iloc[frame_index]
+    features = movie_features.iloc[frame_index].to_dict()
     return features
 
 def load_or_download(release, dataset_name):
@@ -94,12 +94,11 @@ def preprocess_dataset(dataset):
     )
     return windowed
 
-class HBNDataset(Dataset):
-    """Dataset where each item is a random crop of n_windows contiguous windows (WxCxT).
-    TODO: revisit fixed window number
+class HBNMovieProbeDataset(Dataset):
+    """Dataset where each window is associated with the movie features at the corresponding timestamp.
     """
 
-    def __init__(self, split="train", n_windows=16):
+    def __init__(self, split="train"):
         if split == "train":
             releases = TRAIN_RELEASES
         elif split == "val":
@@ -109,15 +108,14 @@ class HBNDataset(Dataset):
         else:
             raise ValueError(f"Invalid split '{split}'. Must be 'train', 'val', or 'test'.")
 
-        self.n_windows = n_windows
-        self.recordings = []
+        self.data = []
         for release, dataset_name in releases.items():
             dataset = load_or_download(release, dataset_name)
             windowed_dataset = preprocess_dataset(dataset)
-            for recording_ds in windowed_dataset.datasets:
-                if len(recording_ds) >= n_windows:
-                    self.recordings.append(recording_ds)
-
+            self.data.append(windowed_dataset)
+        
+        self.data = BaseConcatDataset(self.data)
+        self.sfreq = self.data.datasets[0].raw.info["sfreq"]
         self._preload_movie_features()
 
     def _preload_movie_features(self):
@@ -125,13 +123,16 @@ class HBNDataset(Dataset):
             "ThePresent": pd.read_csv(MOVIE_METADATA["ThePresent"]["feature_csv"]),
         }
     def __len__(self):
-        return len(self.recordings)
+        return len(self.data)
 
     def __getitem__(self, idx):
-        recording = self.recordings[idx]
-        start = random.randint(0, len(recording) - self.n_windows)
-        windows = torch.stack([
-            torch.from_numpy(recording[start + i][0])
-            for i in range(self.n_windows)
-        ])
-        return windows
+        X, y, crop_inds = self.data[idx]
+        window_onset = crop_inds[1]  # i_start_in_trial (samples)
+        features = get_window_movie_metadata(
+            window_onset=window_onset,
+            sfreq=self.sfreq,
+            movie=TASK,
+            movie_features=self.movie_features[TASK],
+        )
+        return torch.from_numpy(X).float(), features
+
