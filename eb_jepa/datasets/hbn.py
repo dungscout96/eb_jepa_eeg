@@ -28,8 +28,8 @@ DATA_DIR = Path.home() / ".cache" / "eb_jepa" / "datasets" / "eegdash_cache"
 
 SPLIT_RELEASES = {
     "train": {"R1": "ds005505"},
-    "val": {"R6": "ds005505"},
-    "test": {"R7": "ds005505"},
+    "val": {"R1": "ds005505"}, # TODO
+    "test": {"R1": "ds005505"}, # TODO
 }
 
 DEFAULT_TASK = "ThePresent"
@@ -277,7 +277,12 @@ class HBNMovieProbeDataset(Dataset):
         selected_recordings = []
         rejected = 0
         for recording_ds in data.datasets:
-            raw = recording_ds.raw
+            try:
+                raw = recording_ds.raw
+            except (ValueError, OSError) as exc:
+                logger.warning("Skipping unloadable recording %s: %s", recording_ds, exc)
+                rejected += 1
+                continue
 
             for idx, ann in enumerate(raw.annotations):
                 if ann["description"] == "video_start":
