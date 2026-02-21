@@ -19,10 +19,12 @@ for _mod_name in _STUB_MODULES:
         stub = ModuleType(_mod_name)
         # Provide the names that hbn.py imports at module level
         if _mod_name == "eegdash.dataset":
-            stub.EEGDashDataset = MagicMock()
             stub.EEGChallengeDataset = MagicMock()
         if _mod_name == "braindecode.datasets":
             stub.BaseConcatDataset = MagicMock()
+        if _mod_name == "braindecode.preprocessing":
+            stub.create_fixed_length_windows = MagicMock()
+            stub.create_windows_from_events = MagicMock()
         sys.modules[_mod_name] = stub
         _saved[_mod_name] = stub
 
@@ -61,7 +63,7 @@ class TestGetWindowMovieMetadata:
         # window_onset=10, sfreq=250 -> timestamp=0.04s -> frame_index = int(0.04 * 24) = 0
         features = hbn.get_window_movie_metadata(
             window_onset=10, sfreq=250, movie="ThePresent",
-            movie_features=movie_features
+            movie_features=movie_features, visual_processing_delay_s=0,
         )
         assert features["brightness"] == pytest.approx(0.1)
         assert features["contrast"] == pytest.approx(1.0)
@@ -73,7 +75,7 @@ class TestGetWindowMovieMetadata:
         # int(31/250 * 24) = int(2.976) = 2
         features = hbn.get_window_movie_metadata(
             window_onset=31, sfreq=250, movie="ThePresent",
-            movie_features=movie_features
+            movie_features=movie_features, visual_processing_delay_s=0,
         )
         assert features["val"] == 30  # iloc[2]
 
@@ -121,6 +123,6 @@ class TestGetMovieRecordingDuration:
 
         with patch("mne.events_from_annotations", return_value=(events, event_id)), \
              patch("mne.pick_events", return_value=events):
-            duration = hbn.get_movie_recording_duration(mock_raw)
+            duration = hbn.get_movie_recording_duration(mock_raw, movie="ThePresent")
 
         assert duration == pytest.approx(100.0)  # (51000-1000) / 500
