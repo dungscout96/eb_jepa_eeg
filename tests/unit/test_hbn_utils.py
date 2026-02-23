@@ -11,6 +11,7 @@ import pytest
 _STUB_MODULES = [
     "eegdash", "eegdash.dataset",
     "braindecode", "braindecode.datasets",
+    "braindecode.datautil", "braindecode.datautil.serialization",
     "braindecode.preprocessing",
 ]
 _saved = {}
@@ -22,6 +23,9 @@ for _mod_name in _STUB_MODULES:
             stub.EEGChallengeDataset = MagicMock()
         if _mod_name == "braindecode.datasets":
             stub.BaseConcatDataset = MagicMock()
+        if _mod_name == "braindecode.datautil.serialization":
+            stub.load_concat_dataset = MagicMock()
+            stub.save_concat_dataset = MagicMock()
         if _mod_name == "braindecode.preprocessing":
             stub.create_fixed_length_windows = MagicMock()
             stub.create_windows_from_events = MagicMock()
