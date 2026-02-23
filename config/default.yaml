@@ -1,0 +1,13 @@
+data:
+  annotation_duration_tolerance_s: 1.0 # tolerance for difference in eeg movie recording and actual movie duration, to account for event imprecision
+  post_movie_visual_processing_s: 2.0
+  max_recording_overshoot_s: 60.0
+  trial_stop_offset_s: 0.1
+  visual_processing_delay_s: 0.3
+
+trainer:
+  n_epochs: 50
+  patience: 7
+  batch_size: 32
+  weight_decay: 1e-4
+  grad_clip_norm: 1.0

@@ -59,13 +59,12 @@ DEFAULT_RESULTS_DIR = Path(__file__).parent / "results"
 NUMERIC_FEATURES = [
     "luminance_mean", "contrast_rms",
     "color_r_mean", "color_g_mean", "color_b_mean",
-    # "saturation_mean", "edge_density", "spatial_freq_energy",
+    "saturation_mean", "edge_density", "spatial_freq_energy",
     "entropy", "motion_energy",
     "n_faces", "face_area_frac",
-    # "depth_mean", "depth_std", "depth_range",
-    # "n_objects",
+    "depth_mean", "depth_std", "depth_range",
+    "n_objects",
     "scene_category_score", "scene_natural_score", "scene_open_score",
-    "sham_random",
 ]
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -83,11 +82,10 @@ class MovieFeatureDataset(Dataset):
 
     def _precompute(self, hbn_dataset):
         X_list, y_list = [], []
-        real_features = [f for f in self.feature_names if f != "sham_random"]
         print(f"  Precomputing {len(hbn_dataset)} windows...")
         for i in tqdm(range(len(hbn_dataset)), desc="  Loading", leave=False):
             X, features = hbn_dataset[i]
-            y = torch.tensor([float(features[f]) for f in real_features],
+            y = torch.tensor([float(features[f]) for f in self.feature_names],
                              dtype=torch.float32)
             X_list.append(X)
             y_list.append(y)
@@ -97,11 +95,6 @@ class MovieFeatureDataset(Dataset):
 
         # Replace NaN with 0
         self.y_data = torch.nan_to_num(self.y_data, nan=0.0)
-
-        # Append sham column: random uniform [-1, 1] (no relation to EEG)
-        if "sham_random" in self.feature_names:
-            sham = torch.FloatTensor(len(self.X_data), 1).uniform_(-1, 1)
-            self.y_data = torch.cat([self.y_data, sham], dim=1)
 
         if self.feature_stats is not None:
             self.y_data = (
@@ -233,44 +226,44 @@ def get_sweep_configs(n_chans, n_times, sfreq, n_outputs, chs_info=None):
     """Define hyperparameter sweep configurations for each model."""
     configs = {}
 
-    # --- EEGNet ---
-    configs["EEGNet"] = []
-    for F1, D, dp, lr in itertools.product(
-        [8, 16],        # F1: temporal filters
-        [2, 4],         # D: depth multiplier
-        [0.25, 0.5],    # drop_prob
-        [1e-3, 1e-4],   # learning rate
-    ):
-        configs["EEGNet"].append({
-            "model_params": {
-                "n_chans": n_chans, "n_outputs": n_outputs, "n_times": n_times,
-                "F1": F1, "D": D, "drop_prob": dp,
-            },
-            "lr": lr,
-            "label": f"F1={F1}_D={D}_dp={dp}_lr={lr}",
-        })
+    # # --- EEGNet ---
+    # configs["EEGNet"] = []
+    # for F1, D, dp, lr in itertools.product(
+    #     [8, 16],        # F1: temporal filters
+    #     [2, 4],         # D: depth multiplier
+    #     [0.25, 0.5],    # drop_prob
+    #     [1e-3, 1e-4],   # learning rate
+    # ):
+    #     configs["EEGNet"].append({
+    #         "model_params": {
+    #             "n_chans": n_chans, "n_outputs": n_outputs, "n_times": n_times,
+    #             "F1": F1, "D": D, "drop_prob": dp,
+    #         },
+    #         "lr": lr,
+    #         "label": f"F1={F1}_D={D}_dp={dp}_lr={lr}",
+    #     })
 
-    # # --- REVE from scratch ---
-    # if REVE_AVAILABLE:
-    #     configs["REVE_scratch"] = []
-    #     for embed_dim, depth, lr in itertools.product(
-    #         [128, 256],   # embed_dim
-    #         [4, 8],       # transformer depth
-    #         [5e-4, 1e-4], # learning rate
-    #     ):
-    #         heads = max(4, embed_dim // 32)
-    #         head_dim = embed_dim // heads
-    #         configs["REVE_scratch"].append({
-    #             "model_params": {
-    #                 "n_chans": n_chans, "n_outputs": n_outputs, "n_times": n_times,
-    #                 "sfreq": sfreq,
-    #                 "embed_dim": embed_dim, "depth": depth,
-    #                 "heads": heads, "head_dim": head_dim,
-    #                 "chs_info": chs_info,
-    #             },
-    #             "lr": lr,
-    #             "label": f"ed={embed_dim}_d={depth}_lr={lr}",
-    #         })
+    # --- REVE from scratch ---
+    if REVE_AVAILABLE:
+        configs["REVE_scratch"] = []
+        for embed_dim, depth, lr in itertools.product(
+            [128, 256],   # embed_dim
+            [4, 8],       # transformer depth
+            [5e-4, 1e-4], # learning rate
+        ):
+            heads = max(4, embed_dim // 32)
+            head_dim = embed_dim // heads
+            configs["REVE_scratch"].append({
+                "model_params": {
+                    "n_chans": n_chans, "n_outputs": n_outputs, "n_times": n_times,
+                    "sfreq": sfreq,
+                    "embed_dim": embed_dim, "depth": depth,
+                    "heads": heads, "head_dim": head_dim,
+                    "chs_info": chs_info,
+                },
+                "lr": lr,
+                "label": f"ed={embed_dim}_d={depth}_lr={lr}",
+            })
 
         # --- REVE pretrained (fine-tune) ---
         # configs["REVE_pretrained"] = []
@@ -329,10 +322,9 @@ def get_sweep_configs(n_chans, n_times, sfreq, n_outputs, chs_info=None):
 
 def train_and_evaluate(
     model_name, config, train_loader, val_loader,
-    feature_idx, feature_name,
     channel_positions=None, *, trainer_cfg,
 ):
-    """Train a single model on one feature and return validation metrics."""
+    """Train a single model configuration and return validation metrics."""
     resample_200 = config.get("resample_200", False)
     resample_size = None
     if resample_200:
@@ -372,7 +364,7 @@ def train_and_evaluate(
             epoch_train_loss = 0
             n_batches = 0
             for X, y in train_loader:
-                X, y = X.to(DEVICE), y[:, feature_idx:feature_idx+1].to(DEVICE)
+                X, y = X.to(DEVICE), y.to(DEVICE)
                 if resample_size is not None:
                     X = F.interpolate(X, size=resample_size, mode="linear")
 
@@ -401,7 +393,7 @@ def train_and_evaluate(
             n_val_batches = 0
             with torch.no_grad():
                 for X, y in val_loader:
-                    X, y = X.to(DEVICE), y[:, feature_idx:feature_idx+1].to(DEVICE)
+                    X, y = X.to(DEVICE), y.to(DEVICE)
                     if resample_size is not None:
                         X = F.interpolate(X, size=resample_size, mode="linear")
                     if "REVE" in model_name and channel_positions is not None:
@@ -435,7 +427,7 @@ def train_and_evaluate(
             model.load_state_dict(best_state)
         model.eval()
 
-        # Compute metrics on validation set
+        # Compute per-feature metrics on validation set
         all_preds, all_targets = [], []
         with torch.no_grad():
             for X, y in val_loader:
@@ -450,23 +442,29 @@ def train_and_evaluate(
                 else:
                     out = model(X)
                 all_preds.append(out.cpu())
-                all_targets.append(y[:, feature_idx:feature_idx+1])
+                all_targets.append(y)
 
-        preds = torch.cat(all_preds).numpy()[:, 0]
-        targets = torch.cat(all_targets).numpy()[:, 0]
+        preds = torch.cat(all_preds).numpy()
+        targets = torch.cat(all_targets).numpy()
 
-        mse = float(np.mean((preds - targets) ** 2))
-        if np.std(targets) > 1e-10 and np.std(preds) > 1e-10:
-            r2 = float(r2_score(targets, preds))
-            corr = float(pearsonr(preds, targets).statistic)
-        else:
-            r2 = 0.0
-            corr = 0.0
+        per_feature = {}
+        for i, fname in enumerate(NUMERIC_FEATURES):
+            p, t = preds[:, i], targets[:, i]
+            mse = float(np.mean((p - t) ** 2))
+            if np.std(t) > 1e-10 and np.std(p) > 1e-10:
+                r2 = float(r2_score(t, p))
+                corr = float(pearsonr(p, t).statistic)
+            else:
+                r2 = 0.0
+                corr = 0.0
+            per_feature[fname] = {"mse": mse, "r2": r2, "pearson_r": corr}
+
+        avg_r2 = np.mean([m["r2"] for m in per_feature.values()])
+        avg_corr = np.mean([m["pearson_r"] for m in per_feature.values()])
 
         return {
             "status": "success",
             "model_name": model_name,
-            "feature_name": feature_name,
             "label": config["label"],
             "lr": config["lr"],
             "n_params": n_params,
@@ -474,9 +472,9 @@ def train_and_evaluate(
             "best_val_loss": float(best_val_loss),
             "best_epoch": len(train_losses) - patience_counter,
             "total_epochs": len(train_losses),
-            "r2": r2,
-            "pearson_r": corr,
-            "mse": mse,
+            "avg_r2": float(avg_r2),
+            "avg_pearson_r": float(avg_corr),
+            "per_feature": per_feature,
             "train_losses": train_losses,
             "val_losses": val_losses,
             "best_state": best_state,
@@ -486,7 +484,6 @@ def train_and_evaluate(
         return {
             "status": "error",
             "model_name": model_name,
-            "feature_name": feature_name,
             "label": config.get("label", "unknown"),
             "error": str(e),
             "traceback": traceback.format_exc(),
@@ -495,9 +492,9 @@ def train_and_evaluate(
 
 def evaluate_on_test(
     model_name, config, test_loader, best_state,
-    feature_idx, channel_positions=None,
+    channel_positions=None,
 ):
-    """Evaluate a trained model on the test set for a single feature."""
+    """Evaluate a trained model on the test set."""
     resample_200 = config.get("resample_200", False)
     resample_size = config["model_params"]["n_times"] if resample_200 else None
 
@@ -521,20 +518,31 @@ def evaluate_on_test(
             else:
                 out = model(X)
             all_preds.append(out.cpu())
-            all_targets.append(y[:, feature_idx:feature_idx+1])
+            all_targets.append(y)
 
-    preds = torch.cat(all_preds).numpy()[:, 0]
-    targets = torch.cat(all_targets).numpy()[:, 0]
+    preds = torch.cat(all_preds).numpy()
+    targets = torch.cat(all_targets).numpy()
 
-    mse = float(np.mean((preds - targets) ** 2))
-    if np.std(targets) > 1e-10 and np.std(preds) > 1e-10:
-        r2 = float(r2_score(targets, preds))
-        corr = float(pearsonr(preds, targets).statistic)
-    else:
-        r2 = 0.0
-        corr = 0.0
+    per_feature = {}
+    for i, fname in enumerate(NUMERIC_FEATURES):
+        p, t = preds[:, i], targets[:, i]
+        mse = float(np.mean((p - t) ** 2))
+        if np.std(t) > 1e-10 and np.std(p) > 1e-10:
+            r2 = float(r2_score(t, p))
+            corr = float(pearsonr(p, t).statistic)
+        else:
+            r2 = 0.0
+            corr = 0.0
+        per_feature[fname] = {"mse": mse, "r2": r2, "pearson_r": corr}
 
-    return {"r2": r2, "pearson_r": corr, "mse": mse}
+    avg_r2 = np.mean([m["r2"] for m in per_feature.values()])
+    avg_corr = np.mean([m["pearson_r"] for m in per_feature.values()])
+
+    return {
+        "per_feature": per_feature,
+        "avg_r2": float(avg_r2),
+        "avg_pearson_r": float(avg_corr),
+    }
 
 
 # ===================== Main =====================
@@ -560,9 +568,9 @@ def main(cfg: DictConfig):
     sample_X, _ = train_raw[0]
     n_chans, n_times = sample_X.shape
     sfreq = train_raw.sfreq
-    n_features = len(NUMERIC_FEATURES)
+    n_outputs = len(NUMERIC_FEATURES)
     print(f"Data shape: n_chans={n_chans}, n_times={n_times}, sfreq={sfreq}")
-    print(f"Predicting {n_features} features (per-feature probes): {NUMERIC_FEATURES}")
+    print(f"Predicting {n_outputs} features: {NUMERIC_FEATURES}")
 
     # Extract channel info for REVE
     channel_positions = extract_channel_positions(train_raw)
@@ -593,131 +601,130 @@ def main(cfg: DictConfig):
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=0)
     test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=0)
 
-    # --- Hyperparameter grids (n_outputs=1 for per-feature probes) ---
+    # --- Hyperparameter grids ---
     configs = get_sweep_configs(
         n_chans=n_chans, n_times=n_times, sfreq=sfreq,
-        n_outputs=1, chs_info=chs_info,
+        n_outputs=n_outputs, chs_info=chs_info,
     )
 
-    n_model_configs = sum(len(v) for v in configs.values())
-    total_runs = n_features * n_model_configs
-    print(f"\nPer-feature sweep: {n_features} features x {n_model_configs} configs = {total_runs} total runs")
+    total_configs = sum(len(v) for v in configs.values())
+    print(f"\nTotal configurations to sweep: {total_configs}")
     for name, cfgs in configs.items():
         print(f"  {name}: {len(cfgs)} configs")
 
-    # --- Run per-feature sweep ---
+    # --- Run sweep ---
     all_results = []
-    best_per_model_feature = {}
-    run_idx = 0
+    best_per_model = {}  # model_name -> best result (including state dict)
+    config_idx = 0
 
-    for feat_idx, feat_name in enumerate(NUMERIC_FEATURES):
+    for model_name, model_configs in configs.items():
         print(f"\n{'='*70}")
-        print(f"  Feature [{feat_idx+1}/{n_features}]: {feat_name}")
+        print(f"  Model: {model_name} ({len(model_configs)} configurations)")
         print(f"{'='*70}")
 
-        for model_name, model_configs in configs.items():
-            for config in model_configs:
-                run_idx += 1
-                print(f"\n  [{run_idx}/{total_runs}] {model_name} | {feat_name} | {config['label']}")
-                t0 = time.time()
+        for i, config in enumerate(model_configs):
+            config_idx += 1
+            print(f"\n  [{config_idx}/{total_configs}] {model_name} | {config['label']}")
+            t0 = time.time()
 
-                result = train_and_evaluate(
-                    model_name, config, train_loader, val_loader,
-                    feature_idx=feat_idx, feature_name=feat_name,
-                    channel_positions=channel_positions,
-                    trainer_cfg=cfg.trainer,
+            result = train_and_evaluate(
+                model_name, config, train_loader, val_loader,
+                channel_positions=channel_positions,
+                trainer_cfg=cfg.trainer,
+            )
+            elapsed = time.time() - t0
+            result["elapsed_s"] = round(elapsed, 1)
+
+            if result["status"] == "success":
+                print(
+                    f"    val_loss={result['best_val_loss']:.4f} | "
+                    f"avg_r2={result['avg_r2']:.4f} | "
+                    f"avg_corr={result['avg_pearson_r']:.4f} | "
+                    f"params={result['n_params']:,} | "
+                    f"epochs={result['total_epochs']} | "
+                    f"{elapsed:.1f}s"
                 )
-                elapsed = time.time() - t0
-                result["elapsed_s"] = round(elapsed, 1)
 
-                if result["status"] == "success":
-                    print(
-                        f"    val_loss={result['best_val_loss']:.4f} | "
-                        f"r2={result['r2']:.4f} | "
-                        f"corr={result['pearson_r']:.4f} | "
-                        f"params={result['n_params']:,} | "
-                        f"epochs={result['total_epochs']} | "
-                        f"{elapsed:.1f}s"
-                    )
+                # Track best per model
+                if (
+                    model_name not in best_per_model
+                    or result["best_val_loss"]
+                    < best_per_model[model_name]["best_val_loss"]
+                ):
+                    best_per_model[model_name] = result
 
-                    key = (model_name, feat_name)
-                    if (
-                        key not in best_per_model_feature
-                        or result["best_val_loss"]
-                        < best_per_model_feature[key]["best_val_loss"]
-                    ):
-                        best_per_model_feature[key] = result
+                # Save result (without state dict for JSON)
+                result_save = {
+                    k: v for k, v in result.items() if k != "best_state"
+                }
+                all_results.append(result_save)
+            else:
+                print(f"    ERROR: {result['error']}")
+                all_results.append(result)
 
-                    result_save = {
-                        k: v for k, v in result.items() if k != "best_state"
-                    }
-                    all_results.append(result_save)
-                else:
-                    print(f"    ERROR: {result['error']}")
-                    all_results.append(result)
-
-                with open(results_dir / "all_results.json", "w") as f:
-                    json.dump(all_results, f, indent=2, default=str)
+            # Save intermediate results
+            with open(results_dir / "all_results.json", "w") as f:
+                json.dump(all_results, f, indent=2, default=str)
 
     # --- Evaluate best models on test set ---
     print(f"\n\n{'='*70}")
-    print("  Evaluating best per-feature models on TEST set")
+    print("  Evaluating best models on TEST set")
     print(f"{'='*70}")
 
-    test_results = []
-    for (model_name, feat_name), best in best_per_model_feature.items():
+    test_results = {}
+    for model_name, best in best_per_model.items():
         if best["status"] != "success" or best.get("best_state") is None:
+            print(f"  {model_name}: skipped (no successful run)")
             continue
 
-        feat_idx = NUMERIC_FEATURES.index(feat_name)
-
+        # Find the config that produced the best result
+        model_configs = configs[model_name]
         best_config = None
-        for c in configs[model_name]:
-            if c["label"] == best["label"]:
-                best_config = c
+        for cfg in model_configs:
+            if cfg["label"] == best["label"]:
+                best_config = cfg
                 break
         if best_config is None:
+            print(f"  {model_name}: could not find matching config")
             continue
 
+        print(f"\n  {model_name} (best config: {best['label']})")
         try:
             test_metrics = evaluate_on_test(
                 model_name, best_config, test_loader, best["best_state"],
-                feature_idx=feat_idx,
                 channel_positions=channel_positions,
             )
-            test_results.append({
-                "model_name": model_name,
-                "feature_name": feat_name,
+            test_results[model_name] = {
                 "label": best["label"],
+                "val_avg_r2": best["avg_r2"],
+                "val_avg_corr": best["avg_pearson_r"],
+                "test_avg_r2": test_metrics["avg_r2"],
+                "test_avg_corr": test_metrics["avg_pearson_r"],
+                "test_per_feature": test_metrics["per_feature"],
                 "n_params": best["n_params"],
-                "val_r2": best["r2"],
-                "val_corr": best["pearson_r"],
-                "test_r2": test_metrics["r2"],
-                "test_corr": test_metrics["pearson_r"],
-                "test_mse": test_metrics["mse"],
-            })
+            }
             print(
-                f"  {model_name} | {feat_name}: "
-                f"test_r2={test_metrics['r2']:.4f} | "
-                f"test_corr={test_metrics['pearson_r']:.4f}"
+                f"    Test avg_r2={test_metrics['avg_r2']:.4f} | "
+                f"avg_corr={test_metrics['avg_pearson_r']:.4f}"
             )
         except Exception as e:
-            print(f"  {model_name} | {feat_name}: test eval failed: {e}")
+            print(f"    Test evaluation failed: {e}")
+            test_results[model_name] = {"error": str(e)}
 
     # Save test results
     with open(results_dir / "test_results.json", "w") as f:
         json.dump(test_results, f, indent=2, default=str)
 
     # --- Generate report ---
-    generate_report(all_results, test_results, results_dir)
+    generate_report(all_results, test_results, best_per_model, results_dir)
 
     print(f"\nResults saved to {results_dir}")
 
 
 # ===================== Report Generation =====================
 
-def generate_report(all_results, test_results, results_dir):
-    """Generate summary tables and plots from per-feature probe results."""
+def generate_report(all_results, test_results, best_per_model, results_dir):
+    """Generate summary tables and plots from experiment results."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -726,144 +733,198 @@ def generate_report(all_results, test_results, results_dir):
     figures_dir = results_dir / "figures"
     figures_dir.mkdir(exist_ok=True)
 
-    if not test_results:
-        print("\nNo successful test results to report.")
+    successful = [r for r in all_results if r.get("status") == "success"]
+    if not successful:
+        print("\nNo successful runs to report.")
         return
 
-    test_df = pd.DataFrame(test_results)
-    test_df.to_csv(results_dir / "per_feature_results.csv", index=False)
-
-    # ---- 1. Per-feature R² table (pivot: features x models) ----
+    # ---- 1. Summary table (best config per model) ----
     print(f"\n{'='*70}")
-    print("  PER-FEATURE TEST R² (best config per model per feature)")
+    print("  RESULTS SUMMARY (Best config per model, TEST set)")
     print(f"{'='*70}")
 
-    r2_pivot = test_df.pivot(index="feature_name", columns="model_name", values="test_r2")
-    print(r2_pivot.to_string())
+    summary_rows = []
+    for model_name, tres in test_results.items():
+        if "error" in tres:
+            continue
+        row = {
+            "Model": model_name,
+            "Best Config": tres["label"],
+            "Params": tres.get("n_params", "N/A"),
+            "Val R²": round(tres["val_avg_r2"], 4),
+            "Val Corr": round(tres["val_avg_corr"], 4),
+            "Test R²": round(tres["test_avg_r2"], 4),
+            "Test Corr": round(tres["test_avg_corr"], 4),
+        }
+        summary_rows.append(row)
 
-    # ---- 2. Average R² per model (across features) ----
+    if summary_rows:
+        summary_df = pd.DataFrame(summary_rows)
+        summary_df = summary_df.sort_values("Test R²", ascending=False)
+        print(summary_df.to_string(index=False))
+        summary_df.to_csv(results_dir / "summary_table.csv", index=False)
+
+    # ---- 2. Per-feature test results table ----
     print(f"\n{'='*70}")
-    print("  AVERAGE TEST METRICS PER MODEL")
+    print("  PER-FEATURE TEST R² (Best config per model)")
     print(f"{'='*70}")
 
-    model_avg = test_df.groupby("model_name").agg(
-        avg_test_r2=("test_r2", "mean"),
-        avg_test_corr=("test_corr", "mean"),
-        avg_val_r2=("val_r2", "mean"),
-    ).round(4).sort_values("avg_test_r2", ascending=False)
-    print(model_avg.to_string())
-    model_avg.to_csv(results_dir / "model_averages.csv")
+    feature_rows = []
+    for model_name, tres in test_results.items():
+        if "error" in tres or "test_per_feature" not in tres:
+            continue
+        for fname, metrics in tres["test_per_feature"].items():
+            feature_rows.append({
+                "Model": model_name,
+                "Feature": fname,
+                "R²": round(metrics["r2"], 4),
+                "Pearson r": round(metrics["pearson_r"], 4),
+                "MSE": round(metrics["mse"], 4),
+            })
 
-    # ---- 3. Heatmap: per-feature R² ----
-    model_names = r2_pivot.columns.tolist()
-    if len(model_names) >= 1:
-        fig, ax = plt.subplots(figsize=(max(8, 3 * len(model_names)), 8))
-        sns.heatmap(
-            r2_pivot, annot=True, fmt=".3f", cmap="RdYlGn",
-            center=0, ax=ax, linewidths=0.5,
+    if feature_rows:
+        feature_df = pd.DataFrame(feature_rows)
+        feature_df.to_csv(results_dir / "per_feature_results.csv", index=False)
+
+        # Pivot for heatmap
+        r2_pivot = feature_df.pivot(
+            index="Feature", columns="Model", values="R²"
         )
-        ax.set_title("Test R² by Feature (per-feature probes)")
-        plt.tight_layout()
-        plt.savefig(figures_dir / "feature_heatmap.png", dpi=150)
-        plt.close()
-        print(f"\n  Saved: {figures_dir / 'feature_heatmap.png'}")
+        print(r2_pivot.to_string())
 
-    # ---- 4. Bar chart: average R² per model ----
-    if len(model_names) >= 1:
+    # ---- 3. Bar chart: average R² per model ----
+    if summary_rows:
         fig, ax = plt.subplots(figsize=(10, 6))
-        model_avg_plot = model_avg.reset_index()
-        x = np.arange(len(model_avg_plot))
+        models = [r["Model"] for r in summary_rows]
+        test_r2 = [r["Test R²"] for r in summary_rows]
+        val_r2 = [r["Val R²"] for r in summary_rows]
+
+        x = np.arange(len(models))
         width = 0.35
-        ax.bar(x - width / 2, model_avg_plot["avg_val_r2"], width,
-               label="Val R²", alpha=0.8)
-        ax.bar(x + width / 2, model_avg_plot["avg_test_r2"], width,
-               label="Test R²", alpha=0.8)
+        ax.bar(x - width / 2, val_r2, width, label="Val R²", alpha=0.8)
+        ax.bar(x + width / 2, test_r2, width, label="Test R²", alpha=0.8)
         ax.set_xlabel("Model")
-        ax.set_ylabel("Average R² (across features)")
-        ax.set_title("Model Comparison: Mean R² Across Per-Feature Probes")
+        ax.set_ylabel("Average R²")
+        ax.set_title("Model Comparison: Average R² Across All Features")
         ax.set_xticks(x)
-        ax.set_xticklabels(model_avg_plot["model_name"], rotation=30, ha="right")
+        ax.set_xticklabels(models, rotation=30, ha="right")
         ax.legend()
         ax.axhline(y=0, color="gray", linestyle="--", alpha=0.5)
         plt.tight_layout()
         plt.savefig(figures_dir / "model_comparison_r2.png", dpi=150)
         plt.close()
-        print(f"  Saved: {figures_dir / 'model_comparison_r2.png'}")
+        print(f"\n  Saved: {figures_dir / 'model_comparison_r2.png'}")
 
-    # ---- 5. Pearson correlation bar chart ----
-    corr_pivot = test_df.pivot(
-        index="feature_name", columns="model_name", values="test_corr"
-    )
-    fig, ax = plt.subplots(figsize=(14, 8))
-    corr_pivot.plot(kind="bar", ax=ax, alpha=0.8)
-    ax.set_ylabel("Pearson r")
-    ax.set_title("Test Pearson Correlation by Feature (per-feature probes)")
-    ax.legend(title="Model", bbox_to_anchor=(1.05, 1), loc="upper left")
-    ax.axhline(y=0, color="gray", linestyle="--", alpha=0.5)
-    plt.xticks(rotation=45, ha="right")
-    plt.tight_layout()
-    plt.savefig(figures_dir / "pearson_correlation.png", dpi=150)
-    plt.close()
-    print(f"  Saved: {figures_dir / 'pearson_correlation.png'}")
+    # ---- 4. Heatmap: per-feature R² ----
+    if feature_rows and len(test_results) > 1:
+        fig, ax = plt.subplots(figsize=(14, 8))
+        sns.heatmap(
+            r2_pivot, annot=True, fmt=".3f", cmap="RdYlGn",
+            center=0, ax=ax, linewidths=0.5,
+        )
+        ax.set_title("Test R² by Feature and Model")
+        plt.tight_layout()
+        plt.savefig(figures_dir / "feature_heatmap.png", dpi=150)
+        plt.close()
+        print(f"  Saved: {figures_dir / 'feature_heatmap.png'}")
 
-    # ---- 6. Pretrained vs scratch comparison ----
+    # ---- 5. Pretrained vs scratch comparison ----
+    scratch_pretrained_pairs = []
     for base in ["REVE", "BIOT"]:
         scratch_key = f"{base}_scratch"
         pretrained_key = f"{base}_pretrained"
-        s_df = test_df[test_df["model_name"] == scratch_key]
-        p_df = test_df[test_df["model_name"] == pretrained_key]
-        if s_df.empty or p_df.empty:
-            continue
+        if scratch_key in test_results and pretrained_key in test_results:
+            s = test_results[scratch_key]
+            p = test_results[pretrained_key]
+            if "error" not in s and "error" not in p:
+                scratch_pretrained_pairs.append((base, s, p))
 
-        merged = s_df.merge(
-            p_df, on="feature_name", suffixes=("_scratch", "_pretrained")
-        )
-        fig, ax = plt.subplots(figsize=(10, 8))
-        features = merged["feature_name"]
-        y = np.arange(len(features))
-        width = 0.35
-        ax.barh(y - width / 2, merged["test_r2_scratch"], width,
-                label="From Scratch", alpha=0.8)
-        ax.barh(y + width / 2, merged["test_r2_pretrained"], width,
-                label="Pretrained", alpha=0.8)
-        ax.set_yticks(y)
-        ax.set_yticklabels(features, fontsize=8)
-        ax.set_xlabel("R²")
-        ax.set_title(f"{base}: Pretrained vs Scratch (per-feature)")
-        ax.legend()
-        ax.axvline(x=0, color="gray", linestyle="--", alpha=0.5)
+    if scratch_pretrained_pairs:
+        fig, axes = plt.subplots(1, len(scratch_pretrained_pairs),
+                                 figsize=(8 * len(scratch_pretrained_pairs), 6))
+        if len(scratch_pretrained_pairs) == 1:
+            axes = [axes]
+
+        for ax, (base, scratch, pretrained) in zip(axes, scratch_pretrained_pairs):
+            features = list(scratch["test_per_feature"].keys())
+            s_r2 = [scratch["test_per_feature"][f]["r2"] for f in features]
+            p_r2 = [pretrained["test_per_feature"][f]["r2"] for f in features]
+
+            x = np.arange(len(features))
+            width = 0.35
+            ax.barh(x - width / 2, s_r2, width, label="From Scratch", alpha=0.8)
+            ax.barh(x + width / 2, p_r2, width, label="Pretrained", alpha=0.8)
+            ax.set_yticks(x)
+            ax.set_yticklabels(features, fontsize=8)
+            ax.set_xlabel("R²")
+            ax.set_title(f"{base}: Pretrained vs Scratch")
+            ax.legend()
+            ax.axvline(x=0, color="gray", linestyle="--", alpha=0.5)
+
         plt.tight_layout()
-        plt.savefig(figures_dir / f"pretrained_vs_scratch_{base}.png", dpi=150)
+        plt.savefig(figures_dir / "pretrained_vs_scratch.png", dpi=150)
         plt.close()
-        print(f"  Saved: {figures_dir / f'pretrained_vs_scratch_{base}.png'}")
+        print(f"  Saved: {figures_dir / 'pretrained_vs_scratch.png'}")
 
-    # ---- 7. Sweep overview ----
-    successful = [r for r in all_results if r.get("status") == "success"]
-    if successful:
-        sweep_rows = []
-        for r in successful:
-            sweep_rows.append({
-                "Model": r["model_name"],
-                "Feature": r["feature_name"],
-                "Config": r["label"],
-                "LR": r["lr"],
-                "Params": r["n_params"],
-                "Val Loss": round(r["best_val_loss"], 4),
-                "Val R²": round(r["r2"], 4),
-                "Val Corr": round(r["pearson_r"], 4),
-                "Epochs": r["total_epochs"],
-                "Time (s)": r.get("elapsed_s", "N/A"),
-            })
-        sweep_df = pd.DataFrame(sweep_rows)
-        sweep_df = sweep_df.sort_values(
-            ["Model", "Feature", "Val R²"], ascending=[True, True, False]
+    # ---- 6. Pearson correlation bar chart ----
+    if feature_rows:
+        corr_pivot = feature_df.pivot(
+            index="Feature", columns="Model", values="Pearson r"
         )
+        fig, ax = plt.subplots(figsize=(14, 8))
+        corr_pivot.plot(kind="bar", ax=ax, alpha=0.8)
+        ax.set_ylabel("Pearson r")
+        ax.set_title("Test Pearson Correlation by Feature and Model")
+        ax.legend(title="Model", bbox_to_anchor=(1.05, 1), loc="upper left")
+        ax.axhline(y=0, color="gray", linestyle="--", alpha=0.5)
+        plt.xticks(rotation=45, ha="right")
+        plt.tight_layout()
+        plt.savefig(figures_dir / "pearson_correlation.png", dpi=150)
+        plt.close()
+        print(f"  Saved: {figures_dir / 'pearson_correlation.png'}")
+
+    # ---- 7. Hyperparameter sweep overview ----
+    sweep_rows = []
+    for r in successful:
+        sweep_rows.append({
+            "Model": r["model_name"],
+            "Config": r["label"],
+            "LR": r["lr"],
+            "Params": r["n_params"],
+            "Val Loss": round(r["best_val_loss"], 4),
+            "Val R²": round(r["avg_r2"], 4),
+            "Val Corr": round(r["avg_pearson_r"], 4),
+            "Epochs": r["total_epochs"],
+            "Time (s)": r.get("elapsed_s", "N/A"),
+        })
+
+    if sweep_rows:
+        sweep_df = pd.DataFrame(sweep_rows)
+        sweep_df = sweep_df.sort_values(["Model", "Val R²"], ascending=[True, False])
         sweep_df.to_csv(results_dir / "sweep_all_configs.csv", index=False)
 
         print(f"\n{'='*70}")
         print("  FULL SWEEP RESULTS")
         print(f"{'='*70}")
         print(sweep_df.to_string(index=False))
+
+    # ---- 8. Training curves for best models ----
+    fig, axes = plt.subplots(1, len(best_per_model), figsize=(6 * len(best_per_model), 4))
+    if len(best_per_model) == 1:
+        axes = [axes]
+    for ax, (model_name, best) in zip(axes, best_per_model.items()):
+        if best["status"] != "success":
+            continue
+        ax.plot(best["train_losses"], label="Train", alpha=0.8)
+        ax.plot(best["val_losses"], label="Val", alpha=0.8)
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("MSE Loss")
+        ax.set_title(f"{model_name}\n{best['label']}")
+        ax.legend()
+    plt.tight_layout()
+    plt.savefig(figures_dir / "training_curves.png", dpi=150)
+    plt.close()
+    print(f"  Saved: {figures_dir / 'training_curves.png'}")
 
 
 if __name__ == "__main__":

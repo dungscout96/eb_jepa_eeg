@@ -3,6 +3,7 @@ name = "eb_jepa"
 version = "0.1.1"
 description = "Energy-Based JEPA"
 authors = [
+    {name = "Young Truong", email = "dutruong@ucsd.edu"},
     {name = "Basile Terver", email = "basileterv@meta.com"},
     {name = "Randall Balestriero", email = "rbalestriero@meta.com"},
     {name = "Megi Dervishi", email = "megidervishi@meta.com"},
@@ -38,6 +39,7 @@ dependencies = [
     "decord",
     "omegaconf",
     "ruamel.yaml",
+    "hydra-core",
 ]
 requires-python = "==3.12.*"
 

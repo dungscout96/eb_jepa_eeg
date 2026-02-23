@@ -3,6 +3,9 @@
 import logging
 from pathlib import Path
 
+import hydra
+from omegaconf import DictConfig, OmegaConf
+
 import mne
 import pandas as pd
 import torch
@@ -27,9 +30,9 @@ DATA_DIR = Path.home() / ".cache" / "eb_jepa" / "datasets" / "eegdash_cache"
 
 
 SPLIT_RELEASES = {
-    "train": {"R1": "ds005505"},
-    "val": {"R1": "ds005505"}, # TODO
-    "test": {"R1": "ds005505"}, # TODO
+    "train": {"R2": "ds005506"}, # 152 subjects
+    "val": {"R1": "ds005505"}, # 136 subjects
+    "test": {"R6": "ds005510"}, # 134 subjects
 }
 
 DEFAULT_TASK = "ThePresent"
@@ -173,6 +176,7 @@ def reject_recording(
     """
     events, event_id = mne.events_from_annotations(raw)
     if "video_start" not in event_id or "video_stop" not in event_id:
+        logger.warning("Recording missing 'video_start' or 'video_stop' annotations: %s", raw)
         return True
 
     duration_seconds = get_movie_recording_duration(
@@ -180,6 +184,10 @@ def reject_recording(
     )
     min_duration = MOVIE_METADATA[movie]["duration"] - annotation_duration_tolerance_s
     if duration_seconds < min_duration:
+        logger.warning(
+            "Recording duration %.1fs is shorter than expected minimum %.1fs for movie '%s'",
+            duration_seconds, min_duration, movie
+        )
         return True
 
     return False
@@ -247,7 +255,6 @@ class HBNDataset(Dataset):
         ])
         return windows
 
-
 class HBNMovieProbeDataset(Dataset):
     """Supervised EEG dataset: each window is paired with movie features at its timestamp."""
 
@@ -257,16 +264,12 @@ class HBNMovieProbeDataset(Dataset):
         window_size_seconds=2,
         task=DEFAULT_TASK,
         *,
-        annotation_duration_tolerance_s=DEFAULT_ANNOTATION_DURATION_TOLERANCE_S,
-        post_movie_visual_processing_s=DEFAULT_POST_MOVIE_VISUAL_PROCESSING_S,
-        max_recording_overshoot_s=DEFAULT_MAX_RECORDING_OVERSHOOT_S,
-        trial_stop_offset_s=DEFAULT_TRIAL_STOP_OFFSET_S,
-        visual_processing_delay_s=VISUAL_PROCESSING_DELAY_S,
+        cfg: DictConfig,
     ):
         self.window_size_seconds = window_size_seconds
         self.task = task
-        self.post_movie_visual_processing_s = post_movie_visual_processing_s
-        self.visual_processing_delay_s = visual_processing_delay_s
+        self.post_movie_visual_processing_s = cfg.post_movie_visual_processing_s
+        self.visual_processing_delay_s = cfg.visual_processing_delay_s
         releases = _resolve_releases(split)
 
         data = BaseConcatDataset([
@@ -288,7 +291,7 @@ class HBNMovieProbeDataset(Dataset):
                 if ann["description"] == "video_start":
                     movie_recording_duration = get_movie_recording_duration(
                         raw, movie=task,
-                        max_recording_overshoot_s=max_recording_overshoot_s,
+                        max_recording_overshoot_s=cfg.max_recording_overshoot_s,
                     )
                     movie_recording_duration = min(
                         movie_recording_duration, MOVIE_METADATA[task]["duration"]
@@ -301,8 +304,8 @@ class HBNMovieProbeDataset(Dataset):
 
             if reject_recording(
                 raw, movie=task,
-                annotation_duration_tolerance_s=annotation_duration_tolerance_s,
-                max_recording_overshoot_s=max_recording_overshoot_s,
+                annotation_duration_tolerance_s=cfg.annotation_duration_tolerance_s,
+                max_recording_overshoot_s=cfg.max_recording_overshoot_s,
             ):
                 rejected += 1
                 continue
@@ -315,12 +318,12 @@ class HBNMovieProbeDataset(Dataset):
         window_samples = int(window_size_seconds * sfreq)
         # Offset the trial start by the visual processing delay so the first
         # EEG window corresponds to the neural response to the first movie frame.
-        self.trial_start_offset_samples = int(visual_processing_delay_s * sfreq)
+        self.trial_start_offset_samples = int(cfg.visual_processing_delay_s * sfreq)
         self.data = create_windows_from_events(
             data,
             mapping={"video_start": 0},
             trial_start_offset_samples=self.trial_start_offset_samples,
-            trial_stop_offset_samples=-int(trial_stop_offset_s * sfreq),
+            trial_stop_offset_samples=-int(cfg.trial_stop_offset_s * sfreq),
             window_size_samples=window_samples,
             window_stride_samples=window_samples,
             drop_last_window=True,

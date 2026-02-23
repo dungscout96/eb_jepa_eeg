@@ -3,10 +3,11 @@ from eb_jepa.datasets.hbn import HBNMovieProbeDataset
 from torch.utils.data import DataLoader
 from torch.functional import F
 
-def test_hbn_movie_probe_dataset():
+
+def test_hbn_movie_probe_dataset(cfg):
     window_size_seconds = 2
     window_size_samples = int(window_size_seconds * 100)  # example for 100Hz sampling rate
-    dataset = HBNMovieProbeDataset(split="train", window_size_seconds=window_size_seconds)
+    dataset = HBNMovieProbeDataset(split="train", window_size_seconds=window_size_seconds, cfg=cfg.data)
     batch_size = 64
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
