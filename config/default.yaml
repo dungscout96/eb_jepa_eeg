@@ -5,6 +5,9 @@ data:
   trial_stop_offset_s: 0.1
   visual_processing_delay_s: 0.3
 
+benchmark:
+  task_mode: binary  # regression, binary, tertile
+
 trainer:
   n_epochs: 50
   patience: 7
