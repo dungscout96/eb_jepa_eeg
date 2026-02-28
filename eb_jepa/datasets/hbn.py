@@ -76,66 +76,6 @@ def _resolve_releases(split: str) -> dict:
     return SPLIT_RELEASES[split]
 
 
-def _preload_movie_features(task: str) -> dict:
-    """Load movie feature CSVs for the given task."""
-    csv_path = MOVIE_METADATA[task]["feature_csv"]
-    return {task: pd.read_csv(csv_path)}
-
-
-def get_movie_metadata(task):
-    """Compute movie duration, fps, and frame count from the video file.
-
-    This is a utility for recomputing MOVIE_METADATA values; results are
-    typically hardcoded above after initial computation.
-    """
-    import cv2  # lazy: heavy dependency, only needed for metadata recomputation
-
-    movie_path = str(_MOVIE_PATHS[task])
-    cap = cv2.VideoCapture(movie_path)
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-    movie_duration_seconds = frame_count / fps
-    cap.release()
-    return movie_duration_seconds, fps, frame_count
-
-
-def get_window_movie_metadata(
-    window_onset: int,
-    sfreq: int,
-    movie: str,
-    movie_features: pd.DataFrame,
-    *,
-    post_movie_visual_processing_s: float = DEFAULT_POST_MOVIE_VISUAL_PROCESSING_S,
-    visual_processing_delay_s: float = VISUAL_PROCESSING_DELAY_S,
-) -> dict:
-    """Map an EEG window onset (in samples) to the corresponding movie frame features.
-
-    The EEG at *window_onset* reflects visual input from
-    ``visual_processing_delay_s`` seconds earlier, so the frame index is
-    computed from ``(window_onset - delay) / sfreq * fps``.
-
-    Assumes the movie starts at the same time as the recording with no dropped
-    frames.  Windows up to *post_movie_visual_processing_s* past the movie end
-    are clamped to the last available frame.
-    """
-    delay_samples = int(visual_processing_delay_s * sfreq)
-    movie_timestamp = (window_onset - delay_samples) / sfreq
-    frame_index = int(movie_timestamp * MOVIE_METADATA[movie]["fps"])
-
-    # Clamp to valid range (negative indices can occur when onset < delay).
-    frame_index = max(0, frame_index)
-
-    # Clamp frames that fall past the movie end but within the visual-processing
-    # tolerance window (viewers still process the last frame briefly after it ends).
-    if frame_index >= len(movie_features):
-        max_overshoot_frames = int(
-            MOVIE_METADATA[movie]["fps"] * post_movie_visual_processing_s
-        )
-        if (frame_index - MOVIE_METADATA[movie]["frame_count"]) < max_overshoot_frames:
-            frame_index = len(movie_features) - 1
-
-    return movie_features.iloc[frame_index].to_dict()
-
 
 def get_movie_recording_duration(
     raw: mne.io.BaseRaw,
@@ -219,7 +159,11 @@ def load_or_download(release, task=DEFAULT_TASK):
 
 
 class HBNDataset(Dataset):
-    """Self-supervised EEG dataset: each item is a random crop of contiguous windows (WxCxT)."""
+    """Self-supervised EEG dataset: each item is a random crop of contiguous windows (WxCxT).
+    n_windows are contigously selected from a random start point in the recording.
+    This resembles the memory constraint of video clip in JEPA.
+    More number of windows increases the memory requirement but also increases the temporal context available to the model.
+    """
 
     def __init__(self, split="train", n_windows=16, window_size_seconds=2, task=DEFAULT_TASK):
         releases = _resolve_releases(split)
@@ -241,8 +185,6 @@ class HBNDataset(Dataset):
                 if len(recording_ds) >= n_windows:
                     self.recordings.append(recording_ds)
 
-        self.movie_features = _preload_movie_features(task)
-
     def __len__(self):
         return len(self.recordings)
 
@@ -255,7 +197,70 @@ class HBNDataset(Dataset):
         ])
         return windows
 
-class HBNMovieProbeDataset(Dataset):
+# ---------------------------------------------------------------------------
+# Movie-probe dataset
+# ---------------------------------------------------------------------------
+def _preload_movie_features(task: str) -> dict:
+    """Load movie feature CSVs for the given task."""
+    csv_path = MOVIE_METADATA[task]["feature_csv"]
+    return {task: pd.read_csv(csv_path)}
+
+
+def get_movie_metadata(task):
+    """Compute movie duration, fps, and frame count from the video file.
+
+    This is a utility for recomputing MOVIE_METADATA values; results are
+    typically hardcoded above after initial computation.
+    """
+    import cv2  # lazy: heavy dependency, only needed for metadata recomputation
+
+    movie_path = str(_MOVIE_PATHS[task])
+    cap = cv2.VideoCapture(movie_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    movie_duration_seconds = frame_count / fps
+    cap.release()
+    return movie_duration_seconds, fps, frame_count
+
+
+def get_window_movie_metadata(
+    window_onset: int,
+    sfreq: int,
+    movie: str,
+    movie_features: pd.DataFrame,
+    *,
+    post_movie_visual_processing_s: float = DEFAULT_POST_MOVIE_VISUAL_PROCESSING_S,
+    visual_processing_delay_s: float = VISUAL_PROCESSING_DELAY_S,
+) -> dict:
+    """Map an EEG window onset (in samples) to the corresponding movie frame features.
+
+    The EEG at *window_onset* reflects visual input from
+    ``visual_processing_delay_s`` seconds earlier, so the frame index is
+    computed from ``(window_onset - delay) / sfreq * fps``.
+
+    Assumes the movie starts at the same time as the recording with no dropped
+    frames.  Windows up to *post_movie_visual_processing_s* past the movie end
+    are clamped to the last available frame.
+    """
+    delay_samples = int(visual_processing_delay_s * sfreq)
+    movie_timestamp = (window_onset - delay_samples) / sfreq
+    frame_index = int(movie_timestamp * MOVIE_METADATA[movie]["fps"])
+
+    # Clamp to valid range (negative indices can occur when onset < delay).
+    frame_index = max(0, frame_index)
+
+    # Clamp frames that fall past the movie end but within the visual-processing
+    # tolerance window (viewers still process the last frame briefly after it ends).
+    if frame_index >= len(movie_features):
+        max_overshoot_frames = int(
+            MOVIE_METADATA[movie]["fps"] * post_movie_visual_processing_s
+        )
+        if (frame_index - MOVIE_METADATA[movie]["frame_count"]) < max_overshoot_frames:
+            frame_index = len(movie_features) - 1
+
+    return movie_features.iloc[frame_index].to_dict()
+
+class HBNMovieDataset(Dataset):
     """Supervised EEG dataset: each window is paired with movie features at its timestamp."""
 
     def __init__(
@@ -264,18 +269,21 @@ class HBNMovieProbeDataset(Dataset):
         window_size_seconds=2,
         task=DEFAULT_TASK,
         *,
-        cfg: DictConfig,
+        cfg: DictConfig | dict
     ):
         self.window_size_seconds = window_size_seconds
         self.task = task
-        self.post_movie_visual_processing_s = cfg.post_movie_visual_processing_s
-        self.visual_processing_delay_s = cfg.visual_processing_delay_s
+        self.movie_features = _preload_movie_features(task)
+        self.post_movie_visual_processing_s = cfg.get("post_movie_visual_processing_s") if isinstance(cfg, dict) else cfg.post_movie_visual_processing_s
+        self.visual_processing_delay_s = cfg.get("visual_processing_delay_s") if isinstance(cfg, dict) else cfg.visual_processing_delay_s
         releases = _resolve_releases(split)
 
         data = BaseConcatDataset([
             load_or_download(release, task=task)
             for release, dataset_name in releases.items()
         ])
+        sfreq = data.datasets[0].raw.info["sfreq"]
+        self.sfreq = sfreq
 
         selected_recordings = []
         rejected = 0
@@ -291,7 +299,7 @@ class HBNMovieProbeDataset(Dataset):
                 if ann["description"] == "video_start":
                     movie_recording_duration = get_movie_recording_duration(
                         raw, movie=task,
-                        max_recording_overshoot_s=cfg.max_recording_overshoot_s,
+                        max_recording_overshoot_s=cfg.get("max_recording_overshoot_s") if isinstance(cfg, dict) else cfg.max_recording_overshoot_s,
                     )
                     movie_recording_duration = min(
                         movie_recording_duration, MOVIE_METADATA[task]["duration"]
@@ -304,8 +312,8 @@ class HBNMovieProbeDataset(Dataset):
 
             if reject_recording(
                 raw, movie=task,
-                annotation_duration_tolerance_s=cfg.annotation_duration_tolerance_s,
-                max_recording_overshoot_s=cfg.max_recording_overshoot_s,
+                annotation_duration_tolerance_s=cfg.get("annotation_duration_tolerance_s") if isinstance(cfg, dict) else cfg.annotation_duration_tolerance_s,
+                max_recording_overshoot_s=cfg.get("max_recording_overshoot_s") if isinstance(cfg, dict) else cfg.max_recording_overshoot_s,
             ):
                 rejected += 1
                 continue
@@ -313,32 +321,34 @@ class HBNMovieProbeDataset(Dataset):
 
         logger.info("Rejected %d/%d recordings", rejected, len(data.datasets))
 
-        data = BaseConcatDataset(selected_recordings)
-        sfreq = data.datasets[0].raw.info["sfreq"]
-        window_samples = int(window_size_seconds * sfreq)
-        # Offset the trial start by the visual processing delay so the first
-        # EEG window corresponds to the neural response to the first movie frame.
-        self.trial_start_offset_samples = int(cfg.visual_processing_delay_s * sfreq)
-        self.data = create_windows_from_events(
-            data,
-            mapping={"video_start": 0},
-            trial_start_offset_samples=self.trial_start_offset_samples,
-            trial_stop_offset_samples=-int(cfg.trial_stop_offset_s * sfreq),
-            window_size_samples=window_samples,
-            window_stride_samples=window_samples,
-            drop_last_window=True,
-        )
+        # data = BaseConcatDataset(selected_recordings)
+        window_size_samples = int(window_size_seconds * sfreq)
+        visual_processing_delay = cfg.get("visual_processing_delay_s") if isinstance(cfg, dict) else cfg.visual_processing_delay_s
+        trial_stop_offset = cfg.get("trial_stop_offset_s") if isinstance(cfg, dict) else cfg.trial_stop_offset_s
+        trial_start_offset_samples = int(visual_processing_delay * sfreq)
 
-        self.sfreq = sfreq
-        self.movie_features = _preload_movie_features(task)
+        self.data = []
+        self.labels = []
+        for rec in selected_recordings:
+            # Offset the trial start by the visual processing delay so the first
+            # EEG window corresponds to the neural response to the first movie frame.
+            window_ds = create_windows_from_events(
+                BaseConcatDataset([rec]),
+                mapping={"video_start": 0},
+                trial_start_offset_samples=trial_start_offset_samples,
+                trial_stop_offset_samples=-int(trial_stop_offset * sfreq),
+                window_size_samples=window_size_samples,
+                window_stride_samples=window_size_samples,
+                drop_last_window=True,
+            )
+            self.data.append(window_ds)
 
-    def __len__(self):
-        return len(self.data)
+            window_onsets = window_ds.get_metadata().apply(lambda row: row["i_start_in_trial"], axis=1)
+            movie_features_for_windows = window_onsets.apply(self._get_movie_features_for_window)
+            self.labels.append(movie_features_for_windows)
 
-    def __getitem__(self, idx):
-        X, y, crop_inds = self.data[idx]
-        window_onset = crop_inds[1]  # i_start_in_trial (samples)
-        features = get_window_movie_metadata(
+    def _get_movie_features_for_window(self, window_onset) -> dict:
+        return get_window_movie_metadata(
             window_onset=window_onset,
             sfreq=self.sfreq,
             movie=self.task,
@@ -346,4 +356,27 @@ class HBNMovieProbeDataset(Dataset):
             post_movie_visual_processing_s=self.post_movie_visual_processing_s,
             visual_processing_delay_s=self.visual_processing_delay_s,
         )
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        window_ds = self.data[idx]
+        X = torch.stack([torch.from_numpy(window_ds[i][0]) for i in range(len(window_ds))])
+        features = self.labels[idx]
+
+        return X.float(), features
+
+class HBNMovieProbeDataset(HBNMovieDataset):
+    def __init__(self, split="train", window_size_seconds=2, task=DEFAULT_TASK, *, cfg: DictConfig | dict):
+        super().__init__(split, window_size_seconds, task, cfg=cfg)
+        self.data = [window[0] for window_ds in self.data for window in window_ds]
+        self.labels = [label for labels_series in self.labels for label in labels_series]
+    
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        X = self.data[idx]
+        features = self.labels[idx]
         return torch.from_numpy(X).float(), features

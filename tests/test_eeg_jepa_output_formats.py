@@ -18,6 +18,7 @@ Setup under test:
     jepa = JEPA(encoder, encoder, predictor, regularizer, ploss).to(device)
 """
 
+from httpx import head
 import torch
 
 from eb_jepa.architectures import (
@@ -26,7 +27,7 @@ from eb_jepa.architectures import (
     StateOnlyPredictor,
     Projector,
 )
-from eb_jepa.jepa import JEPA
+from eb_jepa.jepa import JEPA, JEPAProbe
 from eb_jepa.losses import SquareLossSeq, VCLoss
 
 
@@ -425,6 +426,11 @@ def test_unroll_return_all_steps_format():
 
     return True
 
+def test_jepa_probe():
+    jepa = create_eeg_jepa_model()
+    
+    decoder = torch.nn.Linear(DSTC, 2)  # Example probe head for 2 classes
+    jepa_probe = JEPAProbe(jepa, decoder, torch.nn.BCELoss())
 
 def run_all_tests():
     """Run all tests for EEG JEPA unroll() function."""
