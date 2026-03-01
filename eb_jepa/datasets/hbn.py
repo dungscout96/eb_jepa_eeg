@@ -367,6 +367,102 @@ class HBNMovieDataset(Dataset):
 
         return X.float(), features
 
+class JEPAMovieDataset(HBNMovieDataset):
+    """JEPA-ready EEG dataset extending HBNMovieDataset.
+
+    Pre-extracts EEG windows and movie features into tensors, then returns
+    fixed-length contiguous chunks.  Each ``__getitem__`` randomly crops a
+    chunk of ``n_windows`` consecutive windows from one recording, so every
+    epoch sees different temporal slices.
+    """
+
+    DEFAULT_FEATURES = [
+        "contrast_rms",
+        "luminance_mean",
+        "entropy",
+        "scene_natural_score",
+    ]
+
+    def __init__(
+        self,
+        split="train",
+        n_windows=16,
+        window_size_seconds=2,
+        task=DEFAULT_TASK,
+        feature_names=None,
+        *,
+        cfg: DictConfig | dict,
+    ):
+        super().__init__(split, window_size_seconds, task, cfg=cfg)
+        self.n_windows = n_windows
+        self.feature_names = feature_names or self.DEFAULT_FEATURES
+        self._precompute_tensors()
+
+    def _precompute_tensors(self):
+        """Convert braindecode windows and feature dicts into tensors."""
+        eeg_recordings = []
+        feature_recordings = []
+
+        for rec_idx in range(len(self.data)):
+            window_ds = self.data[rec_idx]
+            labels = self.labels[rec_idx]
+            n_win = len(window_ds)
+
+            if n_win < self.n_windows:
+                continue
+
+            eeg = torch.stack(
+                [torch.from_numpy(window_ds[i][0]) for i in range(n_win)]
+            ).float()  # [n_win, C, W]
+
+            feats = []
+            for i in range(n_win):
+                d = labels.iloc[i]
+                feats.append([float(d.get(f, 0.0)) for f in self.feature_names])
+            feats = torch.tensor(feats, dtype=torch.float32)
+            feats = torch.nan_to_num(feats, nan=0.0)
+
+            eeg_recordings.append(eeg)
+            feature_recordings.append(feats)
+
+        self.eeg_recordings = eeg_recordings
+        self.feature_recordings = feature_recordings
+        logger.info(
+            "JEPAMovieDataset: %d recordings with >= %d windows",
+            len(self.eeg_recordings),
+            self.n_windows,
+        )
+
+    @property
+    def n_chans(self):
+        return self.eeg_recordings[0].shape[1]
+
+    @property
+    def n_times(self):
+        return self.eeg_recordings[0].shape[2]
+
+    def compute_feature_stats(self):
+        all_feats = torch.cat(self.feature_recordings, dim=0)
+        return {"mean": all_feats.mean(0), "std": all_feats.std(0)}
+
+    def compute_feature_median(self):
+        all_feats = torch.cat(self.feature_recordings, dim=0)
+        return all_feats.median(0).values
+
+    def __len__(self):
+        return len(self.eeg_recordings)
+
+    def __getitem__(self, idx):
+        eeg = self.eeg_recordings[idx]
+        feats = self.feature_recordings[idx]
+        n = len(eeg)
+        start = torch.randint(0, n - self.n_windows + 1, (1,)).item()
+        return (
+            eeg[start : start + self.n_windows],  # [n_windows, C, W]
+            feats[start : start + self.n_windows],  # [n_windows, n_features]
+        )
+
+
 class HBNMovieProbeDataset(HBNMovieDataset):
     def __init__(self, split="train", window_size_seconds=2, task=DEFAULT_TASK, *, cfg: DictConfig | dict):
         super().__init__(split, window_size_seconds, task, cfg=cfg)

@@ -1,0 +1,48 @@
+# EEG JEPA Training Configuration
+# Train a self-supervised EEG prediction model with movie feature evaluation decoders
+
+meta:
+  seed: 2025
+  device: auto  # auto, cuda, or cpu
+
+data:
+  batch_size: 8
+  num_workers: 4
+  n_windows: 16          # Number of contiguous windows per sample
+  window_size_seconds: 2  # Window duration in seconds
+  # HBN dataset parameters
+  annotation_duration_tolerance_s: 1.0
+  post_movie_visual_processing_s: 2.0
+  max_recording_overshoot_s: 60.0
+  trial_stop_offset_s: 0.1
+  visual_processing_delay_s: 0.3
+
+model:
+  # Encoder (braindecode model, n_chans auto-detected from data)
+  henc: 32          # Hidden dimension in encoder
+  dstc: 16          # Output representation dimension
+
+  # Predictor
+  hpre: 32          # Hidden dimension in predictor
+
+  # Decoder heads
+  hdec: 64          # Hidden dimension in movie feature heads
+
+  # Training
+  steps: 4          # Number of prediction steps during training
+
+loss:
+  # Variance-Covariance regularization
+  cov_coeff: 100.0  # Covariance loss weight
+  std_coeff: 10.0   # Standard deviation loss weight
+
+optim:
+  epochs: 50
+  lr: 1.0e-3
+
+logging:
+  log_wandb: false
+  wandb_group:        # Set to group runs
+  log_every: 1        # Log every N epochs
+  save_every: 10      # Save checkpoint every N epochs
+  tqdm_silent: false  # Disable tqdm progress bars

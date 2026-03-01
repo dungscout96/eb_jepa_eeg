@@ -520,6 +520,30 @@ class EEGEncoder(TemporalBatchMixin, nn.Module):
             out = out.unsqueeze(2).unsqueeze(3)  # Add singleton dims back for compatibility with CV framework
         return out
 
+class MovieFeatureHead(nn.Module):
+    """MLP head for predicting per-timestep movie features from JEPA representations.
+
+    Takes [B, D, T, 1, 1] encoder output and predicts [B, T, n_features].
+    Used as a probe in JEPAProbe for evaluating representation quality.
+    """
+
+    def __init__(self, in_dim, hidden_dim, n_features):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, n_features),
+        )
+        self.apply(init_module_weights)
+
+    def forward(self, x):
+        # x: [B, D, T, 1, 1] from JEPA encoder
+        B, D, T = x.shape[:3]
+        x = x.view(B, D, T).permute(0, 2, 1).reshape(B * T, D)
+        out = self.net(x)  # [B*T, n_features]
+        return out.view(B, T, -1)  # [B, T, n_features]
+
+
 class MLPEEGPredictor(TemporalBatchMixin, nn.Module):
     """MLP predictor for flat EEG embeddings.
 
