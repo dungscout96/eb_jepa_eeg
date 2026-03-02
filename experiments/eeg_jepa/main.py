@@ -164,6 +164,7 @@ def run(
         split="val",
         n_windows=cfg.data.n_windows,
         window_size_seconds=cfg.data.window_size_seconds,
+        eeg_norm_stats=train_set.get_eeg_norm_stats(),
         cfg=cfg.data,
     )
 
@@ -194,13 +195,22 @@ def run(
     # Auto-detect EEG dimensions from data
     n_chans = train_set.n_chans
     n_features = len(NUMERIC_FEATURES)
+    chs_info = train_set.get_chs_info()
     logger.info("EEG channels: %d, Movie features: %d", n_chans, n_features)
 
     # ------------------------------------------------------------------
     # Initialize JEPA model
     # ------------------------------------------------------------------
     logger.info("Initializing model...")
-    encoder = EEGEncoder(n_chans, cfg.model.henc, cfg.model.dstc)
+    n_times = train_set.n_times
+    encoder_kwargs = {}
+    for key in ("encoder_embed_dim", "encoder_depth", "encoder_heads", "encoder_head_dim"):
+        if cfg.model.get(key) is not None:
+            encoder_kwargs[key.replace("encoder_", "")] = cfg.model[key]
+    encoder = EEGEncoder(
+        n_chans, cfg.model.henc, cfg.model.dstc,
+        chs_info=chs_info, n_times=n_times, **encoder_kwargs,
+    )
     predictor_model = MLPEEGPredictor(
         cfg.model.dstc * 2, cfg.model.hpre, cfg.model.dstc
     )
@@ -248,11 +258,10 @@ def run(
     regression_probe.train()
     classification_probe.train()
 
-    # Lower learning rate for regression probe to prevent overfitting
     optimizer = Adam(
         [
             {"params": jepa.parameters(), "lr": cfg.optim.lr},
-            {"params": regression_probe.head.parameters(), "lr": cfg.optim.lr / 10},
+            {"params": regression_probe.head.parameters(), "lr": cfg.optim.lr},
             {"params": classification_probe.head.parameters(), "lr": cfg.optim.lr},
         ]
     )
@@ -315,6 +324,22 @@ def run(
                     "cls": f"{cls_loss.item():.4f}",
                 }
             )
+
+            # Per-step wandb logging for training metrics
+            if wandb_run:
+                import wandb
+
+                step_metrics = {
+                    "train_step/jepa_loss": jepa_loss.item(),
+                    "train_step/vc_loss": regl.item(),
+                    "train_step/pred_loss": pl.item(),
+                    "train_step/reg_loss": reg_loss.item(),
+                    "train_step/cls_loss": cls_loss.item(),
+                    "train_step/total_loss": total_loss.item(),
+                }
+                for k, v in regldict.items():
+                    step_metrics[f"train_step/{k}"] = float(v)
+                wandb.log(step_metrics, step=global_step)
 
             global_step += 1
 

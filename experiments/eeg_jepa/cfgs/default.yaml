@@ -19,11 +19,17 @@ data:
 
 model:
   # Encoder (braindecode model, n_chans auto-detected from data)
-  henc: 32          # Hidden dimension in encoder
-  dstc: 16          # Output representation dimension
+  henc: 32          # Hidden dimension in encoder (unused by REVE, kept for API)
+  dstc: 64          # Output representation dimension
+
+  # REVE encoder architecture (small config for limited data)
+  encoder_embed_dim: 64
+  encoder_depth: 4
+  encoder_heads: 4
+  encoder_head_dim: 16
 
   # Predictor
-  hpre: 32          # Hidden dimension in predictor
+  hpre: 128         # Hidden dimension in predictor
 
   # Decoder heads
   hdec: 64          # Hidden dimension in movie feature heads
@@ -33,15 +39,15 @@ model:
 
 loss:
   # Variance-Covariance regularization
-  cov_coeff: 100.0  # Covariance loss weight
-  std_coeff: 10.0   # Standard deviation loss weight
+  cov_coeff: 1.0    # Covariance loss weight (reduced from 100)
+  std_coeff: 1.0    # Standard deviation loss weight (reduced from 10)
 
 optim:
-  epochs: 50
-  lr: 1.0e-3
+  epochs: 100
+  lr: 3.0e-4
 
 logging:
-  log_wandb: false
+  log_wandb: true
   wandb_group:        # Set to group runs
   log_every: 1        # Log every N epochs
   save_every: 10      # Save checkpoint every N epochs

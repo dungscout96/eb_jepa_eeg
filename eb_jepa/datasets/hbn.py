@@ -390,16 +390,23 @@ class JEPAMovieDataset(HBNMovieDataset):
         window_size_seconds=2,
         task=DEFAULT_TASK,
         feature_names=None,
+        eeg_norm_stats=None,
         *,
         cfg: DictConfig | dict,
     ):
         super().__init__(split, window_size_seconds, task, cfg=cfg)
         self.n_windows = n_windows
         self.feature_names = feature_names or self.DEFAULT_FEATURES
-        self._precompute_tensors()
+        self._precompute_tensors(eeg_norm_stats=eeg_norm_stats)
 
-    def _precompute_tensors(self):
-        """Convert braindecode windows and feature dicts into tensors."""
+    def _precompute_tensors(self, eeg_norm_stats=None):
+        """Convert braindecode windows and feature dicts into tensors.
+
+        Args:
+            eeg_norm_stats: Optional dict with 'mean' and 'std' tensors for
+                EEG normalization. If None, stats are computed from this dataset.
+                Pass train set stats when building val/test sets.
+        """
         eeg_recordings = []
         feature_recordings = []
 
@@ -425,10 +432,22 @@ class JEPAMovieDataset(HBNMovieDataset):
             eeg_recordings.append(eeg)
             feature_recordings.append(feats)
 
+        # Per-channel z-normalization of EEG data
+        if eeg_norm_stats is not None:
+            self._eeg_mean = eeg_norm_stats["mean"]
+            self._eeg_std = eeg_norm_stats["std"]
+        else:
+            all_eeg = torch.cat(eeg_recordings, dim=0)  # [total_windows, C, W]
+            self._eeg_mean = all_eeg.mean(dim=(0, 2), keepdim=True)  # [1, C, 1]
+            self._eeg_std = all_eeg.std(dim=(0, 2), keepdim=True)    # [1, C, 1]
+            self._eeg_std = torch.clamp(self._eeg_std, min=1e-8)
+        for i in range(len(eeg_recordings)):
+            eeg_recordings[i] = (eeg_recordings[i] - self._eeg_mean) / self._eeg_std
+
         self.eeg_recordings = eeg_recordings
         self.feature_recordings = feature_recordings
         logger.info(
-            "JEPAMovieDataset: %d recordings with >= %d windows",
+            "JEPAMovieDataset: %d recordings with >= %d windows (EEG z-normalized per channel)",
             len(self.eeg_recordings),
             self.n_windows,
         )
@@ -440,6 +459,20 @@ class JEPAMovieDataset(HBNMovieDataset):
     @property
     def n_times(self):
         return self.eeg_recordings[0].shape[2]
+
+    def get_chs_info(self):
+        """Return MNE-compatible chs_info with channel positions from GSN-HydroCel-129 montage."""
+        import numpy as np
+
+        montage = mne.channels.make_standard_montage("GSN-HydroCel-129")
+        info = mne.create_info(montage.ch_names, sfreq=self.sfreq, ch_types="eeg")
+        raw = mne.io.RawArray(np.zeros((len(montage.ch_names), 1)), info, verbose=False)
+        raw.set_montage(montage, verbose=False)
+        return raw.info["chs"]
+
+    def get_eeg_norm_stats(self):
+        """Return EEG normalization stats dict with 'mean' and 'std' tensors."""
+        return {"mean": self._eeg_mean, "std": self._eeg_std}
 
     def compute_feature_stats(self):
         all_feats = torch.cat(self.feature_recordings, dim=0)

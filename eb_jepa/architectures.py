@@ -489,11 +489,11 @@ class EEGEncoder(TemporalBatchMixin, nn.Module):
     EEG encoder that wraps a Braindecode model specified by name.
     Supports both 4D [B, 1, C, W] and 5D [B, 1, T, C, W] inputs via TemporalBatchMixin.
     """
-    def __init__(self, in_d, h_d, out_d, name: str="REVE", chs_info=None, attention_pooling=False):
+    def __init__(self, in_d, h_d, out_d, name: str="REVE", chs_info=None, attention_pooling=False, n_times=None, **encoder_kwargs):
         super().__init__()
         import importlib
         module = importlib.import_module("braindecode.models")
-        self.encoder = getattr(module, name)(n_chans=in_d, n_outputs=out_d, n_times=1000, chs_info=chs_info, attention_pooling=attention_pooling)
+        self.encoder = getattr(module, name)(n_chans=in_d, n_outputs=out_d, n_times=n_times, chs_info=chs_info, attention_pooling=attention_pooling, **encoder_kwargs)
 
     def _forward(self, x):
         """
