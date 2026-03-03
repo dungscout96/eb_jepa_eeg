@@ -147,7 +147,9 @@ def load_or_download(release, task=DEFAULT_TASK):
 
     dataset_id = f"EEG2025r{release[1:]}"
     data_dir = DATA_DIR / dataset_id
-    needs_download = not data_dir.exists() or not list(data_dir.glob("**/*.bdf"))
+    needs_download = not data_dir.exists() or not list(
+        data_dir.glob(f"**/*task-{task}*.bdf")
+    )
 
     dataset = EEGChallengeDataset(
         cache_dir=DATA_DIR,
