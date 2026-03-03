@@ -1,19 +1,19 @@
 """Validate movie annotation outputs for The Present.
 
-Validates the 4 target features from Issue #5:
+Validates features from Issue #5:
   - luminance_mean, contrast_rms, entropy  (low-level, deterministic)
-  - scene_natural_score                    (CLIP-based, deterministic at inference)
+  - scene_natural_score, scene_open_score  (CLIP-based dimensional scores)
+  - scene_category, scene_category_score   (CLIP-based classification)
 
 Produces:
-  - output/The_Present/validation_frames/  PNG frames for manual inspection
-  - validation_report.md                  Full validation report
+  - output/The_Present/validation_frames/<feature>/  PNG frames per feature
+  - validation_report.md                             Full validation report
 
 Usage:
     conda activate eb_jepa
-    uv run python movie_annotation/validate_annotations.py
+    python movie_annotation/validate_annotations.py
 """
 
-import json
 import sys
 from pathlib import Path
 
@@ -38,11 +38,33 @@ FEATURES_CSV = _HERE / "output" / "The_Present" / "features.csv"
 FRAMES_DIR = _HERE / "output" / "The_Present" / "validation_frames"
 REPORT_PATH = _HERE / "validation_report.md"
 
-# Number of evenly-spaced frames to use for recomputation check
-SAMPLE_STEP = 163  # ~30 frames across 4878
+# Number of evenly-spaced frames to use for recomputation check (~30 frames)
+SAMPLE_STEP = 163
 
 # Number of frames to save per quartile for visual inspection
 QUARTILE_N = 8
+
+# Number of representative frames to save per scene_category value
+CATEGORY_N = 3
+
+# Quartile label names (low → high) per continuous feature
+QUARTILE_LABELS = {
+    "luminance_mean":       ["Q1_dark", "Q2_mid_dark", "Q3_mid_bright", "Q4_bright"],
+    "contrast_rms":         ["Q1_low_contrast", "Q2_mid_low", "Q3_mid_high", "Q4_high_contrast"],
+    "entropy":              ["Q1_low_entropy", "Q2_mid_low", "Q3_mid_high", "Q4_high_entropy"],
+    "scene_natural_score":  ["Q1_low_natural", "Q2_lower_mid", "Q3_upper_mid", "Q4_high_natural"],
+    "scene_open_score":     ["Q1_enclosed", "Q2_mid_enclosed", "Q3_mid_open", "Q4_open"],
+    "scene_category_score": ["Q1_low_conf", "Q2_mid_low_conf", "Q3_mid_high_conf", "Q4_high_conf"],
+}
+
+CONTINUOUS_FEATURES = [
+    "luminance_mean",
+    "contrast_rms",
+    "entropy",
+    "scene_natural_score",
+    "scene_open_score",
+    "scene_category_score",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -74,8 +96,8 @@ def read_frames_sequential(
 def read_frame_seek(cap: cv2.VideoCapture, frame_idx: int) -> np.ndarray | None:
     """Seek to frame_idx and return the BGR frame, or None on failure.
 
-    Used only for the quartile frame image extraction (visual inspection),
-    where exact pixel accuracy is not required.
+    Used only for visual inspection frame extraction where exact pixel
+    accuracy is not required.
     """
     cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
     ok, frame = cap.read()
@@ -93,17 +115,18 @@ def recompute_check(df: pd.DataFrame, cap: cv2.VideoCapture) -> dict:
     """Re-extract luminance_mean, contrast_rms, entropy for sampled frames.
 
     Reads frames sequentially (matching annotate.py) to avoid H.264 seek errors.
-    Returns a dict with per-feature max absolute errors and a pass/fail flag.
+    Returns a dict with per-feature errors and a pass/fail flag.
     """
     sample_indices_list = list(range(0, len(df), SAMPLE_STEP))
-    target_set = set(df.iloc[i]["frame_idx"] for i in sample_indices_list)
-    target_set = {int(v) for v in target_set}
-
-    frame_data = read_frames_sequential(cap, target_set)
+    target_set = {int(df.iloc[i]["frame_idx"]) for i in sample_indices_list}
 
     features_to_check = ["luminance_mean", "contrast_rms", "entropy"]
     errors = {f: [] for f in features_to_check}
+    csv_vals_all = {f: [] for f in features_to_check}
+    comp_vals_all = {f: [] for f in features_to_check}
     skipped = 0
+
+    frame_data = read_frames_sequential(cap, target_set)
 
     for i in sample_indices_list:
         row = df.iloc[i]
@@ -115,25 +138,10 @@ def recompute_check(df: pd.DataFrame, cap: cv2.VideoCapture) -> dict:
         computed = extract_lowlevel(frame)
         for feat in features_to_check:
             errors[feat].append(abs(computed[feat] - float(row[feat])))
-
-    results = {}
-    csv_vals_all = {f: [] for f in features_to_check}
-    comp_vals_all = {f: [] for f in features_to_check}
-
-    # Re-run to collect both sides for correlation
-    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-    frame_data2 = read_frames_sequential(cap, target_set)
-    for i in sample_indices_list:
-        row = df.iloc[i]
-        frame_idx = int(row["frame_idx"])
-        frame = frame_data2.get(frame_idx)
-        if frame is None:
-            continue
-        computed = extract_lowlevel(frame)
-        for feat in features_to_check:
             csv_vals_all[feat].append(float(row[feat]))
             comp_vals_all[feat].append(computed[feat])
 
+    results = {}
     for feat in features_to_check:
         if not errors[feat]:
             results[feat] = {"max_abs_error": None, "n_checked": 0, "skipped": skipped, "pass": False}
@@ -141,12 +149,9 @@ def recompute_check(df: pd.DataFrame, cap: cv2.VideoCapture) -> dict:
         max_err = float(np.max(errors[feat]))
         mean_err = float(np.mean(errors[feat]))
         err_std = float(np.std(errors[feat]))
-
         csv_arr = np.array(csv_vals_all[feat])
         comp_arr = np.array(comp_vals_all[feat])
         corr = float(np.corrcoef(csv_arr, comp_arr)[0, 1]) if len(csv_arr) > 1 else float("nan")
-
-        # Pass if Pearson r > 0.999 (high linear correlation despite codec offsets)
         passed = corr > 0.999
         note = "cross-platform codec offset" if max_err > 1e-5 else ""
         results[feat] = {
@@ -168,26 +173,25 @@ def recompute_check(df: pd.DataFrame, cap: cv2.VideoCapture) -> dict:
 
 
 def distribution_checks(df: pd.DataFrame) -> dict:
-    """Check that feature distributions are within expected plausible ranges.
-
-    Returns dict with per-feature stats and pass/fail flags.
-    """
-    checks = {
-        "luminance_mean": {"min_ok": 0.0, "max_ok": 1.0},
-        "contrast_rms": {"min_ok": 0.0, "max_ok": 1.0},
-        "entropy": {"min_ok": 0.0, "max_ok": 8.0},
-        "scene_natural_score": {"min_ok": -1.0, "max_ok": 1.0},
+    """Check that feature distributions are within expected plausible ranges."""
+    bounds = {
+        "luminance_mean":       {"min_ok": 0.0, "max_ok": 1.0},
+        "contrast_rms":         {"min_ok": 0.0, "max_ok": 1.0},
+        "entropy":              {"min_ok": 0.0, "max_ok": 8.0},
+        "scene_natural_score":  {"min_ok": -1.0, "max_ok": 1.0},
+        "scene_open_score":     {"min_ok": -1.0, "max_ok": 1.0},
+        "scene_category_score": {"min_ok": 0.0,  "max_ok": 1.0},
     }
 
     results = {}
-    for feat, bounds in checks.items():
+    for feat, b in bounds.items():
         col = df[feat].dropna()
         feat_min = float(col.min())
         feat_max = float(col.max())
         feat_mean = float(col.mean())
         feat_std = float(col.std())
         n_nan = int(df[feat].isna().sum())
-        in_range = feat_min >= bounds["min_ok"] and feat_max <= bounds["max_ok"]
+        in_range = feat_min >= b["min_ok"] and feat_max <= b["max_ok"]
         has_variation = feat_std > 0.0
         results[feat] = {
             "min": feat_min,
@@ -199,52 +203,114 @@ def distribution_checks(df: pd.DataFrame) -> dict:
             "has_variation": has_variation,
             "pass": in_range and has_variation and n_nan == 0,
         }
+
+    # scene_category is categorical
+    cat_col = df["scene_category"].dropna()
+    results["scene_category"] = {
+        "n_categories": int(cat_col.nunique()),
+        "value_counts": cat_col.value_counts().to_dict(),
+        "n_nan": int(df["scene_category"].isna().sum()),
+        "pass": cat_col.nunique() > 0 and int(df["scene_category"].isna().sum()) == 0,
+    }
+
     return results
 
 
 # ---------------------------------------------------------------------------
-# Phase 3: Save frames for manual inspection of scene_natural_score
+# Phase 3: Save frames for visual inspection — continuous features
 # ---------------------------------------------------------------------------
 
 
-def extract_quartile_frames(df: pd.DataFrame, cap: cv2.VideoCapture) -> dict:
-    """Save QUARTILE_N frames per quartile of scene_natural_score as PNGs.
+def extract_quartile_frames(
+    df: pd.DataFrame,
+    cap: cv2.VideoCapture,
+    feature_name: str,
+) -> dict:
+    """Save QUARTILE_N frames per quartile of a continuous feature as PNGs.
 
-    Returns metadata dict: quartile → list of {frame_idx, score, path}.
+    Frames within each quartile are sorted by feature value so the saved
+    images span the score range monotonically.
+
+    Returns dict: quartile_label → list of {frame_idx, timestamp_s, score, path}.
     """
-    FRAMES_DIR.mkdir(parents=True, exist_ok=True)
+    subdir = FRAMES_DIR / feature_name
+    subdir.mkdir(parents=True, exist_ok=True)
 
-    col = df["scene_natural_score"].dropna()
+    col = df[feature_name].dropna()
     q25, q50, q75 = col.quantile([0.25, 0.50, 0.75]).values
+    labels = QUARTILE_LABELS[feature_name]
 
     quartile_masks = {
-        "Q1_low_natural": df["scene_natural_score"] <= q25,
-        "Q2_lower_mid": (df["scene_natural_score"] > q25) & (df["scene_natural_score"] <= q50),
-        "Q3_upper_mid": (df["scene_natural_score"] > q50) & (df["scene_natural_score"] <= q75),
-        "Q4_high_natural": df["scene_natural_score"] > q75,
+        labels[0]: df[feature_name] <= q25,
+        labels[1]: (df[feature_name] > q25) & (df[feature_name] <= q50),
+        labels[2]: (df[feature_name] > q50) & (df[feature_name] <= q75),
+        labels[3]: df[feature_name] > q75,
     }
 
     saved = {}
     for quartile_name, mask in quartile_masks.items():
-        # Sort by score so samples are evenly spread across the score range
-        subset = df[mask].copy().sort_values("scene_natural_score")
+        subset = df[mask].copy().sort_values(feature_name)
         step = max(1, len(subset) // QUARTILE_N)
         samples = subset.iloc[::step].head(QUARTILE_N)
 
         saved[quartile_name] = []
         for _, row in samples.iterrows():
             frame_idx = int(row["frame_idx"])
-            score = float(row["scene_natural_score"])
+            score = float(row[feature_name])
             frame = read_frame_seek(cap, frame_idx)
             if frame is None:
                 continue
-            filename = f"{quartile_name}_frame{frame_idx:04d}_score{score:.4f}.png"
-            path = FRAMES_DIR / filename
+            fname = f"{quartile_name}_frame{frame_idx:04d}_score{score:.4f}.png"
+            path = subdir / fname
             cv2.imwrite(str(path), frame)
             saved[quartile_name].append({
                 "frame_idx": frame_idx,
                 "timestamp_s": float(row["timestamp_s"]),
                 "score": score,
+                "path": str(path.relative_to(_HERE)),
+            })
+
+    return saved
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Save frames for visual inspection — scene_category
+# ---------------------------------------------------------------------------
+
+
+def extract_category_frames(df: pd.DataFrame, cap: cv2.VideoCapture) -> dict:
+    """Save CATEGORY_N representative frames per scene_category value.
+
+    Frames are sampled evenly across the film timeline within each category.
+
+    Returns dict: category_name → list of {frame_idx, timestamp_s, conf, path}.
+    """
+    subdir = FRAMES_DIR / "scene_category"
+    subdir.mkdir(parents=True, exist_ok=True)
+
+    categories = sorted(df["scene_category"].dropna().unique())
+    saved = {}
+
+    for cat in categories:
+        subset = df[df["scene_category"] == cat].copy()
+        step = max(1, len(subset) // CATEGORY_N)
+        samples = subset.iloc[::step].head(CATEGORY_N)
+
+        cat_safe = cat.replace(" ", "_").replace("/", "_")
+        saved[cat] = []
+        for _, row in samples.iterrows():
+            frame_idx = int(row["frame_idx"])
+            conf = float(row["scene_category_score"])
+            frame = read_frame_seek(cap, frame_idx)
+            if frame is None:
+                continue
+            fname = f"{cat_safe}_frame{frame_idx:04d}_conf{conf:.3f}.png"
+            path = subdir / fname
+            cv2.imwrite(str(path), frame)
+            saved[cat].append({
+                "frame_idx": frame_idx,
+                "timestamp_s": float(row["timestamp_s"]),
+                "conf": conf,
                 "path": str(path.relative_to(_HERE)),
             })
 
@@ -264,47 +330,49 @@ def write_report(
     recompute_results: dict,
     dist_results: dict,
     quartile_frames: dict,
+    category_frames: dict,
 ) -> None:
     """Write validation_report.md."""
     lines = []
+    n_samples = len(range(0, 4878, SAMPLE_STEP))
 
+    # --- Header ---
     lines += [
         "# Annotation Validation Report — The Present",
         "",
         "Validates annotation features for Issue #5.",
-        "Focus features: `contrast_rms`, `luminance_mean`, `entropy`, `scene_natural_score`.",
+        "Primary features: `contrast_rms`, `luminance_mean`, `entropy`, `scene_natural_score`.",
+        "Additional features: `scene_open_score`, `scene_category`, `scene_category_score`.",
         "",
         "---",
         "",
+    ]
+
+    # --- Section 1: Code Review ---
+    lines += [
         "## 1. Code Review",
-        "",
-        "Low-level features are computed in `features/lowlevel.py` using standard,",
-        "widely-used libraries with no trained ML models.",
         "",
         "| Feature | Method | Library | Model-free? | Deterministic? |",
         "|---------|--------|---------|------------|----------------|",
         "| `luminance_mean` | `mean(grayscale) / 255.0` | OpenCV + NumPy | Yes | Yes |",
         "| `contrast_rms` | `std(grayscale) / 255.0` (population std, ddof=0) | OpenCV + NumPy | Yes | Yes |",
-        "| `entropy` | Shannon entropy of 256-bin grayscale histogram (base 2) | SciPy `scipy.stats.entropy` | Yes | Yes |",
-        "| `scene_natural_score` | `cosine_sim(frame, 'natural scene') - cosine_sim(frame, 'urban scene')` | CLIP `openai/clip-vit-base-patch32` | No (ViT-B/32) | Yes (eval mode, no dropout) |",
-        "",
-        "**Notes:**",
-        "- `contrast_rms` uses population standard deviation (`np.ndarray.std()`, ddof=0),"
-        " which is standard for RMS contrast.",
-        "- `entropy` converts the float32 grayscale array back to uint8 before histogramming;",
-        "  histogram bins cover [0, 256) with 256 bins.",
-        "- `scene_natural_score` is a continuous cosine-similarity difference in [-1, 1].",
-        "  Positive = more natural, negative = more urban.",
-        "  The CLIP model is `openai/clip-vit-base-patch32` loaded via HuggingFace transformers;",
-        "  inference is deterministic (eval mode, no stochastic layers).",
+        "| `entropy` | Shannon entropy of 256-bin grayscale histogram (base 2) | SciPy | Yes | Yes |",
+        "| `scene_natural_score` | `cosine_sim(frame, 'natural scene') - cosine_sim(frame, 'urban scene')` | CLIP ViT-B/32 | No | Yes |",
+        "| `scene_open_score` | `cosine_sim(frame, 'open outdoor') - cosine_sim(frame, 'enclosed indoor')` | CLIP ViT-B/32 | No | Yes |",
+        "| `scene_category` | argmax softmax over 15 category text prompts | CLIP ViT-B/32 | No | Yes |",
+        "| `scene_category_score` | softmax probability of top category | CLIP ViT-B/32 | No | Yes |",
         "",
         "---",
         "",
+    ]
+
+    # --- Section 2: Recomputation Check ---
+    lines += [
         "## 2. Recomputation Check (Low-level Features)",
         "",
-        "Re-extracted `luminance_mean`, `contrast_rms`, `entropy` directly from the movie",
-        f"for ~{len(range(0, 4878, SAMPLE_STEP))} evenly-spaced frames (every {SAMPLE_STEP}th frame)",
-        "and compared against the stored CSV values.",
+        f"Re-extracted `luminance_mean`, `contrast_rms`, `entropy` from the movie for",
+        f"~{n_samples} evenly-spaced frames (every {SAMPLE_STEP}th frame) and compared",
+        "against stored CSV values.",
         "",
         "| Feature | Frames Checked | Max Abs Error | Mean Error | Error Std | Pearson r | Note | Result |",
         "|---------|---------------|--------------|------------|-----------|-----------|------|--------|",
@@ -321,101 +389,116 @@ def write_report(
             )
     lines += [
         "",
-        "> **Pass criteria**: Pearson r > 0.999 and error std < 1e-3.",
+        "> **Pass criteria**: Pearson r > 0.999.",
         "> A consistent mean offset with very low error std indicates cross-platform codec",
         "> differences (e.g. H.264 limited vs full YUV range), **not** a formula error.",
         "",
         "---",
         "",
+    ]
+
+    # --- Section 3: Distribution Checks ---
+    lines += [
         "## 3. Distribution Checks",
-        "",
-        "Checks that each feature's values fall within expected bounds",
-        "and exhibit non-zero variance across the 4878 annotated frames.",
         "",
         "| Feature | Min | Max | Mean | Std | NaN count | In range? | Has variation? | Result |",
         "|---------|-----|-----|------|-----|-----------|-----------|---------------|--------|",
     ]
-
-    bounds_str = {
-        "luminance_mean": "[0, 1]",
-        "contrast_rms": "[0, 1]",
-        "entropy": "[0, 8 bits]",
-        "scene_natural_score": "[-1, 1]",
-    }
-    for feat, r in dist_results.items():
+    for feat in CONTINUOUS_FEATURES:
+        r = dist_results[feat]
         lines.append(
             f"| `{feat}` | {r['min']:.4f} | {r['max']:.4f} | {r['mean']:.4f} | "
             f"{r['std']:.4f} | {r['n_nan']} | {'Yes' if r['in_range'] else 'No'} | "
             f"{'Yes' if r['has_variation'] else 'No'} | {_pass_icon(r['pass'])} |"
         )
 
+    cat_r = dist_results["scene_category"]
     lines += [
         "",
-        "---",
+        f"**`scene_category`** (categorical): {cat_r['n_categories']} distinct categories, "
+        f"{cat_r['n_nan']} NaN — {_pass_icon(cat_r['pass'])}",
         "",
-        "## 4. scene_natural_score — Visual Frame Inspection",
-        "",
-        "`scene_natural_score` is defined as:",
-        "",
-        "```",
-        "cosine_sim(frame_embed, 'a photograph of a natural scene with trees, grass, or water')",
-        "  - cosine_sim(frame_embed, 'a photograph of an urban scene with buildings and roads')",
-        "```",
-        "",
-        "16 frames were extracted (4 per score quartile) and saved as PNG images",
-        "for manual inspection. Frames with high scores should visually appear as",
-        "natural scenes (greenery, water, open sky); low-score frames should appear",
-        "more urban or interior.",
-        "",
+        "| Category | Frame count |",
+        "|----------|------------|",
     ]
+    for cat, count in sorted(cat_r["value_counts"].items(), key=lambda x: -x[1]):
+        lines.append(f"| {cat} | {count} |")
+    lines += ["", "---", ""]
 
-    for quartile_name, frames in quartile_frames.items():
-        label = quartile_name.replace("_", " ")
-        lines.append(f"### {label}")
-        lines.append("")
+    # --- Sections 4+: Visual inspection per continuous feature ---
+    section_num = 4
+    for feat in CONTINUOUS_FEATURES:
+        if feat not in quartile_frames:
+            continue
+        lines += [f"## {section_num}. `{feat}` — Visual Frame Inspection", ""]
+        for quartile_name, frames in quartile_frames[feat].items():
+            label = quartile_name.replace("_", " ")
+            lines += [f"### {label}", ""]
+            if not frames:
+                lines.append("_No frames saved._")
+            else:
+                lines += [
+                    "| Frame idx | Timestamp (s) | Score | Image |",
+                    "|-----------|--------------|-------|-------|",
+                ]
+                for f in frames:
+                    rel = f"output/The_Present/validation_frames/{feat}/{Path(f['path']).name}"
+                    lines.append(
+                        f"| {f['frame_idx']} | {f['timestamp_s']:.1f} | "
+                        f"{f['score']:.4f} | [{Path(f['path']).name}]({rel}) |"
+                    )
+            lines.append("")
+        lines += ["---", ""]
+        section_num += 1
+
+    # --- scene_category visual section ---
+    lines += [f"## {section_num}. `scene_category` — Visual Frame Inspection", ""]
+    for cat in sorted(category_frames.keys()):
+        frames = category_frames[cat]
+        lines += [f"### {cat}", ""]
         if not frames:
-            lines.append("_No frames saved (video read error)._")
+            lines.append("_No frames saved._")
         else:
-            lines.append("| Frame idx | Timestamp (s) | Score | Image |")
-            lines.append("|-----------|--------------|-------|-------|")
+            lines += [
+                "| Frame idx | Timestamp (s) | Conf | Image |",
+                "|-----------|--------------|------|-------|",
+            ]
             for f in frames:
-                img_link = f"output/The_Present/validation_frames/{Path(f['path']).name}"
+                rel = f"output/The_Present/validation_frames/scene_category/{Path(f['path']).name}"
                 lines.append(
                     f"| {f['frame_idx']} | {f['timestamp_s']:.1f} | "
-                    f"{f['score']:.4f} | [{Path(f['path']).name}]({img_link}) |"
+                    f"{f['conf']:.3f} | [{Path(f['path']).name}]({rel}) |"
                 )
         lines.append("")
+    lines += ["---", ""]
+    section_num += 1
 
+    # --- Overall Summary ---
     lines += [
-        "---",
+        f"## {section_num}. Overall Validation Summary",
         "",
-        "## 5. Overall Validation Summary",
-        "",
-        "| Feature | Code Review | Recomputation | Distribution | Overall |",
-        "|---------|------------|--------------|-------------|---------|",
+        "| Feature | Code Review | Recomputation | Distribution | Visual | Overall |",
+        "|---------|------------|--------------|-------------|--------|---------|",
     ]
-
     for feat in ["luminance_mean", "contrast_rms", "entropy"]:
         r_pass = recompute_results.get(feat, {}).get("pass", False)
         d_pass = dist_results.get(feat, {}).get("pass", False)
         overall = r_pass and d_pass
         lines.append(
             f"| `{feat}` | PASS | {_pass_icon(r_pass)} | {_pass_icon(d_pass)} | "
-            f"{_pass_icon(overall)} |"
+            f"pending | {_pass_icon(overall)} (pending visual) |"
         )
-
-    # scene_natural_score has no recomputation (needs GPU)
-    d_pass = dist_results.get("scene_natural_score", {}).get("pass", False)
-    lines.append(
-        f"| `scene_natural_score` | PASS | N/A (GPU required) | {_pass_icon(d_pass)} | "
-        f"{'PASS (pending visual review)' if d_pass else 'FAIL'} |"
-    )
-
+    for feat in ["scene_natural_score", "scene_open_score", "scene_category_score"]:
+        d_pass = dist_results.get(feat, {}).get("pass", False)
+        lines.append(
+            f"| `{feat}` | PASS | N/A (GPU) | {_pass_icon(d_pass)} | pending | pending |"
+        )
+    cat_pass = dist_results["scene_category"]["pass"]
     lines += [
+        f"| `scene_category` | PASS | N/A (GPU) | {_pass_icon(cat_pass)} | pending | pending |",
         "",
-        "> `scene_natural_score` recomputation requires a GPU and CLIP model re-run.",
-        "> The code review confirms correct implementation (cosine similarity difference).",
-        "> Validation is based on distribution checks and manual visual review of saved frames.",
+        "> CLIP-based feature recomputation requires GPU + model re-run.",
+        "> Visual review status to be updated after manual inspection of saved frames.",
         "",
     ]
 
@@ -431,36 +514,44 @@ def write_report(
 def main() -> None:
     print(f"Loading features CSV: {FEATURES_CSV}")
     df = pd.read_csv(FEATURES_CSV)
-    print(f"  {len(df)} frames loaded")
+    print(f"  {len(df)} frames loaded, {len(df.columns)} columns")
 
-    print(f"Opening video: {MOVIE_PATH}")
+    print(f"\nOpening video: {MOVIE_PATH}")
     cap = cv2.VideoCapture(str(MOVIE_PATH))
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {MOVIE_PATH}")
 
-    print("\n[1/3] Recomputation check (luminance_mean, contrast_rms, entropy)...")
+    print("\n[1/4] Recomputation check (luminance_mean, contrast_rms, entropy)...")
     recompute_results = recompute_check(df, cap)
     for feat, r in recompute_results.items():
-        status = "PASS" if r["pass"] else "FAIL"
-        print(f"  {feat}: max_abs_error={r['max_abs_error']:.2e}  n={r['n_checked']}  [{status}]")
+        print(f"  {feat}: Pearson_r={r['pearson_r']:.6f}  n={r['n_checked']}  [{_pass_icon(r['pass'])}]")
 
-    print("\n[2/3] Distribution checks...")
+    print("\n[2/4] Distribution checks...")
     dist_results = distribution_checks(df)
     for feat, r in dist_results.items():
-        status = "PASS" if r["pass"] else "FAIL"
-        print(
-            f"  {feat}: min={r['min']:.4f}  max={r['max']:.4f}  "
-            f"mean={r['mean']:.4f}  std={r['std']:.4f}  nan={r['n_nan']}  [{status}]"
-        )
+        if feat == "scene_category":
+            print(f"  scene_category: {r['n_categories']} categories  nan={r['n_nan']}  [{_pass_icon(r['pass'])}]")
+        else:
+            print(
+                f"  {feat}: min={r['min']:.4f}  max={r['max']:.4f}  "
+                f"mean={r['mean']:.4f}  std={r['std']:.4f}  nan={r['n_nan']}  [{_pass_icon(r['pass'])}]"
+            )
 
-    print(f"\n[3/3] Extracting quartile frames for scene_natural_score → {FRAMES_DIR}")
-    quartile_frames = extract_quartile_frames(df, cap)
-    for q, frames in quartile_frames.items():
-        print(f"  {q}: {len(frames)} frames saved")
+    print(f"\n[3/4] Extracting quartile frames for {len(CONTINUOUS_FEATURES)} continuous features...")
+    quartile_frames = {}
+    for feat in CONTINUOUS_FEATURES:
+        quartile_frames[feat] = extract_quartile_frames(df, cap, feat)
+        counts = {q: len(f) for q, f in quartile_frames[feat].items()}
+        print(f"  {feat}: {counts}")
+
+    print(f"\n[4/4] Extracting category frames for scene_category...")
+    category_frames = extract_category_frames(df, cap)
+    for cat, frames in sorted(category_frames.items()):
+        print(f"  '{cat}': {len(frames)} frames")
 
     cap.release()
 
-    write_report(recompute_results, dist_results, quartile_frames)
+    write_report(recompute_results, dist_results, quartile_frames, category_frames)
     print("\nDone.")
 
 
