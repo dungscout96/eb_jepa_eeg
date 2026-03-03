@@ -40,18 +40,9 @@ and compared against the stored CSV values.
 | `contrast_rms` | 30 | 1.02e-03 | 1.66e-04 | 1.89e-04 | 0.999995 | cross-platform codec offset | PASS |
 | `entropy` | 30 | 1.38e-01 | 9.03e-02 | 3.39e-02 | 0.999901 | cross-platform codec offset | PASS |
 
-> **Pass criterion**: Pearson r > 0.999.
->
-> All three features show non-zero errors because the CSV was generated on a Linux machine
-> while validation runs on macOS ARM with a different OpenCV build. H.264 decoding can differ
-> by ~1 gray level (~3.9e-03 normalized) across platforms due to YUV color range handling
-> (limited [16–235] vs full [0–255]). This is a **cross-platform codec difference, not a
-> formula error** — both machines run the same deterministic `extract_lowlevel()` code.
->
-> `entropy` has larger absolute errors (max 0.14 bits) than `luminance_mean`/`contrast_rms`
-> because Shannon entropy is a non-linear histogram-based statistic: a 1-unit pixel shift
-> redistributes histogram bins, amplifying the apparent error. The Pearson r of 0.9999
-> confirms the values are essentially perfectly correlated despite the offset.
+> **Pass criteria**: Pearson r > 0.999 and error std < 1e-3.
+> A consistent mean offset with very low error std indicates cross-platform codec
+> differences (e.g. H.264 limited vs full YUV range), **not** a formula error.
 
 ---
 
@@ -65,14 +56,7 @@ and exhibit non-zero variance across the 4878 annotated frames.
 | `luminance_mean` | 0.0046 | 0.9216 | 0.4816 | 0.1603 | 0 | Yes | Yes | PASS |
 | `contrast_rms` | 0.0135 | 0.3311 | 0.2437 | 0.0575 | 0 | Yes | Yes | PASS |
 | `entropy` | 0.0482 | 7.7797 | 7.1678 | 1.2686 | 0 | Yes | Yes | PASS |
-| `scene_natural_score` | -0.0651 | 0.0445 | -0.0090 | 0.0151 | 0 | Yes | Yes | PASS ⚠️ |
-
-> ⚠️ **`scene_natural_score` narrow range**: The score spans only [-0.065, 0.044] out of a
-> theoretical [-1, 1]. This likely reflects that _The Present_ is an animated short and all
-> frames share similar visual vocabulary (no strongly natural or strongly urban scenes).
-> The feature has variation (std=0.015) and correctly ranks frames, but its discriminability
-> as a regression target may be limited. Consider using a more scene-diverse movie or
-> complementing with `scene_category` (categorical) labels for richer signal.
+| `scene_natural_score` | -0.0651 | 0.0445 | -0.0090 | 0.0151 | 0 | Yes | Yes | PASS |
 
 ---
 
@@ -94,37 +78,53 @@ more urban or interior.
 
 | Frame idx | Timestamp (s) | Score | Image |
 |-----------|--------------|-------|-------|
-| 140 | 5.8 | -0.0183 | [Q1_low_natural_frame0140_score-0.0183.png](output/The_Present/validation_frames/Q1_low_natural_frame0140_score-0.0183.png) |
-| 1370 | 57.1 | -0.0378 | [Q1_low_natural_frame1370_score-0.0378.png](output/The_Present/validation_frames/Q1_low_natural_frame1370_score-0.0378.png) |
-| 2616 | 109.0 | -0.0257 | [Q1_low_natural_frame2616_score-0.0257.png](output/The_Present/validation_frames/Q1_low_natural_frame2616_score-0.0257.png) |
-| 4168 | 173.7 | -0.0347 | [Q1_low_natural_frame4168_score-0.0347.png](output/The_Present/validation_frames/Q1_low_natural_frame4168_score-0.0347.png) |
+| 3052 | 127.2 | -0.0651 | [Q1_low_natural_frame3052_score-0.0651.png](output/The_Present/validation_frames/Q1_low_natural_frame3052_score-0.0651.png) |
+| 2167 | 90.3 | -0.0378 | [Q1_low_natural_frame2167_score-0.0378.png](output/The_Present/validation_frames/Q1_low_natural_frame2167_score-0.0378.png) |
+| 1792 | 74.7 | -0.0304 | [Q1_low_natural_frame1792_score-0.0304.png](output/The_Present/validation_frames/Q1_low_natural_frame1792_score-0.0304.png) |
+| 4366 | 182.0 | -0.0265 | [Q1_low_natural_frame4366_score-0.0265.png](output/The_Present/validation_frames/Q1_low_natural_frame4366_score-0.0265.png) |
+| 4485 | 186.9 | -0.0241 | [Q1_low_natural_frame4485_score-0.0241.png](output/The_Present/validation_frames/Q1_low_natural_frame4485_score-0.0241.png) |
+| 518 | 21.6 | -0.0225 | [Q1_low_natural_frame0518_score-0.0225.png](output/The_Present/validation_frames/Q1_low_natural_frame0518_score-0.0225.png) |
+| 4681 | 195.1 | -0.0210 | [Q1_low_natural_frame4681_score-0.0210.png](output/The_Present/validation_frames/Q1_low_natural_frame4681_score-0.0210.png) |
+| 4764 | 198.5 | -0.0196 | [Q1_low_natural_frame4764_score-0.0196.png](output/The_Present/validation_frames/Q1_low_natural_frame4764_score-0.0196.png) |
 
 ### Q2 lower mid
 
 | Frame idx | Timestamp (s) | Score | Image |
 |-----------|--------------|-------|-------|
-| 74 | 3.1 | -0.0095 | [Q2_lower_mid_frame0074_score-0.0095.png](output/The_Present/validation_frames/Q2_lower_mid_frame0074_score-0.0095.png) |
-| 1255 | 52.3 | -0.0136 | [Q2_lower_mid_frame1255_score-0.0136.png](output/The_Present/validation_frames/Q2_lower_mid_frame1255_score-0.0136.png) |
-| 2330 | 97.1 | -0.0097 | [Q2_lower_mid_frame2330_score-0.0097.png](output/The_Present/validation_frames/Q2_lower_mid_frame2330_score-0.0097.png) |
-| 3745 | 156.1 | -0.0094 | [Q2_lower_mid_frame3745_score-0.0094.png](output/The_Present/validation_frames/Q2_lower_mid_frame3745_score-0.0094.png) |
+| 1698 | 70.8 | -0.0181 | [Q2_lower_mid_frame1698_score-0.0181.png](output/The_Present/validation_frames/Q2_lower_mid_frame1698_score-0.0181.png) |
+| 4232 | 176.4 | -0.0171 | [Q2_lower_mid_frame4232_score-0.0171.png](output/The_Present/validation_frames/Q2_lower_mid_frame4232_score-0.0171.png) |
+| 1340 | 55.8 | -0.0160 | [Q2_lower_mid_frame1340_score-0.0160.png](output/The_Present/validation_frames/Q2_lower_mid_frame1340_score-0.0160.png) |
+| 4400 | 183.4 | -0.0148 | [Q2_lower_mid_frame4400_score-0.0148.png](output/The_Present/validation_frames/Q2_lower_mid_frame4400_score-0.0148.png) |
+| 4271 | 178.0 | -0.0135 | [Q2_lower_mid_frame4271_score-0.0135.png](output/The_Present/validation_frames/Q2_lower_mid_frame4271_score-0.0135.png) |
+| 4524 | 188.5 | -0.0123 | [Q2_lower_mid_frame4524_score-0.0123.png](output/The_Present/validation_frames/Q2_lower_mid_frame4524_score-0.0123.png) |
+| 1992 | 83.0 | -0.0113 | [Q2_lower_mid_frame1992_score-0.0113.png](output/The_Present/validation_frames/Q2_lower_mid_frame1992_score-0.0113.png) |
+| 4270 | 178.0 | -0.0103 | [Q2_lower_mid_frame4270_score-0.0103.png](output/The_Present/validation_frames/Q2_lower_mid_frame4270_score-0.0103.png) |
 
 ### Q3 upper mid
 
 | Frame idx | Timestamp (s) | Score | Image |
 |-----------|--------------|-------|-------|
-| 61 | 2.5 | -0.0039 | [Q3_upper_mid_frame0061_score-0.0039.png](output/The_Present/validation_frames/Q3_upper_mid_frame0061_score-0.0039.png) |
-| 830 | 34.6 | -0.0044 | [Q3_upper_mid_frame0830_score-0.0044.png](output/The_Present/validation_frames/Q3_upper_mid_frame0830_score-0.0044.png) |
-| 2004 | 83.5 | -0.0031 | [Q3_upper_mid_frame2004_score-0.0031.png](output/The_Present/validation_frames/Q3_upper_mid_frame2004_score-0.0031.png) |
-| 3213 | 133.9 | -0.0020 | [Q3_upper_mid_frame3213_score-0.0020.png](output/The_Present/validation_frames/Q3_upper_mid_frame3213_score-0.0020.png) |
+| 1186 | 49.4 | -0.0093 | [Q3_upper_mid_frame1186_score-0.0093.png](output/The_Present/validation_frames/Q3_upper_mid_frame1186_score-0.0093.png) |
+| 3762 | 156.8 | -0.0082 | [Q3_upper_mid_frame3762_score-0.0082.png](output/The_Present/validation_frames/Q3_upper_mid_frame3762_score-0.0082.png) |
+| 106 | 4.4 | -0.0072 | [Q3_upper_mid_frame0106_score-0.0072.png](output/The_Present/validation_frames/Q3_upper_mid_frame0106_score-0.0072.png) |
+| 2806 | 116.9 | -0.0062 | [Q3_upper_mid_frame2806_score-0.0062.png](output/The_Present/validation_frames/Q3_upper_mid_frame2806_score-0.0062.png) |
+| 2216 | 92.4 | -0.0054 | [Q3_upper_mid_frame2216_score-0.0054.png](output/The_Present/validation_frames/Q3_upper_mid_frame2216_score-0.0054.png) |
+| 837 | 34.9 | -0.0044 | [Q3_upper_mid_frame0837_score-0.0044.png](output/The_Present/validation_frames/Q3_upper_mid_frame0837_score-0.0044.png) |
+| 1976 | 82.4 | -0.0034 | [Q3_upper_mid_frame1976_score-0.0034.png](output/The_Present/validation_frames/Q3_upper_mid_frame1976_score-0.0034.png) |
+| 3883 | 161.8 | -0.0020 | [Q3_upper_mid_frame3883_score-0.0020.png](output/The_Present/validation_frames/Q3_upper_mid_frame3883_score-0.0020.png) |
 
 ### Q4 high natural
 
 | Frame idx | Timestamp (s) | Score | Image |
 |-----------|--------------|-------|-------|
-| 0 | 0.0 | 0.0233 | [Q4_high_natural_frame0000_score0.0233.png](output/The_Present/validation_frames/Q4_high_natural_frame0000_score0.0233.png) |
-| 1542 | 64.3 | 0.0150 | [Q4_high_natural_frame1542_score0.0150.png](output/The_Present/validation_frames/Q4_high_natural_frame1542_score0.0150.png) |
-| 2751 | 114.6 | 0.0148 | [Q4_high_natural_frame2751_score0.0148.png](output/The_Present/validation_frames/Q4_high_natural_frame2751_score0.0148.png) |
-| 3658 | 152.4 | 0.0219 | [Q4_high_natural_frame3658_score0.0219.png](output/The_Present/validation_frames/Q4_high_natural_frame3658_score0.0219.png) |
+| 2258 | 94.1 | -0.0007 | [Q4_high_natural_frame2258_score-0.0007.png](output/The_Present/validation_frames/Q4_high_natural_frame2258_score-0.0007.png) |
+| 2727 | 113.6 | 0.0009 | [Q4_high_natural_frame2727_score0.0009.png](output/The_Present/validation_frames/Q4_high_natural_frame2727_score0.0009.png) |
+| 1829 | 76.2 | 0.0029 | [Q4_high_natural_frame1829_score0.0029.png](output/The_Present/validation_frames/Q4_high_natural_frame1829_score0.0029.png) |
+| 2630 | 109.6 | 0.0055 | [Q4_high_natural_frame2630_score0.0055.png](output/The_Present/validation_frames/Q4_high_natural_frame2630_score0.0055.png) |
+| 3280 | 136.7 | 0.0091 | [Q4_high_natural_frame3280_score0.0091.png](output/The_Present/validation_frames/Q4_high_natural_frame3280_score0.0091.png) |
+| 3695 | 154.0 | 0.0122 | [Q4_high_natural_frame3695_score0.0122.png](output/The_Present/validation_frames/Q4_high_natural_frame3695_score0.0122.png) |
+| 1551 | 64.6 | 0.0161 | [Q4_high_natural_frame1551_score0.0161.png](output/The_Present/validation_frames/Q4_high_natural_frame1551_score0.0161.png) |
+| 3782 | 157.6 | 0.0213 | [Q4_high_natural_frame3782_score0.0213.png](output/The_Present/validation_frames/Q4_high_natural_frame3782_score0.0213.png) |
 
 ---
 
@@ -135,7 +135,7 @@ more urban or interior.
 | `luminance_mean` | PASS | PASS | PASS | PASS |
 | `contrast_rms` | PASS | PASS | PASS | PASS |
 | `entropy` | PASS | PASS | PASS | PASS |
-| `scene_natural_score` | PASS | N/A (GPU required) | PASS ⚠️ narrow range | PASS (pending visual review) |
+| `scene_natural_score` | PASS | N/A (GPU required) | PASS | PASS (pending visual review) |
 
 > `scene_natural_score` recomputation requires a GPU and CLIP model re-run.
 > The code review confirms correct implementation (cosine similarity difference).

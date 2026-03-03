@@ -42,7 +42,7 @@ REPORT_PATH = _HERE / "validation_report.md"
 SAMPLE_STEP = 163  # ~30 frames across 4878
 
 # Number of frames to save per quartile for visual inspection
-QUARTILE_N = 4
+QUARTILE_N = 8
 
 
 # ---------------------------------------------------------------------------
@@ -226,8 +226,8 @@ def extract_quartile_frames(df: pd.DataFrame, cap: cv2.VideoCapture) -> dict:
 
     saved = {}
     for quartile_name, mask in quartile_masks.items():
-        subset = df[mask].copy()
-        # Space samples evenly across the quartile range
+        # Sort by score so samples are evenly spread across the score range
+        subset = df[mask].copy().sort_values("scene_natural_score")
         step = max(1, len(subset) // QUARTILE_N)
         samples = subset.iloc[::step].head(QUARTILE_N)
 
