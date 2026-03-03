@@ -1,0 +1,32 @@
+# HBN EEG Preprocessing Configuration (REVE practice)
+#
+# Preprocessing pipeline:
+#   1. Remove recordings shorter than min_duration_s
+#   2. Resample to target_sfreq Hz
+#   3. Bandpass filter [l_freq, h_freq] Hz
+#   4. Convert to float32
+#   5. Z-score normalization (per-channel, stats across all recordings)
+#   6. Clip values exceeding clip_std standard deviations
+#
+# Usage:
+#   python scripts/preprocess_hbn.py
+#   python scripts/preprocess_hbn.py release=R2 task=DespicableMe
+#   python scripts/preprocess_hbn.py --multirun task=ThePresent,DespicableMe,RestingState,ContrastChangeDetection
+
+# Data selection
+release: R1               # Which HBN release to process: R1, R2, R6
+task: ThePresent           # EEG task: ThePresent, DespicableMe, RestingState, ContrastChangeDetection
+
+# Preprocessing parameters (REVE / Défossez et al. 2023)
+target_sfreq: 200.0       # Target sampling frequency (Hz)
+l_freq: 0.5               # Bandpass filter low cutoff (Hz)
+h_freq: 99.5              # Bandpass filter high cutoff (Hz)
+min_duration_s: 10.0       # Minimum recording duration to keep (seconds)
+clip_std: 15.0             # Clip values beyond ±N standard deviations after z-score
+
+# Output directory
+# On Delta HPC: set HBN_PREPROCESS_DIR=/projects/<allocation>/hbn_preprocessed
+output_dir: ${oc.env:HBN_PREPROCESS_DIR,./data/hbn_preprocessed}
+
+# Parallelism
+n_jobs: -1                 # Number of parallel download jobs (-1 = all cores)
