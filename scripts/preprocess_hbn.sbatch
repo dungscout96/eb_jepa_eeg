@@ -1,9 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=hbn_preprocess
-#SBATCH --partition=cpu
+#SBATCH --account=bbnv-delta-gpu
+#SBATCH --partition=gpuA40x4
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
+#SBATCH --gpus-per-task=1
 #SBATCH --mem=64G
 #SBATCH --time=12:00:00
 #SBATCH --output=logs/preprocess_%A_%a.out
@@ -30,8 +32,8 @@ TASKS=("ThePresent" "DespicableMe" "RestingState" "ContrastChangeDetection")
 TASK=${TASKS[$SLURM_ARRAY_TASK_ID]}
 RELEASE=${HBN_RELEASE:-R1}
 
-# Save preprocessed data to WORK - HDD filesystem
-export HBN_PREPROCESS_DIR="${HBN_PREPROCESS_DIR:-/projects/bbvz/hbn_preprocessed}"
+# Save preprocessed data to projects filesystem
+export HBN_PREPROCESS_DIR="${HBN_PREPROCESS_DIR:-/projects/bbnv/kkokate/hbn_preprocessed}"
 
 echo "========================================"
 echo "Job ID:        $SLURM_JOB_ID"
@@ -43,11 +45,13 @@ echo "========================================"
 
 cd "$SLURM_SUBMIT_DIR"
 
-# Activate conda env and run with uv
-eval "$(conda shell.bash hook 2>/dev/null)"
+# Load conda and activate environment
+module reset
+module load miniforge3-python
+eval "$(conda shell.bash hook)"
 conda activate eb_jepa
 
-uv run scripts/preprocess_hbn.py \
+uv run --group eeg scripts/preprocess_hbn.py \
     release="$RELEASE" \
     task="$TASK" \
     output_dir="$HBN_PREPROCESS_DIR"
