@@ -145,21 +145,14 @@ def load_or_download(release, task=DEFAULT_TASK):
     """Load an EEGChallengeDataset from cache, downloading if necessary."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-    dataset_id = f"EEG2025r{release[1:]}"
-    data_dir = DATA_DIR / dataset_id
-    needs_download = not data_dir.exists() or not list(
-        data_dir.glob(f"**/*task-{task}*.bdf")
-    )
-
     dataset = EEGChallengeDataset(
         cache_dir=DATA_DIR,
         release=release,
-        download=needs_download,
+        download=True,
         task=task,
         mini=False,
     )
-    if needs_download:
-        dataset.download_all(n_jobs=-1)
+    dataset.download_all(n_jobs=-1)
     return dataset
 
 
