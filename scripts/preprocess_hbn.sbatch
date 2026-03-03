@@ -28,7 +28,7 @@
 set -euo pipefail
 
 # --- Configuration ---
-TASKS=("ThePresent" "DespicableMe" "RestingState" "ContrastChangeDetection")
+TASKS=("ThePresent" "DespicableMe" "RestingState" "contrastChangeDetection")
 TASK=${TASKS[$SLURM_ARRAY_TASK_ID]}
 RELEASE=${HBN_RELEASE:-R1}
 

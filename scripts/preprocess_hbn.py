@@ -130,6 +130,7 @@ def _cast_to_float32(dataset: BaseConcatDataset, save_dir: Path) -> None:
     for ds in dataset.datasets:
         raw = ds.raw
         if raw.get_data().dtype != np.float32:
+            raw.load_data()
             raw.apply_function(lambda x: x.astype(np.float32), dtype=np.float32)
 
 
