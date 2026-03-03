@@ -404,9 +404,41 @@ def run(
                 step=global_step,
             )
 
+    # ------------------------------------------------------------------
+    # Test set evaluation
+    # ------------------------------------------------------------------
+    logger.info("Evaluating on test set...")
+    test_set = JEPAMovieDataset(
+        split="test",
+        n_windows=cfg.data.n_windows,
+        window_size_seconds=cfg.data.window_size_seconds,
+        eeg_norm_stats=train_set.get_eeg_norm_stats(),
+        cfg=cfg.data,
+    )
+    test_loader = DataLoader(
+        test_set,
+        batch_size=cfg.data.batch_size,
+        shuffle=False,
+        num_workers=cfg.data.num_workers,
+    )
+    test_logs = validation_loop(
+        test_loader,
+        jepa,
+        regression_probe,
+        classification_probe,
+        cfg.model.steps,
+        device,
+        feature_stats,
+        feature_median,
+        NUMERIC_FEATURES,
+    )
+    # Rename val/ -> test/ for clarity
+    test_metrics = {k.replace("val/", "test/"): v for k, v in test_logs.items()}
+
     if wandb_run:
         import wandb
 
+        wandb.log(test_metrics, step=global_step)
         wandb.finish()
 
     logger.info("Training complete!")

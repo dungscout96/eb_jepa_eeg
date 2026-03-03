@@ -30,7 +30,11 @@ DATA_DIR = Path.home() / ".cache" / "eb_jepa" / "datasets" / "eegdash_cache"
 
 
 SPLIT_RELEASES = {
-    "train": {"R2": "ds005506"}, # 152 subjects
+    "train": {
+        "R2": "ds005506",  # 152 subjects
+        "R3": "ds005507",  # 184 subjects
+        "R4": "ds005508",  # 324 subjects
+    },
     "val": {"R1": "ds005505"}, # 136 subjects
     "test": {"R6": "ds005510"}, # 134 subjects
 }
