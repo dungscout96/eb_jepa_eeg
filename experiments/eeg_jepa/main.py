@@ -258,12 +258,12 @@ def run(
     regression_probe.train()
     classification_probe.train()
 
-    optimizer = Adam(
-        [
-            {"params": jepa.parameters(), "lr": cfg.optim.lr},
-            {"params": regression_probe.head.parameters(), "lr": cfg.optim.lr},
-            {"params": classification_probe.head.parameters(), "lr": cfg.optim.lr},
-        ]
+    # Separate optimizers: JEPA is purely self-supervised, probes are online eval
+    optimizer = Adam(jepa.parameters(), lr=cfg.optim.lr)
+    probe_optimizer = Adam(
+        list(regression_probe.head.parameters())
+        + list(classification_probe.head.parameters()),
+        lr=cfg.optim.lr,
     )
 
     # Log configuration
@@ -295,9 +295,8 @@ def run(
             x = eeg.unsqueeze(1).to(device)
             features = features.to(device)  # [B, T, n_features]
 
+            # --- JEPA pretraining (self-supervised, no labels) ---
             optimizer.zero_grad()
-
-            # JEPA self-supervised loss
             _, (jepa_loss, regl, _, regldict, pl) = jepa.unroll(
                 x,
                 actions=None,
@@ -306,14 +305,15 @@ def run(
                 compute_loss=True,
                 return_all_steps=False,
             )
+            jepa_loss.backward()
+            optimizer.step()
 
-            # Evaluation decoder losses (encoder frozen via JEPAProbe)
+            # --- Probe training (online eval on frozen encoder) ---
+            probe_optimizer.zero_grad()
             reg_loss = regression_probe(x, features)
             cls_loss = classification_probe(x, features)
-            total_loss = jepa_loss + reg_loss + cls_loss
-
-            total_loss.backward()
-            optimizer.step()
+            (reg_loss + cls_loss).backward()
+            probe_optimizer.step()
 
             pbar.set_postfix(
                 {
@@ -335,7 +335,6 @@ def run(
                     "train_step/pred_loss": pl.item(),
                     "train_step/reg_loss": reg_loss.item(),
                     "train_step/cls_loss": cls_loss.item(),
-                    "train_step/total_loss": total_loss.item(),
                 }
                 for k, v in regldict.items():
                     step_metrics[f"train_step/{k}"] = float(v)

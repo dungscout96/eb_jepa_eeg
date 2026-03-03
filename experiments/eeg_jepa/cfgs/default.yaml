@@ -6,7 +6,7 @@ meta:
   device: auto  # auto, cuda, or cpu
 
 data:
-  batch_size: 8
+  batch_size: 64
   num_workers: 4
   n_windows: 16          # Number of contiguous windows per sample
   window_size_seconds: 2  # Window duration in seconds
