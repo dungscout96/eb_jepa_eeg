@@ -247,7 +247,7 @@ class HBNDataset(Dataset):
             if preprocessed:
                 dataset = load_preprocessed(release, task, preprocessed_dir)
             else:
-                dataset = load_or_download(release, dataset_name, task=task)
+                dataset = load_or_download(release, task=task)
             sfreq = dataset.datasets[0].raw.info["sfreq"]
             window_samples = int(window_size_seconds * sfreq)
             windowed_dataset = create_fixed_length_windows(
