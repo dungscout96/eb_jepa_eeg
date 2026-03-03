@@ -395,11 +395,13 @@ class JEPAMovieDataset(HBNMovieDataset):
         task=DEFAULT_TASK,
         feature_names=None,
         eeg_norm_stats=None,
+        temporal_stride=1,
         *,
         cfg: DictConfig | dict,
     ):
         super().__init__(split, window_size_seconds, task, cfg=cfg)
         self.n_windows = n_windows
+        self.temporal_stride = temporal_stride
         self.feature_names = feature_names or self.DEFAULT_FEATURES
         self._precompute_tensors(eeg_norm_stats=eeg_norm_stats)
 
@@ -419,7 +421,8 @@ class JEPAMovieDataset(HBNMovieDataset):
             labels = self.labels[rec_idx]
             n_win = len(window_ds)
 
-            if n_win < self.n_windows:
+            required_windows = (self.n_windows - 1) * self.temporal_stride + 1
+            if n_win < required_windows:
                 continue
 
             eeg = torch.stack(
@@ -451,9 +454,11 @@ class JEPAMovieDataset(HBNMovieDataset):
         self.eeg_recordings = eeg_recordings
         self.feature_recordings = feature_recordings
         logger.info(
-            "JEPAMovieDataset: %d recordings with >= %d windows (EEG z-normalized per channel)",
+            "JEPAMovieDataset: %d recordings with >= %d windows (stride=%d, effective span=%.1fs, EEG z-normalized per channel)",
             len(self.eeg_recordings),
-            self.n_windows,
+            required_windows,
+            self.temporal_stride,
+            self.n_windows * self.temporal_stride * self.window_size_seconds,
         )
 
     @property
@@ -493,10 +498,12 @@ class JEPAMovieDataset(HBNMovieDataset):
         eeg = self.eeg_recordings[idx]
         feats = self.feature_recordings[idx]
         n = len(eeg)
-        start = torch.randint(0, n - self.n_windows + 1, (1,)).item()
+        required = (self.n_windows - 1) * self.temporal_stride + 1
+        start = torch.randint(0, n - required + 1, (1,)).item()
+        indices = list(range(start, start + required, self.temporal_stride))
         return (
-            eeg[start : start + self.n_windows],  # [n_windows, C, W]
-            feats[start : start + self.n_windows],  # [n_windows, n_features]
+            eeg[indices],  # [n_windows, C, W]
+            feats[indices],  # [n_windows, n_features]
         )
 
 

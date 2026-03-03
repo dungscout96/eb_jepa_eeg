@@ -112,6 +112,7 @@ def run(
     # Setup
     device = setup_device(cfg.meta.device)
     setup_seed(cfg.meta.seed)
+    temporal_stride = cfg.data.get("temporal_stride", 1)
 
     # Create experiment directory
     if folder is None:
@@ -121,11 +122,13 @@ def run(
             exp_name = folder_name.rsplit("_seed", 1)[0]
         else:
             sweep_name = get_default_dev_name()
+            stride_suffix = f"_stride{temporal_stride}" if temporal_stride > 1 else ""
             exp_name = (
                 f"eeg_jepa_bs{cfg.data.batch_size}"
                 f"_lr{cfg.optim.lr}"
                 f"_std{cfg.loss.std_coeff}"
                 f"_cov{cfg.loss.cov_coeff}"
+                f"{stride_suffix}"
             )
             exp_dir = get_unified_experiment_dir(
                 example_name="eeg_jepa",
@@ -158,12 +161,14 @@ def run(
         split="train",
         n_windows=cfg.data.n_windows,
         window_size_seconds=cfg.data.window_size_seconds,
+        temporal_stride=temporal_stride,
         cfg=cfg.data,
     )
     val_set = JEPAMovieDataset(
         split="val",
         n_windows=cfg.data.n_windows,
         window_size_seconds=cfg.data.window_size_seconds,
+        temporal_stride=temporal_stride,
         eeg_norm_stats=train_set.get_eeg_norm_stats(),
         cfg=cfg.data,
     )
@@ -411,6 +416,7 @@ def run(
         split="test",
         n_windows=cfg.data.n_windows,
         window_size_seconds=cfg.data.window_size_seconds,
+        temporal_stride=temporal_stride,
         eeg_norm_stats=train_set.get_eeg_norm_stats(),
         cfg=cfg.data,
     )
