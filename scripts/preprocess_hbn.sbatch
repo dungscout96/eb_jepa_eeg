@@ -34,6 +34,8 @@ RELEASE=${HBN_RELEASE:-R1}
 
 # Save preprocessed data to projects filesystem
 export HBN_PREPROCESS_DIR="${HBN_PREPROCESS_DIR:-/projects/bbnv/kkokate/hbn_preprocessed}"
+# Cache raw downloads on /work/hdd (large quota)
+export HBN_CACHE_DIR="${HBN_CACHE_DIR:-/work/hdd/bbnv/kuntal/eegdash_cache}"
 
 echo "========================================"
 echo "Job ID:        $SLURM_JOB_ID"
