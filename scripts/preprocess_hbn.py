@@ -49,7 +49,7 @@ RELEASES = {
     "R6": "ds005510",
 }
 
-TASKS = ["ThePresent", "DespicableMe", "RestingState", "ContrastChangeDetection"]
+TASKS = ["ThePresent", "DespicableMe", "RestingState", "contrastChangeDetection"]
 
 
 # ---------------------------------------------------------------------------
