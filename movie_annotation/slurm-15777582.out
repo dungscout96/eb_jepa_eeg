@@ -1,0 +1,27 @@
+Device: cuda
+GPU: NVIDIA A40
+Loading models...
+Models loaded in 3.5s
+Movies to process: ['The_Present', 'despicable_me', 'diary_of_a_whimpy_kid', 'fun_with_fractals']
+
+Processing: The_Present (4878 frames, 24.00 fps)
+  Saved output/The_Present/features.parquet (4877 rows, 24 columns)
+  Saved output/The_Present/clip_embeddings.npz (shape: (4877, 512))
+  Finished The_Present in 785.2s
+
+Processing: despicable_me (4266 frames, 25.00 fps)
+  Saved output/despicable_me/features.parquet (4266 rows, 24 columns)
+  Saved output/despicable_me/clip_embeddings.npz (shape: (4266, 512))
+  Finished despicable_me in 656.3s
+
+Processing: diary_of_a_whimpy_kid (2816 frames, 23.98 fps)
+  Saved output/diary_of_a_whimpy_kid/features.parquet (2816 rows, 24 columns)
+  Saved output/diary_of_a_whimpy_kid/clip_embeddings.npz (shape: (2816, 512))
+  Finished diary_of_a_whimpy_kid in 453.7s
+
+Processing: fun_with_fractals (9096 frames, 29.97 fps)
+  Saved output/fun_with_fractals/features.parquet (9096 rows, 24 columns)
+  Saved output/fun_with_fractals/clip_embeddings.npz (shape: (9096, 512))
+  Finished fun_with_fractals in 1483.9s
+
+All done in 3379.1s

@@ -1,0 +1,25 @@
+[project]
+name = "movie-annotation"
+version = "0.1.0"
+description = "EEG-relevant visual feature annotation of movie frames"
+requires-python = ">=3.10"
+dependencies = [
+    "opencv-python-headless",
+    "numpy",
+    "pandas",
+    "scipy",
+    "torch",
+    "torchvision",
+    "transformers",
+    "Pillow",
+    "pyarrow",
+    "tqdm",
+    "timm",
+    "scenedetect>=0.6.7.1",
+    "transnetv2-pytorch>=1.0.5",
+]
+
+[tool.uv]
+find-links = [
+    "https://download.pytorch.org/whl/cu124",
+]

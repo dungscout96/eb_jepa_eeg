@@ -1,6 +1,7 @@
 """HBN (Healthy Brain Network) EEG dataset for self-supervised learning and movie probe tasks."""
 
 import logging
+import os
 from pathlib import Path
 
 import hydra
@@ -12,6 +13,7 @@ import torch
 from torch.utils.data import Dataset
 
 from braindecode.datasets import BaseConcatDataset  # noqa: F401
+from braindecode.datautil.serialization import load_concat_dataset
 from braindecode.preprocessing import (
     create_fixed_length_windows,
     create_windows_from_events,
@@ -26,7 +28,10 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-DATA_DIR = Path.home() / ".cache" / "eb_jepa" / "datasets" / "eegdash_cache"
+DATA_DIR = Path(
+    os.environ.get("HBN_CACHE_DIR",
+                   str(Path.home() / ".cache" / "eb_jepa" / "datasets" / "eegdash_cache"))
+)
 
 
 SPLIT_RELEASES = {
@@ -35,8 +40,8 @@ SPLIT_RELEASES = {
         "R3": "ds005507",  # 184 subjects
         "R4": "ds005508",  # 324 subjects
     },
-    "val": {"R1": "ds005505"}, # 136 subjects
-    "test": {"R6": "ds005510"}, # 134 subjects
+    "val": {"R1": "ds005505"},  # 136 subjects
+    "test": {"R6": "ds005510"},  # 134 subjects
 }
 
 DEFAULT_TASK = "ThePresent"
@@ -78,7 +83,6 @@ def _resolve_releases(split: str) -> dict:
             f"Invalid split '{split}'. Must be one of {list(SPLIT_RELEASES.keys())}."
         )
     return SPLIT_RELEASES[split]
-
 
 
 def get_movie_recording_duration(
@@ -141,20 +145,66 @@ def load_or_download(release, task=DEFAULT_TASK):
     """Load an EEGChallengeDataset from cache, downloading if necessary."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-    dataset_id = f"EEG2025r{release[1:]}mini"
+    dataset_id = f"EEG2025r{release[1:]}"
     data_dir = DATA_DIR / dataset_id
-    needs_download = not data_dir.exists() or not list(data_dir.glob("**/*.bdf"))
+    needs_download = not data_dir.exists() or not list(
+        data_dir.glob(f"**/sub-*task-{task}*.bdf")
+    )
 
     dataset = EEGChallengeDataset(
         cache_dir=DATA_DIR,
         release=release,
         download=needs_download,
         task=task,
-        mini=True,
+        mini=False,
     )
     if needs_download:
         dataset.download_all(n_jobs=-1)
+
+    # Remove stray files that download_all places outside subject dirs;
+    # these break the BIDS loader (missing 'subject' attribute).
+    for f in data_dir.glob("*.json"):
+        f.unlink()
+
     return dataset
+
+
+# Default directory for preprocessed data (override via HBN_PREPROCESS_DIR env var).
+PREPROCESSED_DIR = Path(
+    os.environ.get("HBN_PREPROCESS_DIR", str(PROJECT_ROOT / "data" / "hbn_preprocessed"))
+)
+
+
+def load_preprocessed(
+    release: str,
+    task: str,
+    preprocessed_dir: Path | None = None,
+) -> BaseConcatDataset:
+    """Load preprocessed EEG data saved by ``scripts/preprocess_hbn.py``.
+
+    Parameters
+    ----------
+    release : str
+        HBN release identifier (e.g. ``"R1"``).
+    task : str
+        EEG task name (e.g. ``"ThePresent"``).
+    preprocessed_dir : Path or None
+        Root directory of preprocessed data.  Defaults to :data:`PREPROCESSED_DIR`.
+
+    Returns
+    -------
+    BaseConcatDataset
+        Dataset loaded via braindecode serialization (preload=True).
+    """
+    if preprocessed_dir is None:
+        preprocessed_dir = PREPROCESSED_DIR
+    data_path = preprocessed_dir / release / task / "preprocessed"
+    if not data_path.exists():
+        raise FileNotFoundError(
+            f"Preprocessed data not found at {data_path}. "
+            f"Run `scripts/preprocess_hbn.py release={release} task={task}` first."
+        )
+    return load_concat_dataset(str(data_path), preload=True)
 
 
 # ---------------------------------------------------------------------------
@@ -164,19 +214,48 @@ def load_or_download(release, task=DEFAULT_TASK):
 
 class HBNDataset(Dataset):
     """Self-supervised EEG dataset: each item is a random crop of contiguous windows (WxCxT).
-    n_windows are contigously selected from a random start point in the recording.
+
+    n_windows are contiguously selected from a random start point in the recording.
     This resembles the memory constraint of video clip in JEPA.
-    More number of windows increases the memory requirement but also increases the temporal context available to the model.
+    More number of windows increases the memory requirement but also increases the
+    temporal context available to the model.
+
+    Parameters
+    ----------
+    split : str
+        One of ``"train"``, ``"val"``, ``"test"``.
+    n_windows : int
+        Number of contiguous windows per item.
+    window_size_seconds : float
+        Duration of each window in seconds.
+    task : str
+        EEG task name.
+    preprocessed : bool
+        If True, load from preprocessed data (requires prior run of
+        ``scripts/preprocess_hbn.py``).  Preprocessed data is at 200 Hz.
+    preprocessed_dir : Path or None
+        Override the default preprocessed data directory.
     """
 
-    def __init__(self, split="train", n_windows=16, window_size_seconds=2, task=DEFAULT_TASK):
+    def __init__(
+        self,
+        split="train",
+        n_windows=16,
+        window_size_seconds=2,
+        task=DEFAULT_TASK,
+        preprocessed=False,
+        preprocessed_dir=None,
+    ):
         releases = _resolve_releases(split)
         self.n_windows = n_windows
         self.window_size_seconds = window_size_seconds
 
         self.recordings = []
         for release, dataset_name in releases.items():
-            dataset = load_or_download(release, dataset_name, task=task)
+            if preprocessed:
+                dataset = load_preprocessed(release, task, preprocessed_dir)
+            else:
+                dataset = load_or_download(release, task=task)
             sfreq = dataset.datasets[0].raw.info["sfreq"]
             window_samples = int(window_size_seconds * sfreq)
             windowed_dataset = create_fixed_length_windows(
@@ -201,9 +280,11 @@ class HBNDataset(Dataset):
         ])
         return windows
 
+
 # ---------------------------------------------------------------------------
 # Movie-probe dataset
 # ---------------------------------------------------------------------------
+
 def _preload_movie_features(task: str) -> dict:
     """Load movie feature CSVs for the given task."""
     csv_path = MOVIE_METADATA[task]["feature_csv"]
@@ -264,6 +345,7 @@ def get_window_movie_metadata(
 
     return movie_features.iloc[frame_index].to_dict()
 
+
 class HBNMovieDataset(Dataset):
     """Supervised EEG dataset: each window is paired with movie features at its timestamp."""
 
@@ -273,7 +355,9 @@ class HBNMovieDataset(Dataset):
         window_size_seconds=2,
         task=DEFAULT_TASK,
         *,
-        cfg: DictConfig | dict
+        cfg: DictConfig | dict,
+        preprocessed: bool = False,
+        preprocessed_dir: Path | None = None,
     ):
         self.window_size_seconds = window_size_seconds
         self.task = task
@@ -282,10 +366,16 @@ class HBNMovieDataset(Dataset):
         self.visual_processing_delay_s = cfg.get("visual_processing_delay_s") if isinstance(cfg, dict) else cfg.visual_processing_delay_s
         releases = _resolve_releases(split)
 
-        data = BaseConcatDataset([
-            load_or_download(release, task=task)
-            for release, dataset_name in releases.items()
-        ])
+        if preprocessed:
+            data = BaseConcatDataset([
+                load_preprocessed(release, task, preprocessed_dir)
+                for release in releases
+            ])
+        else:
+            data = BaseConcatDataset([
+                load_or_download(release, task=task)
+                for release, dataset_name in releases.items()
+            ])
         sfreq = data.datasets[0].raw.info["sfreq"]
         self.sfreq = sfreq
 
@@ -370,6 +460,7 @@ class HBNMovieDataset(Dataset):
         features = self.labels[idx]
 
         return X.float(), features
+
 
 class JEPAMovieDataset(HBNMovieDataset):
     """JEPA-ready EEG dataset extending HBNMovieDataset.
@@ -508,11 +599,25 @@ class JEPAMovieDataset(HBNMovieDataset):
 
 
 class HBNMovieProbeDataset(HBNMovieDataset):
-    def __init__(self, split="train", window_size_seconds=2, task=DEFAULT_TASK, *, cfg: DictConfig | dict):
-        super().__init__(split, window_size_seconds, task, cfg=cfg)
+    def __init__(
+        self,
+        split="train",
+        window_size_seconds=2,
+        task=DEFAULT_TASK,
+        *,
+        cfg: DictConfig | dict,
+        preprocessed: bool = False,
+        preprocessed_dir: Path | None = None,
+    ):
+        super().__init__(
+            split, window_size_seconds, task,
+            cfg=cfg,
+            preprocessed=preprocessed,
+            preprocessed_dir=preprocessed_dir,
+        )
         self.data = [window[0] for window_ds in self.data for window in window_ds]
         self.labels = [label for labels_series in self.labels for label in labels_series]
-    
+
     def __len__(self):
         return len(self.data)
 
