@@ -85,33 +85,23 @@ class TestGetWindowMovieMetadata:
 
 
 class TestLoadOrDownload:
-    @patch.object(hbn, "EEGChallengeDataset")
-    def test_downloads_when_dir_missing(self, mock_dataset_cls, tmp_path):
+    @patch.object(hbn, "EEGDashDataset")
+    def test_loads_dataset(self, mock_dataset_cls, tmp_path):
         mock_dataset = MagicMock()
         mock_dataset_cls.return_value = mock_dataset
 
         with patch.object(hbn, "DATA_DIR", tmp_path):
-            hbn.load_or_download("R1", "ds005505")
+            result = hbn.load_or_download("R1")
 
-        mock_dataset_cls.assert_called_once()
-        mock_dataset.download_all.assert_called_once_with(n_jobs=-1)
+        mock_dataset_cls.assert_called_once_with(
+            cache_dir=tmp_path,
+            dataset="ds005505",
+        )
+        assert result is mock_dataset
 
-    @patch.object(hbn, "EEGChallengeDataset")
-    def test_skips_download_when_data_exists(self, mock_dataset_cls, tmp_path):
-        mock_dataset = MagicMock()
-        mock_dataset_cls.return_value = mock_dataset
-
-        data_dir = tmp_path / "EEG2025r1mini"
-        data_dir.mkdir()
-        (data_dir / "recording.bdf").touch()
-
-        with patch.object(hbn, "DATA_DIR", tmp_path):
-            hbn.load_or_download("R1", "ds005505")
-
-        mock_dataset_cls.assert_called_once()
-        _, kwargs = mock_dataset_cls.call_args
-        assert kwargs["download"] is False
-        mock_dataset.download_all.assert_not_called()
+    def test_unknown_release_raises(self):
+        with pytest.raises(ValueError, match="Unknown release"):
+            hbn.load_or_download("R99")
 
 
 class TestGetMovieRecordingDuration:

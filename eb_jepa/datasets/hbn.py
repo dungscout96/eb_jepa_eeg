@@ -18,7 +18,7 @@ from braindecode.preprocessing import (
     create_fixed_length_windows,
     create_windows_from_events,
 )
-from eegdash.dataset import EEGChallengeDataset
+from eegdash import EEGDashDataset
 
 logger = logging.getLogger(__name__)
 
@@ -141,30 +141,26 @@ def reject_recording(
     return False
 
 
+def _release_to_dataset_id(release: str) -> str:
+    """Look up the OpenNeuro dataset ID for a given release key."""
+    for split_releases in SPLIT_RELEASES.values():
+        if release in split_releases:
+            return split_releases[release]
+    raise ValueError(
+        f"Unknown release '{release}'. Known releases: "
+        f"{[r for splits in SPLIT_RELEASES.values() for r in splits]}"
+    )
+
+
 def load_or_download(release, task=DEFAULT_TASK):
-    """Load an EEGChallengeDataset from cache, downloading if necessary."""
+    """Load an EEGDashDataset from cache, downloading if necessary."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-    dataset_id = f"EEG2025r{release[1:]}"
-    data_dir = DATA_DIR / dataset_id
-    needs_download = not data_dir.exists() or not list(
-        data_dir.glob(f"**/sub-*task-{task}*.bdf")
-    )
-
-    dataset = EEGChallengeDataset(
+    dataset_id = _release_to_dataset_id(release)
+    dataset = EEGDashDataset(
         cache_dir=DATA_DIR,
-        release=release,
-        download=needs_download,
-        task=task,
-        mini=False,
+        dataset=dataset_id,
     )
-    if needs_download:
-        dataset.download_all(n_jobs=-1)
-
-    # Remove stray files that download_all places outside subject dirs;
-    # these break the BIDS loader (missing 'subject' attribute).
-    for f in data_dir.glob("*.json"):
-        f.unlink()
 
     return dataset
 
@@ -207,6 +203,33 @@ def load_preprocessed(
     return load_concat_dataset(str(data_path), preload=True)
 
 
+def _has_preprocessed(release: str, task: str, preprocessed_dir: Path | None = None) -> bool:
+    """Check if preprocessed data exists for a (release, task) combination."""
+    if preprocessed_dir is None:
+        preprocessed_dir = PREPROCESSED_DIR
+    return (preprocessed_dir / release / task / "preprocessed").exists()
+
+
+def _load_dataset(
+    release: str,
+    task: str,
+    preprocessed: bool = False,
+    preprocessed_dir: Path | None = None,
+) -> BaseConcatDataset:
+    """Load dataset for a (release, task), auto-detecting preprocessed data.
+
+    If *preprocessed* is True, forces loading from preprocessed directory
+    (raises if missing).  Otherwise, automatically uses preprocessed data
+    when available and falls back to downloading raw data.
+    """
+    if preprocessed:
+        return load_preprocessed(release, task, preprocessed_dir)
+    if _has_preprocessed(release, task, preprocessed_dir):
+        logger.info("Found preprocessed data for %s/%s, loading...", release, task)
+        return load_preprocessed(release, task, preprocessed_dir)
+    return load_or_download(release, task=task)
+
+
 # ---------------------------------------------------------------------------
 # Datasets
 # ---------------------------------------------------------------------------
@@ -228,11 +251,13 @@ class HBNDataset(Dataset):
         Number of contiguous windows per item.
     window_size_seconds : float
         Duration of each window in seconds.
-    task : str
-        EEG task name.
+    task : str or list[str]
+        EEG task name(s).  When a list is given, recordings from all tasks
+        are combined into a single dataset.
     preprocessed : bool
-        If True, load from preprocessed data (requires prior run of
-        ``scripts/preprocess_hbn.py``).  Preprocessed data is at 200 Hz.
+        If True, force loading from preprocessed data (error if missing).
+        If False (default), preprocessed data is used automatically when
+        available and raw data is downloaded otherwise.
     preprocessed_dir : Path or None
         Override the default preprocessed data directory.
     """
@@ -249,24 +274,23 @@ class HBNDataset(Dataset):
         releases = _resolve_releases(split)
         self.n_windows = n_windows
         self.window_size_seconds = window_size_seconds
+        tasks = [task] if isinstance(task, str) else list(task)
 
         self.recordings = []
-        for release, dataset_name in releases.items():
-            if preprocessed:
-                dataset = load_preprocessed(release, task, preprocessed_dir)
-            else:
-                dataset = load_or_download(release, task=task)
-            sfreq = dataset.datasets[0].raw.info["sfreq"]
-            window_samples = int(window_size_seconds * sfreq)
-            windowed_dataset = create_fixed_length_windows(
-                dataset,
-                window_size_samples=window_samples,
-                window_stride_samples=window_samples,
-                drop_last_window=True,
-            )
-            for recording_ds in windowed_dataset.datasets:
-                if len(recording_ds) >= n_windows:
-                    self.recordings.append(recording_ds)
+        for release in releases:
+            for t in tasks:
+                dataset = _load_dataset(release, t, preprocessed, preprocessed_dir)
+                sfreq = dataset.datasets[0].raw.info["sfreq"]
+                window_samples = int(window_size_seconds * sfreq)
+                windowed_dataset = create_fixed_length_windows(
+                    dataset,
+                    window_size_samples=window_samples,
+                    window_stride_samples=window_samples,
+                    drop_last_window=True,
+                )
+                for recording_ds in windowed_dataset.datasets:
+                    if len(recording_ds) >= n_windows:
+                        self.recordings.append(recording_ds)
 
     def __len__(self):
         return len(self.recordings)
@@ -360,86 +384,100 @@ class HBNMovieDataset(Dataset):
         preprocessed_dir: Path | None = None,
     ):
         self.window_size_seconds = window_size_seconds
-        self.task = task
-        self.movie_features = _preload_movie_features(task)
+        tasks = [task] if isinstance(task, str) else list(task)
+        self.tasks = tasks
+        self.task = tasks[0]  # primary task (backwards compat)
+        self.movie_features = {}
+        for t in tasks:
+            self.movie_features.update(_preload_movie_features(t))
         self.post_movie_visual_processing_s = cfg.get("post_movie_visual_processing_s") if isinstance(cfg, dict) else cfg.post_movie_visual_processing_s
         self.visual_processing_delay_s = cfg.get("visual_processing_delay_s") if isinstance(cfg, dict) else cfg.visual_processing_delay_s
         releases = _resolve_releases(split)
 
-        if preprocessed:
-            data = BaseConcatDataset([
-                load_preprocessed(release, task, preprocessed_dir)
-                for release in releases
-            ])
-        else:
-            data = BaseConcatDataset([
-                load_or_download(release, task=task)
-                for release, dataset_name in releases.items()
-            ])
-        sfreq = data.datasets[0].raw.info["sfreq"]
-        self.sfreq = sfreq
-
-        selected_recordings = []
-        rejected = 0
-        for recording_ds in data.datasets:
-            try:
-                raw = recording_ds.raw
-            except (ValueError, OSError) as exc:
-                logger.warning("Skipping unloadable recording %s: %s", recording_ds, exc)
-                rejected += 1
-                continue
-
-            for idx, ann in enumerate(raw.annotations):
-                if ann["description"] == "video_start":
-                    movie_recording_duration = get_movie_recording_duration(
-                        raw, movie=task,
-                        max_recording_overshoot_s=cfg.get("max_recording_overshoot_s") if isinstance(cfg, dict) else cfg.max_recording_overshoot_s,
-                    )
-                    movie_recording_duration = min(
-                        movie_recording_duration, MOVIE_METADATA[task]["duration"]
-                    )
-                    logger.info(
-                        "Setting 'video_start' duration to %.2fs for %s",
-                        movie_recording_duration, recording_ds,
-                    )
-                    raw.annotations.duration[idx] = movie_recording_duration
-
-            if reject_recording(
-                raw, movie=task,
-                annotation_duration_tolerance_s=cfg.get("annotation_duration_tolerance_s") if isinstance(cfg, dict) else cfg.annotation_duration_tolerance_s,
-                max_recording_overshoot_s=cfg.get("max_recording_overshoot_s") if isinstance(cfg, dict) else cfg.max_recording_overshoot_s,
-            ):
-                rejected += 1
-                continue
-            selected_recordings.append(recording_ds)
-
-        logger.info("Rejected %d/%d recordings", rejected, len(data.datasets))
-
-        # data = BaseConcatDataset(selected_recordings)
-        window_size_samples = int(window_size_seconds * sfreq)
-        visual_processing_delay = cfg.get("visual_processing_delay_s") if isinstance(cfg, dict) else cfg.visual_processing_delay_s
-        trial_stop_offset = cfg.get("trial_stop_offset_s") if isinstance(cfg, dict) else cfg.trial_stop_offset_s
-        trial_start_offset_samples = int(visual_processing_delay * sfreq)
-
+        self.sfreq = None
         self.data = []
         self.labels = []
-        for rec in selected_recordings:
-            # Offset the trial start by the visual processing delay so the first
-            # EEG window corresponds to the neural response to the first movie frame.
-            window_ds = create_windows_from_events(
-                BaseConcatDataset([rec]),
-                mapping={"video_start": 0},
-                trial_start_offset_samples=trial_start_offset_samples,
-                trial_stop_offset_samples=-int(trial_stop_offset * sfreq),
-                window_size_samples=window_size_samples,
-                window_stride_samples=window_size_samples,
-                drop_last_window=True,
-            )
-            self.data.append(window_ds)
+        total_recordings = 0
+        total_rejected = 0
 
-            window_onsets = window_ds.get_metadata().apply(lambda row: row["i_start_in_trial"], axis=1)
-            movie_features_for_windows = window_onsets.apply(self._get_movie_features_for_window)
-            self.labels.append(movie_features_for_windows)
+        for t in tasks:
+            # Load data for this task across all releases
+            datasets = []
+            for release in releases:
+                ds = _load_dataset(release, t, preprocessed, preprocessed_dir)
+                datasets.append(ds)
+            data = BaseConcatDataset(datasets)
+
+            if self.sfreq is None:
+                self.sfreq = data.datasets[0].raw.info["sfreq"]
+            sfreq = self.sfreq
+
+            selected_recordings = []
+            rejected = 0
+            for recording_ds in data.datasets:
+                try:
+                    raw = recording_ds.raw
+                except (ValueError, OSError) as exc:
+                    logger.warning("Skipping unloadable recording %s: %s", recording_ds, exc)
+                    rejected += 1
+                    continue
+
+                for idx, ann in enumerate(raw.annotations):
+                    if ann["description"] == "video_start":
+                        movie_recording_duration = get_movie_recording_duration(
+                            raw, movie=t,
+                            max_recording_overshoot_s=cfg.get("max_recording_overshoot_s") if isinstance(cfg, dict) else cfg.max_recording_overshoot_s,
+                        )
+                        movie_recording_duration = min(
+                            movie_recording_duration, MOVIE_METADATA[t]["duration"]
+                        )
+                        logger.info(
+                            "Setting 'video_start' duration to %.2fs for %s",
+                            movie_recording_duration, recording_ds,
+                        )
+                        raw.annotations.duration[idx] = movie_recording_duration
+
+                if reject_recording(
+                    raw, movie=t,
+                    annotation_duration_tolerance_s=cfg.get("annotation_duration_tolerance_s") if isinstance(cfg, dict) else cfg.annotation_duration_tolerance_s,
+                    max_recording_overshoot_s=cfg.get("max_recording_overshoot_s") if isinstance(cfg, dict) else cfg.max_recording_overshoot_s,
+                ):
+                    rejected += 1
+                    continue
+                selected_recordings.append(recording_ds)
+
+            total_recordings += len(data.datasets)
+            total_rejected += rejected
+            logger.info("Task %s: rejected %d/%d recordings", t, rejected, len(data.datasets))
+
+            window_size_samples = int(window_size_seconds * sfreq)
+            visual_processing_delay = cfg.get("visual_processing_delay_s") if isinstance(cfg, dict) else cfg.visual_processing_delay_s
+            trial_stop_offset = cfg.get("trial_stop_offset_s") if isinstance(cfg, dict) else cfg.trial_stop_offset_s
+            trial_start_offset_samples = int(visual_processing_delay * sfreq)
+
+            # Temporarily set self.task for _get_movie_features_for_window
+            self.task = t
+            for rec in selected_recordings:
+                # Offset the trial start by the visual processing delay so the first
+                # EEG window corresponds to the neural response to the first movie frame.
+                window_ds = create_windows_from_events(
+                    BaseConcatDataset([rec]),
+                    mapping={"video_start": 0},
+                    trial_start_offset_samples=trial_start_offset_samples,
+                    trial_stop_offset_samples=-int(trial_stop_offset * sfreq),
+                    window_size_samples=window_size_samples,
+                    window_stride_samples=window_size_samples,
+                    drop_last_window=True,
+                )
+                self.data.append(window_ds)
+
+                window_onsets = window_ds.get_metadata().apply(lambda row: row["i_start_in_trial"], axis=1)
+                movie_features_for_windows = window_onsets.apply(self._get_movie_features_for_window)
+                self.labels.append(movie_features_for_windows)
+
+        self.task = tasks[0]  # reset to primary task
+        logger.info("Total: rejected %d/%d recordings across %d task(s)",
+                     total_rejected, total_recordings, len(tasks))
 
     def _get_movie_features_for_window(self, window_onset) -> dict:
         return get_window_movie_metadata(
