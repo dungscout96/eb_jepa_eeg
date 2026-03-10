@@ -1,21 +1,20 @@
 #!/bin/bash
 #SBATCH --job-name=hbn_preprocess
-#SBATCH --account=bbnv-delta-gpu
-#SBATCH --partition=gpuA40x4
+#SBATCH --account=csd403
+#SBATCH --partition=compute
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
-#SBATCH --gpus-per-task=1
-#SBATCH --mem=64G
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=200G
 #SBATCH --time=12:00:00
 #SBATCH --output=logs/preprocess_%A_%a.out
 #SBATCH --error=logs/preprocess_%A_%a.err
-#SBATCH --array=0-3
+#SBATCH --array=0-2
 # ---------------------------------------------------------------
-# HBN EEG Preprocessing on Delta (NCSA)
+# HBN EEG Preprocessing on Expanse (SDSC)
 #
 # Submits a SLURM array job that processes Release 1 for each of
-# the four prioritized tasks in parallel.
+# the three prioritized tasks in parallel.
 #
 # Usage:
 #   mkdir -p logs
@@ -28,14 +27,14 @@
 set -euo pipefail
 
 # --- Configuration ---
-TASKS=("ThePresent" "DespicableMe" "RestingState" "contrastChangeDetection")
+TASKS=("ThePresent" "DespicableMe" "RestingState")
 TASK=${TASKS[$SLURM_ARRAY_TASK_ID]}
 RELEASE=${HBN_RELEASE:-R1}
 
 # Save preprocessed data to projects filesystem
-export HBN_PREPROCESS_DIR="${HBN_PREPROCESS_DIR:-/projects/bbnv/kkokate/hbn_preprocessed}"
-# Cache raw downloads on /work/hdd (large quota)
-export HBN_CACHE_DIR="${HBN_CACHE_DIR:-/work/hdd/bbnv/kuntal/eegdash_cache}"
+export HBN_PREPROCESS_DIR="${HBN_PREPROCESS_DIR:-/expanse/projects/nemar/dtyoung/.cache/eb_jepa_eeg/hbn_preprocessed}"
+export HBN_CACHE_DIR="${HBN_CACHE_DIR:-/expanse/projects/nemar/openneuro}"
+export UV_LINK_MODE=copy
 
 echo "========================================"
 echo "Job ID:        $SLURM_JOB_ID"
@@ -43,15 +42,12 @@ echo "Array Task ID: $SLURM_ARRAY_TASK_ID"
 echo "Release:       $RELEASE"
 echo "Task:          $TASK"
 echo "Output dir:    $HBN_PREPROCESS_DIR"
+echo "Cache dir:     $HBN_CACHE_DIR"
 echo "========================================"
 
-cd "$SLURM_SUBMIT_DIR"
+cd /expanse/projects/nemar/dtyoung/eb_jepa_eeg
 
-# Load conda and activate environment
-module reset
-module load miniforge3-python
-eval "$(conda shell.bash hook)"
-conda activate eb_jepa
+export PATH=/home/dtyoung/.local/bin:$PATH
 
 uv run --group eeg scripts/preprocess_hbn.py \
     release="$RELEASE" \

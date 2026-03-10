@@ -23,6 +23,32 @@ import sys
 import time
 from pathlib import Path
 
+# Prevent mne_bids from creating .lock files in read-only data directories.
+# Monkeypatch filelock.FileLock so all callers get a no-op lock.
+import filelock as _filelock
+
+
+class _NoOpFileLock:
+    """Drop-in replacement for filelock.FileLock that never touches the filesystem."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+    def acquire(self, *args, **kwargs):
+        pass
+
+    def release(self, *args, **kwargs):
+        pass
+
+
+_filelock.FileLock = _NoOpFileLock  # type: ignore[misc]
+
 import hydra
 import mne
 import numpy as np
@@ -57,6 +83,22 @@ TASKS = ["ThePresent", "DespicableMe", "RestingState", "contrastChangeDetection"
 # ---------------------------------------------------------------------------
 
 
+def _get_duration_from_sidecar(ds) -> float | None:
+    """Try to read RecordingDuration from the BIDS JSON sidecar without loading raw."""
+    try:
+        sidecar = ds.bidspath.copy().update(suffix=ds.bidspath.suffix, extension=".json")
+        sidecar_path = sidecar.fpath
+        if sidecar_path.exists():
+            import json as _json
+
+            with open(sidecar_path) as f:
+                meta = _json.load(f)
+            return meta.get("RecordingDuration")
+    except Exception:
+        pass
+    return None
+
+
 def reject_short_recordings(
     dataset: BaseConcatDataset,
     min_duration_s: float,
@@ -67,9 +109,16 @@ def reject_short_recordings(
     """
     kept = []
     rejected = 0
-    for ds in dataset.datasets:
+    total = len(dataset.datasets)
+    for i, ds in enumerate(dataset.datasets):
+        if (i + 1) % 100 == 0 or i == 0:
+            logger.info("Checking recording %d / %d ...", i + 1, total)
         try:
-            duration = ds.raw.times[-1]
+            # Fast path: read duration from BIDS JSON sidecar
+            duration = _get_duration_from_sidecar(ds)
+            if duration is None:
+                # Fallback: load raw data
+                duration = ds.raw.times[-1]
         except (ValueError, OSError) as exc:
             logger.warning("Skipping unloadable recording: %s", exc)
             rejected += 1
