@@ -55,6 +55,7 @@ import numpy as np
 from omegaconf import DictConfig, OmegaConf
 
 from braindecode.datasets import BaseConcatDataset
+from braindecode.datautil.serialization import load_concat_dataset
 from braindecode.preprocessing import Preprocessor, preprocess
 
 # Ensure project root is on sys.path so eb_jepa imports work.
@@ -298,8 +299,18 @@ def run_pass2(
 # ---------------------------------------------------------------------------
 
 
+def _has_saved_datasets(directory: Path) -> bool:
+    """Check if *directory* contains braindecode-saved datasets (numbered subdirs with .fif files)."""
+    if not directory.is_dir():
+        return False
+    return any(directory.glob("*/*-raw.fif"))
+
+
 def process_release_task(release: str, task: str, cfg: DictConfig) -> dict:
     """Run the full two-pass preprocessing pipeline for one (release, task).
+
+    Skips pass 1 if intermediate files already exist, and skips pass 2 if
+    final preprocessed files already exist.
 
     Returns a summary dict with recording counts and timing.
     """
@@ -307,47 +318,86 @@ def process_release_task(release: str, task: str, cfg: DictConfig) -> dict:
     intermediate_dir = output_base / release / task / "intermediate"
     final_dir = output_base / release / task / "preprocessed"
     meta_dir = output_base / release / task
+    stats_path = meta_dir / "normalization_stats.npz"
 
-    # --- Download / load raw data ---
-    logger.info("Loading release=%s, task=%s ...", release, task)
-    dataset = load_or_download(release, task=task)
-    total_recordings = len(dataset.datasets)
-    logger.info("Loaded %d recordings", total_recordings)
-
-    # --- Step 1: Reject short recordings ---
-    dataset, n_rejected = reject_short_recordings(dataset, cfg.min_duration_s)
-
-    summary = {
-        "release": release,
-        "task": task,
-        "total_recordings": total_recordings,
-        "rejected_short": n_rejected,
-        "kept": len(dataset.datasets),
-    }
-
-    if len(dataset.datasets) == 0:
-        logger.warning("No recordings left after rejection — nothing to process.")
+    # --- Check if pass 2 output already exists (fully done) ---
+    if _has_saved_datasets(final_dir):
+        logger.info(
+            "Final preprocessed data already exists at %s — skipping entirely.",
+            final_dir,
+        )
+        dataset = load_concat_dataset(str(final_dir), preload=False)
+        summary = {
+            "release": release,
+            "task": task,
+            "kept": len(dataset.datasets),
+            "skipped": "all (final output exists)",
+        }
+        if stats_path.exists():
+            s = np.load(stats_path)
+            summary["normalization"] = {
+                "n_samples": int(s["n_samples"]),
+                "n_recordings": int(s["n_recordings"]),
+                "mean_range": [float(s["mean"].min()), float(s["mean"].max())],
+                "std_range": [float(s["std"].min()), float(s["std"].max())],
+            }
         return summary
 
-    # --- Pass 1: Resample, filter, float32 ---
-    logger.info("Pass 1: resample (%.0f Hz), filter (%.1f–%.1f Hz), float32 ...",
-                cfg.target_sfreq, cfg.l_freq, cfg.h_freq)
-    t0 = time.time()
-    dataset = run_pass1(
-        dataset,
-        intermediate_dir,
-        target_sfreq=cfg.target_sfreq,
-        l_freq=cfg.l_freq,
-        h_freq=cfg.h_freq,
-    )
-    summary["pass1_elapsed_s"] = round(time.time() - t0, 1)
-    logger.info("Pass 1 complete in %.1fs", summary["pass1_elapsed_s"])
+    # --- Check if pass 1 output already exists ---
+    if _has_saved_datasets(intermediate_dir):
+        logger.info(
+            "Intermediate data found at %s — skipping pass 1.", intermediate_dir
+        )
+        dataset = load_concat_dataset(str(intermediate_dir), preload=False)
+        logger.info("Loaded %d recordings from intermediate cache", len(dataset.datasets))
+
+        summary = {
+            "release": release,
+            "task": task,
+            "kept": len(dataset.datasets),
+            "pass1_elapsed_s": 0,
+            "skipped_pass1": True,
+        }
+    else:
+        # --- Download / load raw data ---
+        logger.info("Loading release=%s, task=%s ...", release, task)
+        dataset = load_or_download(release, task=task)
+        total_recordings = len(dataset.datasets)
+        logger.info("Loaded %d recordings", total_recordings)
+
+        # --- Step 1: Reject short recordings ---
+        dataset, n_rejected = reject_short_recordings(dataset, cfg.min_duration_s)
+
+        summary = {
+            "release": release,
+            "task": task,
+            "total_recordings": total_recordings,
+            "rejected_short": n_rejected,
+            "kept": len(dataset.datasets),
+        }
+
+        if len(dataset.datasets) == 0:
+            logger.warning("No recordings left after rejection — nothing to process.")
+            return summary
+
+        # --- Pass 1: Resample, filter, float32 ---
+        logger.info("Pass 1: resample (%.0f Hz), filter (%.1f–%.1f Hz), float32 ...",
+                    cfg.target_sfreq, cfg.l_freq, cfg.h_freq)
+        t0 = time.time()
+        dataset = run_pass1(
+            dataset,
+            intermediate_dir,
+            target_sfreq=cfg.target_sfreq,
+            l_freq=cfg.l_freq,
+            h_freq=cfg.h_freq,
+        )
+        summary["pass1_elapsed_s"] = round(time.time() - t0, 1)
+        logger.info("Pass 1 complete in %.1fs", summary["pass1_elapsed_s"])
 
     # --- Compute normalization stats ---
     logger.info("Computing per-channel normalization statistics ...")
     stats = compute_channel_stats(dataset)
 
-    stats_path = meta_dir / "normalization_stats.npz"
     stats_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez(
         stats_path,
