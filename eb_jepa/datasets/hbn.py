@@ -1,9 +1,11 @@
 """HBN (Healthy Brain Network) EEG dataset for self-supervised learning and movie probe tasks."""
 
+import gc
 import logging
 import os
 from pathlib import Path
 
+import numpy as np
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
@@ -124,7 +126,7 @@ def reject_recording(
     """
     events, event_id = mne.events_from_annotations(raw)
     if "video_start" not in event_id or "video_stop" not in event_id:
-        logger.warning("Recording missing 'video_start' or 'video_stop' annotations: %s", raw)
+        logger.debug("Recording missing 'video_start' or 'video_stop' annotations: %s", raw)
         return True
 
     duration_seconds = get_movie_recording_duration(
@@ -132,7 +134,7 @@ def reject_recording(
     )
     min_duration = MOVIE_METADATA[movie]["duration"] - annotation_duration_tolerance_s
     if duration_seconds < min_duration:
-        logger.warning(
+        logger.debug(
             "Recording duration %.1fs is shorter than expected minimum %.1fs for movie '%s'",
             duration_seconds, min_duration, movie
         )
@@ -175,6 +177,7 @@ def load_preprocessed(
     release: str,
     task: str,
     preprocessed_dir: Path | None = None,
+    preload: bool = False,
 ) -> BaseConcatDataset:
     """Load preprocessed EEG data saved by ``scripts/preprocess_hbn.py``.
 
@@ -186,11 +189,14 @@ def load_preprocessed(
         EEG task name (e.g. ``"ThePresent"``).
     preprocessed_dir : Path or None
         Root directory of preprocessed data.  Defaults to :data:`PREPROCESSED_DIR`.
+    preload : bool
+        If True, load all data into memory.  If False (default), use
+        memory-mapped access for lower memory usage.
 
     Returns
     -------
     BaseConcatDataset
-        Dataset loaded via braindecode serialization (preload=True).
+        Dataset loaded via braindecode serialization.
     """
     if preprocessed_dir is None:
         preprocessed_dir = PREPROCESSED_DIR
@@ -200,7 +206,7 @@ def load_preprocessed(
             f"Preprocessed data not found at {data_path}. "
             f"Run `scripts/preprocess_hbn.py release={release} task={task}` first."
         )
-    return load_concat_dataset(str(data_path), preload=True)
+    return load_concat_dataset(str(data_path), preload=preload)
 
 
 def _has_preprocessed(release: str, task: str, preprocessed_dir: Path | None = None) -> bool:
@@ -215,6 +221,7 @@ def _load_dataset(
     task: str,
     preprocessed: bool = False,
     preprocessed_dir: Path | None = None,
+    preload: bool = False,
 ) -> BaseConcatDataset:
     """Load dataset for a (release, task), auto-detecting preprocessed data.
 
@@ -223,10 +230,10 @@ def _load_dataset(
     when available and falls back to downloading raw data.
     """
     if preprocessed:
-        return load_preprocessed(release, task, preprocessed_dir)
+        return load_preprocessed(release, task, preprocessed_dir, preload=preload)
     if _has_preprocessed(release, task, preprocessed_dir):
         logger.info("Found preprocessed data for %s/%s, loading...", release, task)
-        return load_preprocessed(release, task, preprocessed_dir)
+        return load_preprocessed(release, task, preprocessed_dir, preload=preload)
     return load_or_download(release, task=task)
 
 
@@ -269,17 +276,20 @@ class HBNDataset(Dataset):
         window_size_seconds=2,
         task=DEFAULT_TASK,
         preprocessed=False,
-        preprocessed_dir=None,
+        preprocessed_dir: Path | str | None = None,
     ):
         releases = _resolve_releases(split)
         self.n_windows = n_windows
         self.window_size_seconds = window_size_seconds
         tasks = [task] if isinstance(task, str) else list(task)
 
-        self.recordings = []
+        preprocessed_dir = Path(preprocessed_dir) if preprocessed_dir is not None else None
+
+        self._fif_paths = []
+        self._crop_inds = []
         for release in releases:
             for t in tasks:
-                dataset = _load_dataset(release, t, preprocessed, preprocessed_dir)
+                dataset = _load_dataset(release, t, preprocessed, preprocessed_dir, preload=False)
                 sfreq = dataset.datasets[0].raw.info["sfreq"]
                 window_samples = int(window_size_seconds * sfreq)
                 windowed_dataset = create_fixed_length_windows(
@@ -290,19 +300,31 @@ class HBNDataset(Dataset):
                 )
                 for recording_ds in windowed_dataset.datasets:
                     if len(recording_ds) >= n_windows:
-                        self.recordings.append(recording_ds)
+                        fif_path = str(recording_ds.raw.filenames[0])
+                        crop_inds = recording_ds.crop_inds.copy()
+                        self._fif_paths.append(fif_path)
+                        self._crop_inds.append(crop_inds)
+                    recording_ds.raw.close()
+                # Close Raw handles from original dataset too
+                for ds in dataset.datasets:
+                    try:
+                        ds.raw.close()
+                    except Exception:
+                        pass
+                del windowed_dataset, dataset
+        gc.collect()
 
     def __len__(self):
-        return len(self.recordings)
+        return len(self._fif_paths)
 
     def __getitem__(self, idx):
-        recording = self.recordings[idx]
-        start = torch.randint(0, len(recording) - self.n_windows + 1, (1,)).item()
-        windows = torch.stack([
-            torch.from_numpy(recording[start + i][0])
-            for i in range(self.n_windows)
-        ])
-        return windows
+        crop_inds = self._crop_inds[idx]
+        start = torch.randint(0, len(crop_inds) - self.n_windows + 1, (1,)).item()
+        X = _read_raw_windows(
+            self._fif_paths[idx],
+            crop_inds[start:start + self.n_windows],
+        )
+        return torch.from_numpy(X)
 
 
 # ---------------------------------------------------------------------------
@@ -358,20 +380,52 @@ def get_window_movie_metadata(
     # Clamp to valid range (negative indices can occur when onset < delay).
     frame_index = max(0, frame_index)
 
-    # Clamp frames that fall past the movie end but within the visual-processing
-    # tolerance window (viewers still process the last frame briefly after it ends).
+    # Clamp frames that fall past the movie end.  Windows near the end of the
+    # movie may overshoot slightly due to annotation imprecision or the visual
+    # processing delay; always clamp to the last available frame.
     if frame_index >= len(movie_features):
-        max_overshoot_frames = int(
-            MOVIE_METADATA[movie]["fps"] * post_movie_visual_processing_s
-        )
-        if (frame_index - MOVIE_METADATA[movie]["frame_count"]) < max_overshoot_frames:
-            frame_index = len(movie_features) - 1
+        frame_index = len(movie_features) - 1
 
     return movie_features.iloc[frame_index].to_dict()
 
 
+def _read_raw_windows(fif_path, crop_inds):
+    """Read multiple windows from a FIF file by absolute sample indices.
+
+    Opens the file with memory-mapping, reads the requested slices, and
+    releases the Raw object so no file handles or mmap state persist.
+
+    Parameters
+    ----------
+    fif_path : str
+        Path to the ``-raw.fif`` file.
+    crop_inds : array-like of shape (n_windows, 3)
+        Each row is ``(i_window_in_trial, i_start, i_stop)`` with absolute
+        sample indices (as stored by braindecode ``EEGWindowsDataset``).
+
+    Returns
+    -------
+    np.ndarray of shape (n_windows, n_channels, n_times)
+    """
+    raw = mne.io.read_raw_fif(fif_path, preload=False, verbose=False)
+    windows = []
+    for _, i_start, i_stop in crop_inds:
+        data = raw._getitem(
+            (slice(None), slice(int(i_start), int(i_stop))),
+            return_times=False,
+        )
+        windows.append(data)
+    del raw
+    return np.stack(windows).astype("float32")
+
+
 class HBNMovieDataset(Dataset):
-    """Supervised EEG dataset: each window is paired with movie features at its timestamp."""
+    """Supervised EEG dataset: each window is paired with movie features at its timestamp.
+
+    Only lightweight metadata (FIF file paths, sample indices, labels) is kept
+    in memory.  EEG data is read on-demand from memory-mapped FIF files in
+    ``__getitem__``.
+    """
 
     def __init__(
         self,
@@ -381,7 +435,7 @@ class HBNMovieDataset(Dataset):
         *,
         cfg: DictConfig | dict,
         preprocessed: bool = False,
-        preprocessed_dir: Path | None = None,
+        preprocessed_dir: Path | str | None = None,
     ):
         self.window_size_seconds = window_size_seconds
         tasks = [task] if isinstance(task, str) else list(task)
@@ -395,16 +449,20 @@ class HBNMovieDataset(Dataset):
         releases = _resolve_releases(split)
 
         self.sfreq = None
-        self.data = []
-        self.labels = []
+        # Lightweight storage: file paths + absolute sample indices per recording
+        self._fif_paths = []       # str per recording
+        self._crop_inds = []       # np.ndarray (n_windows, 3) per recording
+        self.labels = []           # pd.Series per recording
         total_recordings = 0
         total_rejected = 0
 
+        preprocessed_dir = Path(preprocessed_dir) if preprocessed_dir is not None else None
         for t in tasks:
-            # Load data for this task across all releases
+            # Load data for this task across all releases.
+            # preload=False so Raw objects use memory-mapping.
             datasets = []
             for release in releases:
-                ds = _load_dataset(release, t, preprocessed, preprocessed_dir)
+                ds = _load_dataset(release, t, preprocessed, preprocessed_dir, preload=False)
                 datasets.append(ds)
             data = BaseConcatDataset(datasets)
 
@@ -418,7 +476,15 @@ class HBNMovieDataset(Dataset):
                 try:
                     raw = recording_ds.raw
                 except (ValueError, OSError) as exc:
-                    logger.warning("Skipping unloadable recording %s: %s", recording_ds, exc)
+                    logger.debug("Skipping unloadable recording %s: %s", recording_ds, exc)
+                    rejected += 1
+                    continue
+
+                if reject_recording(
+                    raw, movie=t,
+                    annotation_duration_tolerance_s=cfg.get("annotation_duration_tolerance_s") if isinstance(cfg, dict) else cfg.annotation_duration_tolerance_s,
+                    max_recording_overshoot_s=cfg.get("max_recording_overshoot_s") if isinstance(cfg, dict) else cfg.max_recording_overshoot_s,
+                ):
                     rejected += 1
                     continue
 
@@ -431,19 +497,12 @@ class HBNMovieDataset(Dataset):
                         movie_recording_duration = min(
                             movie_recording_duration, MOVIE_METADATA[t]["duration"]
                         )
-                        logger.info(
+                        logger.debug(
                             "Setting 'video_start' duration to %.2fs for %s",
                             movie_recording_duration, recording_ds,
                         )
                         raw.annotations.duration[idx] = movie_recording_duration
 
-                if reject_recording(
-                    raw, movie=t,
-                    annotation_duration_tolerance_s=cfg.get("annotation_duration_tolerance_s") if isinstance(cfg, dict) else cfg.annotation_duration_tolerance_s,
-                    max_recording_overshoot_s=cfg.get("max_recording_overshoot_s") if isinstance(cfg, dict) else cfg.max_recording_overshoot_s,
-                ):
-                    rejected += 1
-                    continue
                 selected_recordings.append(recording_ds)
 
             total_recordings += len(data.datasets)
@@ -458,8 +517,13 @@ class HBNMovieDataset(Dataset):
             # Temporarily set self.task for _get_movie_features_for_window
             self.task = t
             for rec in selected_recordings:
-                # Offset the trial start by the visual processing delay so the first
-                # EEG window corresponds to the neural response to the first movie frame.
+                fif_path = str(rec.raw.filenames[0])
+
+                # Get the video_start event sample so we can convert absolute
+                # braindecode indices to onsets relative to the movie start.
+                events, event_id = mne.events_from_annotations(rec.raw, verbose=False)
+                video_start_sample = events[events[:, 2] == event_id["video_start"]][0, 0]
+
                 window_ds = create_windows_from_events(
                     BaseConcatDataset([rec]),
                     mapping={"video_start": 0},
@@ -468,14 +532,38 @@ class HBNMovieDataset(Dataset):
                     window_size_samples=window_size_samples,
                     window_stride_samples=window_size_samples,
                     drop_last_window=True,
+                    preload=False,
                 )
-                self.data.append(window_ds)
 
-                window_onsets = window_ds.get_metadata().apply(lambda row: row["i_start_in_trial"], axis=1)
+                # Extract lightweight metadata and discard braindecode objects
+                wds = window_ds.datasets[0]
+                crop_inds = wds.crop_inds.copy()  # np.ndarray (n_windows, 3)
+
+                # braindecode's i_start_in_trial uses absolute sample indices;
+                # get_window_movie_metadata expects onsets relative to video_start.
+                abs_onsets = window_ds.get_metadata()["i_start_in_trial"]
+                window_onsets = abs_onsets - video_start_sample
                 movie_features_for_windows = window_onsets.apply(self._get_movie_features_for_window)
+
+                self._fif_paths.append(fif_path)
+                self._crop_inds.append(crop_inds)
                 self.labels.append(movie_features_for_windows)
 
+                # Explicitly close Raw file handles before moving on
+                rec.raw.close()
+                del window_ds, wds
+
+            # Close any remaining Raw handles from rejected recordings
+            for ds in data.datasets:
+                try:
+                    ds.raw.close()
+                except Exception:
+                    pass
+            del data, datasets, selected_recordings
+
         self.task = tasks[0]  # reset to primary task
+        # Force cleanup of any remaining MNE/mmap objects before returning
+        gc.collect()
         logger.info("Total: rejected %d/%d recordings across %d task(s)",
                      total_rejected, total_recordings, len(tasks))
 
@@ -490,23 +578,21 @@ class HBNMovieDataset(Dataset):
         )
 
     def __len__(self):
-        return len(self.data)
+        return len(self._fif_paths)
 
     def __getitem__(self, idx):
-        window_ds = self.data[idx]
-        X = torch.stack([torch.from_numpy(window_ds[i][0]) for i in range(len(window_ds))])
+        X = _read_raw_windows(self._fif_paths[idx], self._crop_inds[idx])
         features = self.labels[idx]
-
-        return X.float(), features
+        return torch.from_numpy(X), features
 
 
 class JEPAMovieDataset(HBNMovieDataset):
     """JEPA-ready EEG dataset extending HBNMovieDataset.
 
-    Pre-extracts EEG windows and movie features into tensors, then returns
-    fixed-length contiguous chunks.  Each ``__getitem__`` randomly crops a
-    chunk of ``n_windows`` consecutive windows from one recording, so every
-    epoch sees different temporal slices.
+    Lazily loads EEG windows from memory-mapped FIF files on demand, keeping
+    only file paths, sample indices, and movie feature tensors in memory.
+    Each ``__getitem__`` randomly crops ``n_windows`` consecutive windows from
+    one recording, so every epoch sees different temporal slices.
     """
 
     DEFAULT_FEATURES = [
@@ -532,32 +618,26 @@ class JEPAMovieDataset(HBNMovieDataset):
         self.n_windows = n_windows
         self.temporal_stride = temporal_stride
         self.feature_names = feature_names or self.DEFAULT_FEATURES
-        self._precompute_tensors(eeg_norm_stats=eeg_norm_stats)
 
-    def _precompute_tensors(self, eeg_norm_stats=None):
-        """Convert braindecode windows and feature dicts into tensors.
+        required_windows = (n_windows - 1) * temporal_stride + 1
 
-        Args:
-            eeg_norm_stats: Optional dict with 'mean' and 'std' tensors for
-                EEG normalization. If None, stats are computed from this dataset.
-                Pass train set stats when building val/test sets.
-        """
-        eeg_recordings = []
-        feature_recordings = []
+        # Filter recordings with enough windows and pre-extract feature tensors.
+        # Parent already stored _fif_paths, _crop_inds, labels (all lightweight).
+        filtered_paths = []
+        filtered_crops = []
+        self.feature_recordings = []
+        self._n_chans = None
+        self._n_times = None
 
-        for rec_idx in range(len(self.data)):
-            window_ds = self.data[rec_idx]
+        for rec_idx in range(len(self._fif_paths)):
+            crop_inds = self._crop_inds[rec_idx]
             labels = self.labels[rec_idx]
-            n_win = len(window_ds)
+            n_win = len(crop_inds)
 
-            required_windows = (self.n_windows - 1) * self.temporal_stride + 1
             if n_win < required_windows:
                 continue
 
-            eeg = torch.stack(
-                [torch.from_numpy(window_ds[i][0]) for i in range(n_win)]
-            ).float()  # [n_win, C, W]
-
+            # Extract feature tensor (small: n_win x n_features floats)
             feats = []
             for i in range(n_win):
                 d = labels.iloc[i]
@@ -565,43 +645,79 @@ class JEPAMovieDataset(HBNMovieDataset):
             feats = torch.tensor(feats, dtype=torch.float32)
             feats = torch.nan_to_num(feats, nan=0.0)
 
-            eeg_recordings.append(eeg)
-            feature_recordings.append(feats)
+            filtered_paths.append(self._fif_paths[rec_idx])
+            filtered_crops.append(crop_inds)
+            self.feature_recordings.append(feats)
 
-        # Per-channel z-normalization of EEG data
+            # Capture shape from first valid recording (one cheap read)
+            if self._n_chans is None:
+                sample = _read_raw_windows(
+                    self._fif_paths[rec_idx], crop_inds[:1]
+                )
+                self._n_chans = sample.shape[1]
+                self._n_times = sample.shape[2]
+
+        # Replace parent's storage with filtered set
+        self._fif_paths = filtered_paths
+        self._crop_inds = filtered_crops
+        del self.labels  # labels are now in feature_recordings
+
+        # Compute or set per-channel normalization stats
         if eeg_norm_stats is not None:
             self._eeg_mean = eeg_norm_stats["mean"]
             self._eeg_std = eeg_norm_stats["std"]
         else:
-            all_eeg = torch.cat(eeg_recordings, dim=0)  # [total_windows, C, W]
-            self._eeg_mean = all_eeg.mean(dim=(0, 2), keepdim=True)  # [1, C, 1]
-            self._eeg_std = all_eeg.std(dim=(0, 2), keepdim=True)    # [1, C, 1]
-            self._eeg_std = torch.clamp(self._eeg_std, min=1e-8)
-        for i in range(len(eeg_recordings)):
-            eeg_recordings[i] = (eeg_recordings[i] - self._eeg_mean) / self._eeg_std
+            self._compute_norm_stats()
 
-        self.eeg_recordings = eeg_recordings
-        self.feature_recordings = feature_recordings
         logger.info(
-            "JEPAMovieDataset: %d recordings with >= %d windows (stride=%d, effective span=%.1fs, EEG z-normalized per channel)",
-            len(self.eeg_recordings),
+            "JEPAMovieDataset: %d recordings with >= %d windows "
+            "(stride=%d, effective span=%.1fs, lazy loading, EEG z-normalized per channel)",
+            len(self._fif_paths),
             required_windows,
             self.temporal_stride,
             self.n_windows * self.temporal_stride * self.window_size_seconds,
         )
 
+    def _compute_norm_stats(self):
+        """Compute per-channel mean/std by streaming one recording at a time.
+
+        Uses running sums so only O(n_channels) memory is needed regardless
+        of dataset size.  Each recording's FIF file is opened, read in full,
+        and closed before moving to the next.
+        """
+        channel_sum = None
+        channel_sum_sq = None
+        total_timepoints = 0
+
+        for fif_path, crop_inds in zip(self._fif_paths, self._crop_inds):
+            # Read all windows for this recording at once (one file open)
+            windows = _read_raw_windows(fif_path, crop_inds)  # (n_win, C, T)
+            x = torch.from_numpy(windows).double()
+            if channel_sum is None:
+                n_ch = x.shape[1]
+                channel_sum = torch.zeros(n_ch, dtype=torch.float64)
+                channel_sum_sq = torch.zeros(n_ch, dtype=torch.float64)
+            channel_sum += x.sum(dim=(0, 2))
+            channel_sum_sq += (x ** 2).sum(dim=(0, 2))
+            total_timepoints += x.shape[0] * x.shape[2]
+            del windows, x  # free before next recording
+
+        mean = (channel_sum / total_timepoints).float()
+        var = (channel_sum_sq / total_timepoints).float() - mean ** 2
+        std = torch.sqrt(var.clamp(min=0)).clamp(min=1e-8)
+        self._eeg_mean = mean[None, :, None]  # [1, C, 1]
+        self._eeg_std = std[None, :, None]    # [1, C, 1]
+
     @property
     def n_chans(self):
-        return self.eeg_recordings[0].shape[1]
+        return self._n_chans
 
     @property
     def n_times(self):
-        return self.eeg_recordings[0].shape[2]
+        return self._n_times
 
     def get_chs_info(self):
         """Return MNE-compatible chs_info with channel positions from GSN-HydroCel-129 montage."""
-        import numpy as np
-
         montage = mne.channels.make_standard_montage("GSN-HydroCel-129")
         info = mne.create_info(montage.ch_names, sfreq=self.sfreq, ch_types="eeg")
         raw = mne.io.RawArray(np.zeros((len(montage.ch_names), 1)), info, verbose=False)
@@ -621,19 +737,23 @@ class JEPAMovieDataset(HBNMovieDataset):
         return all_feats.median(0).values
 
     def __len__(self):
-        return len(self.eeg_recordings)
+        return len(self._fif_paths)
 
     def __getitem__(self, idx):
-        eeg = self.eeg_recordings[idx]
+        crop_inds = self._crop_inds[idx]
         feats = self.feature_recordings[idx]
-        n = len(eeg)
+        n = len(crop_inds)
         required = (self.n_windows - 1) * self.temporal_stride + 1
         start = torch.randint(0, n - required + 1, (1,)).item()
         indices = list(range(start, start + required, self.temporal_stride))
-        return (
-            eeg[indices],  # [n_windows, C, W]
-            feats[indices],  # [n_windows, n_features]
+
+        # Load only the needed windows from disk
+        eeg = torch.from_numpy(
+            _read_raw_windows(self._fif_paths[idx], crop_inds[indices])
         )
+        eeg = (eeg - self._eeg_mean) / self._eeg_std
+
+        return eeg, feats[indices]
 
 
 class HBNMovieProbeDataset(HBNMovieDataset):
@@ -653,13 +773,24 @@ class HBNMovieProbeDataset(HBNMovieDataset):
             preprocessed=preprocessed,
             preprocessed_dir=preprocessed_dir,
         )
-        self.data = [window[0] for window_ds in self.data for window in window_ds]
-        self.labels = [label for labels_series in self.labels for label in labels_series]
+        # Build a flat index of (recording_idx, window_idx) for random access
+        # without materializing all EEG data in memory.
+        self._flat_index = []
+        self._flat_labels = []
+        for rec_idx in range(len(self._fif_paths)):
+            labels = self.labels[rec_idx]
+            for win_idx in range(len(self._crop_inds[rec_idx])):
+                self._flat_index.append((rec_idx, win_idx))
+                self._flat_labels.append(labels.iloc[win_idx])
 
     def __len__(self):
-        return len(self.data)
+        return len(self._flat_index)
 
     def __getitem__(self, idx):
-        X = self.data[idx]
-        features = self.labels[idx]
-        return torch.from_numpy(X).float(), features
+        rec_idx, win_idx = self._flat_index[idx]
+        X = _read_raw_windows(
+            self._fif_paths[rec_idx],
+            self._crop_inds[rec_idx][win_idx:win_idx + 1],
+        )
+        features = self._flat_labels[idx]
+        return torch.from_numpy(X[0]), features
