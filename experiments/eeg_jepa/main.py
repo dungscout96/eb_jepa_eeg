@@ -157,12 +157,17 @@ def run(
     # Load datasets
     # ------------------------------------------------------------------
     logger.info("Loading HBN Movie datasets...")
+    preprocessed = cfg.data.get("preprocessed", False)
+    preprocessed_dir = cfg.data.get("preprocessed_dir", None)
+
     train_set = JEPAMovieDataset(
         split="train",
         n_windows=cfg.data.n_windows,
         window_size_seconds=cfg.data.window_size_seconds,
         temporal_stride=temporal_stride,
         cfg=cfg.data,
+        preprocessed=preprocessed,
+        preprocessed_dir=preprocessed_dir,
     )
     val_set = JEPAMovieDataset(
         split="val",
@@ -171,6 +176,8 @@ def run(
         temporal_stride=temporal_stride,
         eeg_norm_stats=train_set.get_eeg_norm_stats(),
         cfg=cfg.data,
+        preprocessed=preprocessed,
+        preprocessed_dir=preprocessed_dir,
     )
 
     # Compute feature statistics from training set (used by losses)
@@ -419,6 +426,8 @@ def run(
         temporal_stride=temporal_stride,
         eeg_norm_stats=train_set.get_eeg_norm_stats(),
         cfg=cfg.data,
+        preprocessed=preprocessed,
+        preprocessed_dir=preprocessed_dir,
     )
     test_loader = DataLoader(
         test_set,

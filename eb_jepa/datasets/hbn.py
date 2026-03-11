@@ -38,11 +38,12 @@ DATA_DIR = Path(
 
 SPLIT_RELEASES = {
     "train": {
+        "R1": "ds005505",  # 136 subjects
         "R2": "ds005506",  # 152 subjects
         "R3": "ds005507",  # 184 subjects
         "R4": "ds005508",  # 324 subjects
     },
-    "val": {"R1": "ds005505"},  # 136 subjects
+    "val": {"R5": "ds005505"},  # 136 subjects
     "test": {"R6": "ds005510"},  # 134 subjects
 }
 
@@ -617,8 +618,13 @@ class JEPAMovieDataset(HBNMovieDataset):
         temporal_stride=1,
         *,
         cfg: DictConfig | dict,
+        preprocessed: bool = False,
+        preprocessed_dir: Path | str | None = None,
     ):
-        super().__init__(split, window_size_seconds, task, cfg=cfg)
+        super().__init__(
+            split, window_size_seconds, task, cfg=cfg,
+            preprocessed=preprocessed, preprocessed_dir=preprocessed_dir,
+        )
         self.n_windows = n_windows
         self.temporal_stride = temporal_stride
         self.feature_names = feature_names or self.DEFAULT_FEATURES
