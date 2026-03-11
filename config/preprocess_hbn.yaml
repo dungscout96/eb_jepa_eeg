@@ -24,9 +24,8 @@ h_freq: 99.5              # Bandpass filter high cutoff (Hz)
 min_duration_s: 10.0       # Minimum recording duration to keep (seconds)
 clip_std: 15.0             # Clip values beyond ±N standard deviations after z-score
 
-# Output directory
-# On Delta HPC: set HBN_PREPROCESS_DIR=/projects/<allocation>/hbn_preprocessed
-output_dir: ${oc.env:HBN_PREPROCESS_DIR,./data/hbn_preprocessed}
+# Output directory (auto-detected from known paths; set explicitly to override)
+output_dir: null
 
 # Parallelism
 n_jobs: -1                 # Number of parallel download jobs (-1 = all cores)

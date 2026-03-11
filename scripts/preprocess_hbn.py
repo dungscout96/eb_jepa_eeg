@@ -67,6 +67,30 @@ from eb_jepa.datasets.hbn import load_or_download  # noqa: E402
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Path auto-detection
+# ---------------------------------------------------------------------------
+
+_OUTPUT_DIRS = [
+    Path("/mnt/v1/dtyoung/data/eb_jepa_eeg/hbn_preprocessed"),
+    Path("/expanse/projects/nemar/dtyoung/.cache/eb_jepa_eeg/hbn_preprocessed"),
+]
+
+
+def resolve_output_dir(configured: str | None) -> Path:
+    """Return output_dir: use explicit config if set, else auto-detect."""
+    if configured:
+        return Path(configured)
+    for p in _OUTPUT_DIRS:
+        if p.parent.exists():
+            p.mkdir(parents=True, exist_ok=True)
+            logger.info("Auto-detected output_dir: %s", p)
+            return p
+    fallback = Path("./data/hbn_preprocessed")
+    logger.info("No known output path found, using fallback: %s", fallback)
+    return fallback
+
+
+# ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
@@ -462,6 +486,9 @@ def main(cfg: DictConfig) -> None:
         level=logging.INFO,
         format="%(asctime)s %(name)s [%(levelname)s] %(message)s",
     )
+
+    # Resolve output_dir (auto-detect if not set)
+    cfg.output_dir = str(resolve_output_dir(cfg.get("output_dir")))
 
     logger.info("HBN EEG Preprocessing")
     logger.info("Config:\n%s", OmegaConf.to_yaml(cfg))

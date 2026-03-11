@@ -30,10 +30,22 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-DATA_DIR = Path(
-    os.environ.get("HBN_CACHE_DIR",
-                   str(Path.home() / ".cache" / "eb_jepa" / "datasets" / "eegdash_cache"))
-)
+def _resolve_hbn_cache_dir() -> Path:
+    """Return HBN cache dir: env var > auto-detect known paths > default."""
+    env = os.environ.get("HBN_CACHE_DIR")
+    if env:
+        return Path(env)
+    known_paths = [
+        Path("/mnt/v1/dtyoung/data/eb_jepa_eeg/hbn_cache"),
+        Path("/expanse/projects/nemar/openneuro"),
+    ]
+    for p in known_paths:
+        if p.exists():
+            return p
+    return Path.home() / ".cache" / "eb_jepa" / "datasets" / "eegdash_cache"
+
+
+DATA_DIR = _resolve_hbn_cache_dir()
 
 
 SPLIT_RELEASES = {

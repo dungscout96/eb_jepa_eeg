@@ -31,9 +31,7 @@ TASKS=("ThePresent" "DespicableMe" "RestingState")
 TASK=${TASKS[$SLURM_ARRAY_TASK_ID]}
 RELEASE=${HBN_RELEASE:-R1}
 
-# Save preprocessed data to projects filesystem
-export HBN_PREPROCESS_DIR="${HBN_PREPROCESS_DIR:-/expanse/projects/nemar/dtyoung/.cache/eb_jepa_eeg/hbn_preprocessed}"
-export HBN_CACHE_DIR="${HBN_CACHE_DIR:-/expanse/projects/nemar/openneuro}"
+# Paths are auto-detected; override with env vars if needed
 export UV_LINK_MODE=copy
 
 echo "========================================"
@@ -41,8 +39,6 @@ echo "Job ID:        $SLURM_JOB_ID"
 echo "Array Task ID: $SLURM_ARRAY_TASK_ID"
 echo "Release:       $RELEASE"
 echo "Task:          $TASK"
-echo "Output dir:    $HBN_PREPROCESS_DIR"
-echo "Cache dir:     $HBN_CACHE_DIR"
 echo "========================================"
 
 cd /expanse/projects/nemar/dtyoung/eb_jepa_eeg
@@ -51,7 +47,6 @@ export PATH=/home/dtyoung/.local/bin:$PATH
 
 uv run --group eeg scripts/preprocess_hbn.py \
     release="$RELEASE" \
-    task="$TASK" \
-    output_dir="$HBN_PREPROCESS_DIR"
+    task="$TASK"
 
 echo "Done: release=$RELEASE task=$TASK"
