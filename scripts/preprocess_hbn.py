@@ -314,6 +314,22 @@ def _has_saved_datasets(directory: Path) -> bool:
     return any(directory.glob("*/*-raw.fif"))
 
 
+def _filter_by_task(dataset: BaseConcatDataset, task: str) -> BaseConcatDataset:
+    """Keep only recordings whose description matches *task* (case-insensitive)."""
+    kept = []
+    task_lower = task.lower()
+    for ds in dataset.datasets:
+        desc_task = ds.description.get("task", "")
+        if str(desc_task).lower() == task_lower:
+            kept.append(ds)
+    if len(kept) < len(dataset.datasets):
+        logger.info(
+            "Filtered by task '%s': kept %d / %d recordings",
+            task, len(kept), len(dataset.datasets),
+        )
+    return BaseConcatDataset(kept) if kept else dataset
+
+
 def process_release_task(release: str, task: str, cfg: DictConfig) -> dict:
     """Run the full two-pass preprocessing pipeline for one (release, task).
 
@@ -357,6 +373,7 @@ def process_release_task(release: str, task: str, cfg: DictConfig) -> dict:
             "Intermediate data found at %s — skipping pass 1.", intermediate_dir
         )
         dataset = load_concat_dataset(str(intermediate_dir), preload=False)
+        dataset = _filter_by_task(dataset, task)
         logger.info("Loaded %d recordings from intermediate cache", len(dataset.datasets))
 
         summary = {
@@ -371,7 +388,7 @@ def process_release_task(release: str, task: str, cfg: DictConfig) -> dict:
         logger.info("Loading release=%s, task=%s ...", release, task)
         dataset = load_or_download(release, task=task)
         total_recordings = len(dataset.datasets)
-        logger.info("Loaded %d recordings", total_recordings)
+        logger.info("Loaded %d recordings (task=%s)", total_recordings, task)
 
         # --- Step 1: Reject short recordings ---
         dataset, n_rejected = reject_short_recordings(dataset, cfg.min_duration_s)

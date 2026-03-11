@@ -155,13 +155,17 @@ def _release_to_dataset_id(release: str) -> str:
 
 
 def load_or_download(release, task=DEFAULT_TASK):
-    """Load an EEGDashDataset from cache, downloading if necessary."""
+    """Load an EEGDashDataset from cache, downloading if necessary.
+
+    Filters to the specified *task* so only matching recordings are returned.
+    """
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     dataset_id = _release_to_dataset_id(release)
     dataset = EEGDashDataset(
         cache_dir=DATA_DIR,
         dataset=dataset_id,
+        task=task,
     )
 
     return dataset
