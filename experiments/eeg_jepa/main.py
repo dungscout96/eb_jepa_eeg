@@ -52,6 +52,23 @@ logger = get_logger(__name__)
 
 NUMERIC_FEATURES = JEPAMovieDataset.DEFAULT_FEATURES
 
+# Known preprocessed data locations (checked in order for auto-detection)
+_PREPROCESSED_DIRS = [
+    Path("/mnt/v1/dtyoung/data/eb_jepa_eeg/hbn_preprocessed"),
+    Path("/expanse/projects/nemar/dtyoung/.cache/eb_jepa_eeg/hbn_preprocessed"),
+]
+
+
+def resolve_preprocessed_dir(configured: str | None) -> Path | None:
+    """Return preprocessed_dir: use explicit config if set, else auto-detect."""
+    if configured:
+        return Path(configured)
+    for p in _PREPROCESSED_DIRS:
+        if p.exists():
+            logger.info("Auto-detected preprocessed_dir: %s", p)
+            return p
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Loss functions for movie-feature probes
@@ -158,7 +175,7 @@ def run(
     # ------------------------------------------------------------------
     logger.info("Loading HBN Movie datasets...")
     preprocessed = cfg.data.get("preprocessed", False)
-    preprocessed_dir = cfg.data.get("preprocessed_dir", None)
+    preprocessed_dir = resolve_preprocessed_dir(cfg.data.get("preprocessed_dir", None))
 
     train_set = JEPAMovieDataset(
         split="train",
