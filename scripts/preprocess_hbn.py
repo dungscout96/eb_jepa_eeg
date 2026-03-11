@@ -73,7 +73,15 @@ logger = logging.getLogger(__name__)
 RELEASES = {
     "R1": "ds005505",
     "R2": "ds005506",
+    "R3": "ds005507",
+    "R4": "ds005508",
+    "R5": "ds005509",
     "R6": "ds005510",
+    "R7": "ds005511",
+    "R8": "ds005512",
+    "R9": "ds005514",
+    "R10": "ds005515",
+    "R11": "ds005516",
 }
 
 TASKS = ["ThePresent", "DespicableMe", "RestingState", "contrastChangeDetection"]
