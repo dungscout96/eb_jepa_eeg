@@ -36,6 +36,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from movie_annotation.features.lowlevel import extract_lowlevel  # noqa: E402
+from movie_annotation.features.motion import extract_motion  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -146,7 +147,11 @@ def read_frame_seek(cap: cv2.VideoCapture, frame_idx: int) -> np.ndarray | None:
 def recompute_check(df: pd.DataFrame, cap: cv2.VideoCapture) -> dict:
     sample_indices_list = list(range(0, len(df), SAMPLE_STEP))
     target_set = {int(df.iloc[i]["frame_idx"]) for i in sample_indices_list}
-    features_to_check = ["luminance_mean", "contrast_rms", "entropy"]
+    features_to_check = [
+        "luminance_mean", "contrast_rms", "entropy",
+        "color_r_mean", "color_g_mean", "color_b_mean",
+        "saturation_mean", "edge_density", "spatial_freq_energy",
+    ]
     errors = {f: [] for f in features_to_check}
     csv_vals = {f: [] for f in features_to_check}
     comp_vals = {f: [] for f in features_to_check}
@@ -183,6 +188,83 @@ def recompute_check(df: pd.DataFrame, cap: cv2.VideoCapture) -> dict:
             "n_checked": len(errors[feat]), "skipped": skipped,
             "pass": passed, "note": note,
         }
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Phase 1b: Recompute motion features
+# ---------------------------------------------------------------------------
+
+
+def recompute_motion_check(df: pd.DataFrame, cap: cv2.VideoCapture) -> dict:
+    """Recompute motion_energy and scene_cut for sampled consecutive frame pairs."""
+    n_frames = len(df)
+    step = max(1, n_frames // 15)  # ~15 pairs
+    sample_indices = list(range(1, n_frames, step))  # start at 1 (need prev frame)
+
+    motion_csv = []
+    motion_comp = []
+    scene_agree = 0
+    scene_total = 0
+    skipped = 0
+
+    for idx in sample_indices:
+        prev_fidx = int(df.iloc[idx - 1]["frame_idx"])
+        curr_fidx = int(df.iloc[idx]["frame_idx"])
+
+        prev_frame = read_frame_seek(cap, prev_fidx)
+        curr_frame = read_frame_seek(cap, curr_fidx)
+
+        if prev_frame is None or curr_frame is None:
+            skipped += 1
+            continue
+
+        computed = extract_motion(prev_frame, curr_frame)
+
+        motion_csv.append(float(df.iloc[idx]["motion_energy"]))
+        motion_comp.append(computed["motion_energy"])
+
+        csv_cut = bool(df.iloc[idx]["scene_cut"])
+        comp_cut = computed["scene_cut"]
+        if csv_cut == comp_cut:
+            scene_agree += 1
+        scene_total += 1
+
+    results = {}
+
+    # motion_energy correlation
+    if motion_csv:
+        corr = float(np.corrcoef(motion_csv, motion_comp)[0, 1])
+        errors = [abs(a - b) for a, b in zip(motion_csv, motion_comp)]
+        max_err = float(np.max(errors))
+        mean_err = float(np.mean(errors))
+        err_std = float(np.std(errors))
+        passed = corr > 0.999
+        note = "cross-platform codec offset" if max_err > 1e-5 else ""
+        results["motion_energy"] = {
+            "max_abs_error": max_err, "mean_abs_error": mean_err,
+            "error_std": err_std, "pearson_r": corr,
+            "n_checked": len(motion_csv), "skipped": skipped,
+            "pass": passed, "note": note,
+        }
+    else:
+        results["motion_energy"] = {
+            "max_abs_error": None, "n_checked": 0, "skipped": skipped, "pass": False,
+        }
+
+    # scene_cut boolean agreement
+    if scene_total > 0:
+        agreement = scene_agree / scene_total
+        passed = agreement > 0.95
+        results["scene_cut"] = {
+            "agreement": agreement, "agree": scene_agree, "total": scene_total,
+            "skipped": skipped, "pass": passed,
+        }
+    else:
+        results["scene_cut"] = {
+            "agreement": 0.0, "agree": 0, "total": 0, "skipped": skipped, "pass": False,
+        }
+
     return results
 
 
@@ -535,6 +617,7 @@ def _quartile_table(frames_by_quartile: dict, feature_name: str) -> list[str]:
 
 def write_report(
     recompute_results: dict,
+    motion_recompute_results: dict,
     dist_results: dict,
     quartile_frames: dict,
     category_frames: dict,
@@ -586,10 +669,14 @@ def write_report(
 
     # Section 2: Recomputation check
     lines += [
-        "## 2. Recomputation Check (Low-level Features)",
+        "## 2. Recomputation Check (All 11 Model-free Features)",
         "",
-        f"Re-extracted `luminance_mean`, `contrast_rms`, `entropy` for ~{n_samples} frames "
-        f"(every {SAMPLE_STEP}th) and compared against stored CSV values.",
+        "Re-extracted all 11 model-free features (9 low-level + motion_energy + scene_cut) "
+        f"and compared against stored CSV values.",
+        "",
+        "### 2a. Low-level features (9 features)",
+        "",
+        f"Sampled ~{n_samples} frames (every {SAMPLE_STEP}th), recomputed via `extract_lowlevel()`.",
         "",
         "| Feature | Frames | Max Abs Error | Mean Error | Error Std | Pearson r | Note | Result |",
         "|---------|--------|--------------|------------|-----------|-----------|------|--------|",
@@ -607,6 +694,36 @@ def write_report(
     lines += [
         "",
         "> Pass criteria: Pearson r > 0.999. Consistent mean offset = cross-platform codec difference, not formula error.",
+        "",
+    ]
+
+    # Motion recomputation
+    mr = motion_recompute_results
+    me = mr["motion_energy"]
+    sc = mr["scene_cut"]
+    lines += [
+        "### 2b. Motion features (motion_energy + scene_cut)",
+        "",
+        f"Sampled ~{me['n_checked']} consecutive frame pairs, recomputed via `extract_motion()`.",
+        "",
+        "| Feature | Frames | Max Abs Error | Mean Error | Error Std | Pearson r | Note | Result |",
+        "|---------|--------|--------------|------------|-----------|-----------|------|--------|",
+    ]
+    if me["n_checked"] == 0:
+        lines.append("| `motion_energy` | 0 | — | — | — | — | — | FAIL |")
+    else:
+        note = me.get("note", "")
+        lines.append(
+            f"| `motion_energy` | {me['n_checked']} | {me['max_abs_error']:.2e} | "
+            f"{me['mean_abs_error']:.2e} | {me['error_std']:.2e} | "
+            f"{me['pearson_r']:.6f} | {note} | {_pass(me['pass'])} |"
+        )
+    lines += [
+        "",
+        f"**`scene_cut`** boolean agreement: {sc['agree']}/{sc['total']} "
+        f"({sc['agreement']:.1%}) — {_pass(sc['pass'])}",
+        "",
+        "> scene_cut pass criteria: > 95% agreement.",
         "",
         "---",
         "",
@@ -818,40 +935,58 @@ def write_report(
         "",
         "### Color features",
         "",
-        "**`color_r/g/b_mean`, `saturation_mean`** — pending visual review.",
+        "**`color_r/g/b_mean`** — WEAK as semantic color labels, but numerically correct as channel means. "
+        "Quartiles mostly track warm-vs-cool illumination and overall brightness; `Q4_high_green` and "
+        "`Q4_high_blue` are often bright neutral doorway shots rather than genuinely green- or blue-dominant scenes. "
+        "Use these as raw channel-intensity features, not as human-interpretable color names.",
+        "",
+        "**`saturation_mean`** — WEAK. Mid/high-saturation frames often look plausible, but dark/title-card frames "
+        "can score as maximally vivid. Example: frame 92 is almost black (`luminance_mean=0.0315`) yet has "
+        "`saturation_mean=0.9067`, so HSV saturation becomes unstable on near-black inputs.",
         "",
         "### Texture features",
         "",
-        "**`edge_density`** — pending visual review.",
+        "**`edge_density`** — PASS. Q1 contains black/title frames and smooth face close-ups; Q4 contains blind slats, "
+        "room geometry, rug texture, and hand+ball shots with visibly denser contours. Direction is correct.",
         "",
-        "**`spatial_freq_energy`** — pending visual review. Note: mean=0.0021, range very small "
-        "(0.0001–0.037). For animated content with large flat-color regions, most Fourier power "
-        "concentrates at DC, so the high-frequency ratio is expected to be near zero.",
+        "**`spatial_freq_energy`** — WEAK. It does rank title text, blind slats, and other sharp repetitive patterns "
+        "above flatter shots, but the dynamic range is tiny (0.0001–0.037) and the quartiles are visually mixed. "
+        "For this animated short it is technically consistent, but not very discriminative.",
         "",
         "### Motion features",
         "",
-        "**`motion_energy`** — pending visual review. Frame 0 has value=0.0 (no previous frame — correct).",
+        "**`motion_energy`** — PASS. Q1 is dominated by static black/title frames and held poses; Q4 contains dog-play, "
+        "hand/ball interaction, and larger expression/body changes. Frame 0 = 0.0 is also correct by construction.",
         "",
-        "**`scene_cut`** — 18 cuts detected across the film. Pending visual review of before/after context frames.",
+        "**`scene_cut`** — FAIL. Several reported cuts are not edits at all, just adjacent motion frames. "
+        "Examples: cut 2506 (frames 2505/2506/2507), cut 2811, and cut 3405 all show the same shot with small motion. "
+        "The luminance-diff threshold is too weak to distinguish shot changes from within-shot motion/lighting change.",
         "",
         "### Face features",
         "",
-        "**`n_faces`**: 0 faces = 2913 frames, 1 face = 1936, 2 faces = 28. Pending visual review.",
+        "**`n_faces`** — WEAK. The sampled 0/1/2-face examples are mostly sensible, but the detector is contaminated by "
+        "animal-face false positives on this film. Across the CSV, 206 frames that also contain a detected `dog` have "
+        "`n_faces > 0`, so the count is not reliably 'human faces only'.",
         "",
-        "**`face_area_frac`** — pending visual review. Q1 is dominated by zero-face frames (frac=0).",
+        "**`face_area_frac`** — FAIL as a human-face-size metric. High-area examples include dog close-ups "
+        "(frames 2188, 3437, 3448), so the largest values are not consistently measuring human face prominence.",
         "",
         "### Depth features",
         "",
-        "**`depth_mean/std/range`** — pending visual review. Values in model-relative units (not metres). "
-        "MiDaS depth model; Q1_near should show close-up shots, Q4_far should show wide-angle room views.",
+        "**`depth_mean/std/range`** — WEAK overall. `depth_std` and `depth_range` broadly track flatter vs more layered "
+        "shots, but `depth_mean` is not visually aligned with the `near`/`far` labels in the report: Q1 includes wide "
+        "doorway/room views while Q4 includes close face/dog close-ups. The metric is likely inverse-depth-like or "
+        "otherwise model-relative, so the current `near`/`far` interpretation is backwards or at least ambiguous.",
         "",
         "### Object features",
         "",
-        "**`n_objects`** — pending visual review. Range 0–31, mean 3.6. "
-        "High counts (25+) are likely wide-angle room shots with many items detected.",
+        "**`n_objects`** — WEAK. Counts rise on cluttered kitchen/living-room shots as expected, but they inherit the "
+        "detector's domain-mismatch errors on animation, so the absolute counts should be treated as rough complexity "
+        "signals rather than trusted object cardinality.",
         "",
-        "**`object_categories`** — top category is 'person' (3964 occurrences), then 'potted plant' (2331). "
-        "Pending visual review.",
+        "**`object_categories`** — WEAK/NOISY. Some tags are correct (`dog`, `person`, `potted plant`), but sampled "
+        "false positives are obvious: `book` on window blinds (frame 845), `cell phone` on a game controller "
+        "(frame 1942), and `teddy bear` on dog frames (e.g. frame 3437). Good enough for rough tags, not for clean semantics.",
         "",
         "### CLIP scene features",
         "",
@@ -874,30 +1009,53 @@ def write_report(
         "CLIP embedding (floating-point noise amplification). This is a degenerate input issue, not a code bug.",
         "- All CLIP features fail due to content mismatch, not implementation error.",
         "",
+        "### Wrong or weak metrics for this film",
+        "",
+        "- **Failing**: `scene_cut`, `face_area_frac`, `scene_natural_score`, `scene_open_score`, "
+        "`scene_category_score`, `scene_category`.",
+        "- **Weak / noisy**: `color_r_mean`, `color_g_mean`, `color_b_mean`, `saturation_mean`, "
+        "`spatial_freq_energy`, `n_faces`, `depth_mean`, `depth_std`, `depth_range`, `n_objects`, `object_categories`.",
+        "",
         "---",
         "",
     ]
 
-    # Overall summary
+    # Overall summary — derive recompute column from actual results
+    def _recomp(feat):
+        if feat in recompute_results:
+            return _pass(recompute_results[feat]["pass"])
+        return None
+
+    def _recomp_all(*feats):
+        vals = [_recomp(f) for f in feats]
+        if all(v == "PASS" for v in vals):
+            return "PASS"
+        if any(v == "FAIL" for v in vals):
+            return "FAIL"
+        return "FAIL"
+
+    mr_me = motion_recompute_results["motion_energy"]
+    mr_sc = motion_recompute_results["scene_cut"]
+
     lines += [
         f"## {section}. Overall Validation Summary",
         "",
         "| Feature | Code | Recompute | Distribution | Visual | Overall |",
         "|---------|------|-----------|-------------|--------|---------|",
-        "| `luminance_mean` | PASS | PASS | PASS | PASS | **PASS** |",
-        "| `contrast_rms` | PASS | PASS | PASS | PASS | **PASS** |",
-        "| `entropy` | PASS | PASS | PASS | PASS (skewed) | **PASS** |",
-        "| `color_r/g/b_mean` | PASS | N/A | PASS | pending | pending |",
-        "| `saturation_mean` | PASS | N/A | PASS | pending | pending |",
-        "| `edge_density` | PASS | N/A | PASS | pending | pending |",
-        "| `spatial_freq_energy` | PASS | N/A | PASS (tiny range) | pending | pending |",
-        "| `motion_energy` | PASS | N/A | PASS | pending | pending |",
-        "| `scene_cut` | PASS | N/A | PASS (18 cuts) | pending | pending |",
-        "| `n_faces` | PASS | N/A | PASS | pending | pending |",
-        "| `face_area_frac` | PASS | N/A | PASS | pending | pending |",
-        "| `depth_mean/std/range` | PASS | N/A (GPU) | PASS | pending | pending |",
-        "| `n_objects` | PASS | N/A (GPU) | PASS | pending | pending |",
-        "| `object_categories` | PASS | N/A (GPU) | PASS | pending | pending |",
+        f"| `luminance_mean` | PASS | {_recomp('luminance_mean')} | PASS | PASS | **PASS** |",
+        f"| `contrast_rms` | PASS | {_recomp('contrast_rms')} | PASS | PASS | **PASS** |",
+        f"| `entropy` | PASS | {_recomp('entropy')} | PASS | PASS (skewed) | **PASS** |",
+        f"| `color_r/g/b_mean` | PASS | {_recomp_all('color_r_mean', 'color_g_mean', 'color_b_mean')} | PASS | WEAK (channel means, not semantic colors) | **WEAK** |",
+        f"| `saturation_mean` | PASS | {_recomp('saturation_mean')} | PASS | WEAK (dark-frame artifact) | **WEAK** |",
+        f"| `edge_density` | PASS | {_recomp('edge_density')} | PASS | PASS | **PASS** |",
+        f"| `spatial_freq_energy` | PASS | {_recomp('spatial_freq_energy')} | PASS (tiny range) | WEAK | **WEAK** |",
+        f"| `motion_energy` | PASS | {_pass(mr_me['pass'])} | PASS | PASS | **PASS** |",
+        f"| `scene_cut` | PASS | {_pass(mr_sc['pass'])} | PASS (18 cuts) | FAIL | **FAIL** |",
+        "| `n_faces` | PASS | N/A (GPU) | PASS | WEAK (dog false positives) | **WEAK** |",
+        "| `face_area_frac` | PASS | N/A (GPU) | PASS | FAIL | **FAIL** |",
+        "| `depth_mean/std/range` | PASS | N/A (GPU) | PASS | WEAK (`depth_mean` direction ambiguous) | **WEAK** |",
+        "| `n_objects` | PASS | N/A (GPU) | PASS | WEAK | **WEAK** |",
+        "| `object_categories` | PASS | N/A (GPU) | PASS | WEAK | **WEAK** |",
         "| `scene_natural_score` | PASS | N/A (GPU) | PASS (narrow) | FAIL | **FAIL (this film)** |",
         "| `scene_open_score` | PASS | N/A (GPU) | PASS (narrow) | FAIL | **FAIL (this film)** |",
         "| `scene_category_score` | PASS | N/A (GPU) | PASS (constant) | FAIL | **FAIL (this film)** |",
@@ -927,48 +1085,58 @@ def main() -> None:
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {MOVIE_PATH}")
 
-    print("\n[1/8] Recomputation check (luminance_mean, contrast_rms, entropy)...")
+    print("\n[1/9] Recomputation check (all 9 low-level features)...")
     recompute_results = recompute_check(df, cap)
     for feat, r in recompute_results.items():
         print(f"  {feat}: r={r['pearson_r']:.6f}  n={r['n_checked']}  [{_pass(r['pass'])}]")
 
-    print("\n[2/8] Distribution checks (all features)...")
+    print("\n[2/9] Motion recomputation check (motion_energy, scene_cut)...")
+    motion_recompute_results = recompute_motion_check(df, cap)
+    mr_me = motion_recompute_results["motion_energy"]
+    mr_sc = motion_recompute_results["scene_cut"]
+    if mr_me["n_checked"] > 0:
+        print(f"  motion_energy: r={mr_me['pearson_r']:.6f}  n={mr_me['n_checked']}  [{_pass(mr_me['pass'])}]")
+    else:
+        print("  motion_energy: no frames checked  [FAIL]")
+    print(f"  scene_cut: {mr_sc['agree']}/{mr_sc['total']} agree ({mr_sc['agreement']:.1%})  [{_pass(mr_sc['pass'])}]")
+
+    print("\n[3/9] Distribution checks (all features)...")
     dist_results = distribution_checks(df)
     for feat, r in dist_results.items():
         if "pass" in r:
             print(f"  {feat}: [{_pass(r['pass'])}]")
 
-    print(f"\n[3/8] Quartile frames for {len(CONTINUOUS_FEATURES)} continuous features...")
+    print(f"\n[4/9] Quartile frames for {len(CONTINUOUS_FEATURES)} continuous features...")
     quartile_frames = {}
     for feat in CONTINUOUS_FEATURES:
         quartile_frames[feat] = extract_quartile_frames(df, cap, feat)
         counts = sum(len(f) for f in quartile_frames[feat].values())
         print(f"  {feat}: {counts} frames saved")
 
-    print("\n[4/8] scene_category frames...")
+    print("\n[5/9] scene_category frames...")
     category_frames = extract_category_frames(df, cap)
     print(f"  {sum(len(v) for v in category_frames.values())} frames across {len(category_frames)} categories")
 
-    print("\n[5/8] n_faces frames...")
+    print("\n[6/9] n_faces frames...")
     nfaces_frames = extract_nfaces_frames(df, cap)
     print(f"  {sum(len(v) for v in nfaces_frames.values())} frames across {len(nfaces_frames)} bins")
 
-    print("\n[6/8] n_objects frames...")
+    print("\n[7/9] n_objects frames...")
     nobjects_frames = extract_nobjects_frames(df, cap)
     print(f"  {sum(len(v) for v in nobjects_frames.values())} frames across {len(nobjects_frames)} bins")
 
-    print("\n[7/8] scene_cut context frames...")
+    print("\n[8/9] scene_cut context frames...")
     scene_cut_frames = extract_scene_cut_frames(df, cap)
     print(f"  {len(scene_cut_frames['scene_cuts'])} context frames for {len(df[df['scene_cut']==True])} cuts")
 
-    print("\n[8/8] object_category frames (top 10)...")
+    print("\n[9/9] object_category frames (top 10)...")
     obj_cat_frames = extract_object_category_frames(df, cap)
     print(f"  {sum(len(v) for v in obj_cat_frames.values())} frames across {len(obj_cat_frames)} categories")
 
     cap.release()
 
     write_report(
-        recompute_results, dist_results, quartile_frames,
+        recompute_results, motion_recompute_results, dist_results, quartile_frames,
         category_frames, nfaces_frames, nobjects_frames,
         scene_cut_frames, obj_cat_frames,
     )

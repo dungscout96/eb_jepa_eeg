@@ -28,17 +28,39 @@ Additional: all remaining features from the annotation pipeline.
 
 ---
 
-## 2. Recomputation Check (Low-level Features)
+## 2. Recomputation Check (All 11 Model-free Features)
 
-Re-extracted `luminance_mean`, `contrast_rms`, `entropy` for ~30 frames (every 163th) and compared against stored CSV values.
+Re-extracted all 11 model-free features (9 low-level + motion_energy + scene_cut) and compared against stored CSV values.
+
+### 2a. Low-level features (9 features)
+
+Sampled ~30 frames (every 163th), recomputed via `extract_lowlevel()`.
 
 | Feature | Frames | Max Abs Error | Mean Error | Error Std | Pearson r | Note | Result |
 |---------|--------|--------------|------------|-----------|-----------|------|--------|
 | `luminance_mean` | 30 | 3.91e-03 | 4.82e-04 | 9.06e-04 | 0.999994 | cross-platform codec offset | PASS |
 | `contrast_rms` | 30 | 1.02e-03 | 1.66e-04 | 1.89e-04 | 0.999995 | cross-platform codec offset | PASS |
 | `entropy` | 30 | 1.38e-01 | 9.03e-02 | 3.39e-02 | 0.999901 | cross-platform codec offset | PASS |
+| `color_r_mean` | 30 | 3.92e-03 | 3.17e-03 | 2.74e-04 | 1.000000 | cross-platform codec offset | PASS |
+| `color_g_mean` | 30 | 1.73e-03 | 1.01e-03 | 4.41e-04 | 0.999998 | cross-platform codec offset | PASS |
+| `color_b_mean` | 30 | 3.92e-03 | 1.15e-03 | 8.02e-04 | 0.999992 | cross-platform codec offset | PASS |
+| `saturation_mean` | 30 | 1.81e-02 | 4.06e-03 | 3.17e-03 | 0.999858 | cross-platform codec offset | PASS |
+| `edge_density` | 30 | 1.32e-03 | 2.93e-04 | 3.03e-04 | 0.999973 | cross-platform codec offset | PASS |
+| `spatial_freq_energy` | 30 | 3.51e-03 | 1.75e-04 | 6.88e-04 | 0.999598 | cross-platform codec offset | PASS |
 
 > Pass criteria: Pearson r > 0.999. Consistent mean offset = cross-platform codec difference, not formula error.
+
+### 2b. Motion features (motion_energy + scene_cut)
+
+Sampled ~15 consecutive frame pairs, recomputed via `extract_motion()`.
+
+| Feature | Frames | Max Abs Error | Mean Error | Error Std | Pearson r | Note | Result |
+|---------|--------|--------------|------------|-----------|-----------|------|--------|
+| `motion_energy` | 15 | 1.07e-01 | 2.40e-02 | 3.83e-02 | 0.999928 | cross-platform codec offset | PASS |
+
+**`scene_cut`** boolean agreement: 15/15 (100.0%) — PASS
+
+> scene_cut pass criteria: > 95% agreement.
 
 ---
 
@@ -1358,35 +1380,37 @@ _No frames saved._
 
 ### Color features
 
-**`color_r/g/b_mean`, `saturation_mean`** — pending visual review.
+**`color_r/g/b_mean`** — WEAK as semantic color labels, but numerically correct as channel means. Quartiles mostly track warm-vs-cool illumination and overall brightness; `Q4_high_green` and `Q4_high_blue` are often bright neutral doorway shots rather than genuinely green- or blue-dominant scenes. Use these as raw channel-intensity features, not as human-interpretable color names.
+
+**`saturation_mean`** — WEAK. Mid/high-saturation frames often look plausible, but dark/title-card frames can score as maximally vivid. Example: frame 92 is almost black (`luminance_mean=0.0315`) yet has `saturation_mean=0.9067`, so HSV saturation becomes unstable on near-black inputs.
 
 ### Texture features
 
-**`edge_density`** — pending visual review.
+**`edge_density`** — PASS. Q1 contains black/title frames and smooth face close-ups; Q4 contains blind slats, room geometry, rug texture, and hand+ball shots with visibly denser contours. Direction is correct.
 
-**`spatial_freq_energy`** — pending visual review. Note: mean=0.0021, range very small (0.0001–0.037). For animated content with large flat-color regions, most Fourier power concentrates at DC, so the high-frequency ratio is expected to be near zero.
+**`spatial_freq_energy`** — WEAK. It does rank title text, blind slats, and other sharp repetitive patterns above flatter shots, but the dynamic range is tiny (0.0001–0.037) and the quartiles are visually mixed. For this animated short it is technically consistent, but not very discriminative.
 
 ### Motion features
 
-**`motion_energy`** — pending visual review. Frame 0 has value=0.0 (no previous frame — correct).
+**`motion_energy`** — PASS. Q1 is dominated by static black/title frames and held poses; Q4 contains dog-play, hand/ball interaction, and larger expression/body changes. Frame 0 = 0.0 is also correct by construction.
 
-**`scene_cut`** — 18 cuts detected across the film. Pending visual review of before/after context frames.
+**`scene_cut`** — FAIL. Several reported cuts are not edits at all, just adjacent motion frames. Examples: cut 2506 (frames 2505/2506/2507), cut 2811, and cut 3405 all show the same shot with small motion. The luminance-diff threshold is too weak to distinguish shot changes from within-shot motion/lighting change.
 
 ### Face features
 
-**`n_faces`**: 0 faces = 2913 frames, 1 face = 1936, 2 faces = 28. Pending visual review.
+**`n_faces`** — WEAK. The sampled 0/1/2-face examples are mostly sensible, but the detector is contaminated by animal-face false positives on this film. Across the CSV, 206 frames that also contain a detected `dog` have `n_faces > 0`, so the count is not reliably 'human faces only'.
 
-**`face_area_frac`** — pending visual review. Q1 is dominated by zero-face frames (frac=0).
+**`face_area_frac`** — FAIL as a human-face-size metric. High-area examples include dog close-ups (frames 2188, 3437, 3448), so the largest values are not consistently measuring human face prominence.
 
 ### Depth features
 
-**`depth_mean/std/range`** — pending visual review. Values in model-relative units (not metres). MiDaS depth model; Q1_near should show close-up shots, Q4_far should show wide-angle room views.
+**`depth_mean/std/range`** — WEAK overall. `depth_std` and `depth_range` broadly track flatter vs more layered shots, but `depth_mean` is not visually aligned with the `near`/`far` labels in the report: Q1 includes wide doorway/room views while Q4 includes close face/dog close-ups. The metric is likely inverse-depth-like or otherwise model-relative, so the current `near`/`far` interpretation is backwards or at least ambiguous.
 
 ### Object features
 
-**`n_objects`** — pending visual review. Range 0–31, mean 3.6. High counts (25+) are likely wide-angle room shots with many items detected.
+**`n_objects`** — WEAK. Counts rise on cluttered kitchen/living-room shots as expected, but they inherit the detector's domain-mismatch errors on animation, so the absolute counts should be treated as rough complexity signals rather than trusted object cardinality.
 
-**`object_categories`** — top category is 'person' (3964 occurrences), then 'potted plant' (2331). Pending visual review.
+**`object_categories`** — WEAK/NOISY. Some tags are correct (`dog`, `person`, `potted plant`), but sampled false positives are obvious: `book` on window blinds (frame 845), `cell phone` on a game controller (frame 1942), and `teddy bear` on dog frames (e.g. frame 3437). Good enough for rough tags, not for clean semantics.
 
 ### CLIP scene features
 
@@ -1405,6 +1429,11 @@ _No frames saved._
 - Pure-black frames (0–5) get spurious positive score (~+0.02) due to L2-normalizing a near-zero CLIP embedding (floating-point noise amplification). This is a degenerate input issue, not a code bug.
 - All CLIP features fail due to content mismatch, not implementation error.
 
+### Wrong or weak metrics for this film
+
+- **Failing**: `scene_cut`, `face_area_frac`, `scene_natural_score`, `scene_open_score`, `scene_category_score`, `scene_category`.
+- **Weak / noisy**: `color_r_mean`, `color_g_mean`, `color_b_mean`, `saturation_mean`, `spatial_freq_energy`, `n_faces`, `depth_mean`, `depth_std`, `depth_range`, `n_objects`, `object_categories`.
+
 ---
 
 ## 13. Overall Validation Summary
@@ -1414,17 +1443,17 @@ _No frames saved._
 | `luminance_mean` | PASS | PASS | PASS | PASS | **PASS** |
 | `contrast_rms` | PASS | PASS | PASS | PASS | **PASS** |
 | `entropy` | PASS | PASS | PASS | PASS (skewed) | **PASS** |
-| `color_r/g/b_mean` | PASS | N/A | PASS | pending | pending |
-| `saturation_mean` | PASS | N/A | PASS | pending | pending |
-| `edge_density` | PASS | N/A | PASS | pending | pending |
-| `spatial_freq_energy` | PASS | N/A | PASS (tiny range) | pending | pending |
-| `motion_energy` | PASS | N/A | PASS | pending | pending |
-| `scene_cut` | PASS | N/A | PASS (18 cuts) | pending | pending |
-| `n_faces` | PASS | N/A | PASS | pending | pending |
-| `face_area_frac` | PASS | N/A | PASS | pending | pending |
-| `depth_mean/std/range` | PASS | N/A (GPU) | PASS | pending | pending |
-| `n_objects` | PASS | N/A (GPU) | PASS | pending | pending |
-| `object_categories` | PASS | N/A (GPU) | PASS | pending | pending |
+| `color_r/g/b_mean` | PASS | PASS | PASS | WEAK (channel means, not semantic colors) | **WEAK** |
+| `saturation_mean` | PASS | PASS | PASS | WEAK (dark-frame artifact) | **WEAK** |
+| `edge_density` | PASS | PASS | PASS | PASS | **PASS** |
+| `spatial_freq_energy` | PASS | PASS | PASS (tiny range) | WEAK | **WEAK** |
+| `motion_energy` | PASS | PASS | PASS | PASS | **PASS** |
+| `scene_cut` | PASS | PASS | PASS (18 cuts) | FAIL | **FAIL** |
+| `n_faces` | PASS | N/A (GPU) | PASS | WEAK (dog false positives) | **WEAK** |
+| `face_area_frac` | PASS | N/A (GPU) | PASS | FAIL | **FAIL** |
+| `depth_mean/std/range` | PASS | N/A (GPU) | PASS | WEAK (`depth_mean` direction ambiguous) | **WEAK** |
+| `n_objects` | PASS | N/A (GPU) | PASS | WEAK | **WEAK** |
+| `object_categories` | PASS | N/A (GPU) | PASS | WEAK | **WEAK** |
 | `scene_natural_score` | PASS | N/A (GPU) | PASS (narrow) | FAIL | **FAIL (this film)** |
 | `scene_open_score` | PASS | N/A (GPU) | PASS (narrow) | FAIL | **FAIL (this film)** |
 | `scene_category_score` | PASS | N/A (GPU) | PASS (constant) | FAIL | **FAIL (this film)** |
