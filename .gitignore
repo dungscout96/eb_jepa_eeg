@@ -229,3 +229,10 @@ eb_jepa_ICLR/
 arxiv/
 arxiv_tmp/
 CLAUDE.md
+
+data/
+**/.eegdash_cache/
+
+# Generated SLURM scripts
+slurm/generated/
+logs/
