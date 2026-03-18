@@ -47,17 +47,25 @@ def _resolve_hbn_cache_dir() -> Path:
 
 DATA_DIR = _resolve_hbn_cache_dir()
 
-
-SPLIT_RELEASES = {
-    "train": {
-        "R1": "ds005505",  # 136 subjects
-        "R2": "ds005506",  # 152 subjects
-        "R3": "ds005507",  # 184 subjects
-        "R4": "ds005508",  # 324 subjects
-    },
-    "val": {"R5": "ds005505"},  # 136 subjects
-    "test": {"R6": "ds005510"},  # 134 subjects
-}
+if os.environ.get("environment") == "development":
+    SPLIT_RELEASES = {
+        "train": {
+            "R1": "ds005505",  # 136 subjects
+        },
+        "val": {"R1": "ds005505"},  # 136 subjects
+        "test": {"R1": "ds005505"},  # 134 subjects
+    }
+else:
+    SPLIT_RELEASES = {
+        "train": {
+            "R1": "ds005505",  # 136 subjects
+            "R2": "ds005506",  # 152 subjects
+            "R3": "ds005507",  # 184 subjects
+            "R4": "ds005508",  # 324 subjects
+        },
+        "val": {"R5": "ds005509"},  # 136 subjects
+        "test": {"R6": "ds005510"},  # 134 subjects
+    }
 
 DEFAULT_TASK = "ThePresent"
 

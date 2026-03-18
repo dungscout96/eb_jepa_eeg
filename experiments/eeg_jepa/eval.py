@@ -11,6 +11,8 @@ from sklearn.metrics import (
 )
 from tqdm import tqdm
 
+from eb_jepa.jepa import MaskedJEPA
+
 
 @torch.inference_mode()
 def validation_loop(
@@ -28,9 +30,9 @@ def validation_loop(
 
     Args:
         val_loader: DataLoader yielding (eeg, features) tuples.
-        jepa: JEPA model (encoder + predictor).
-        regression_probe: JEPAProbe with continuous MSE loss.
-        classification_probe: JEPAProbe with binary BCE loss.
+        jepa: JEPA or MaskedJEPA model.
+        regression_probe: JEPAProbe or MaskedJEPAProbe with continuous MSE loss.
+        classification_probe: JEPAProbe or MaskedJEPAProbe with binary BCE loss.
         steps: Number of JEPA prediction steps (unused here, kept for API).
         device: Torch device.
         feature_stats: Dict with "mean" and "std" tensors from training set.
@@ -40,6 +42,8 @@ def validation_loop(
     Returns:
         Dict of validation metrics.
     """
+    is_masked = isinstance(jepa, MaskedJEPA)
+
     jepa.eval()
     regression_probe.eval()
     classification_probe.eval()
@@ -52,15 +56,22 @@ def validation_loop(
     n_batches = 0
 
     for eeg, features in tqdm(val_loader, desc="Validating", leave=False):
-        x = eeg.unsqueeze(1).to(device)  # [B, 1, T, C, W]
+        eeg = eeg.to(device)
         features = features.to(device)  # [B, T, n_features]
 
+        if is_masked:
+            # MaskedJEPA: probes take [B, T, C, W] directly
+            obs = eeg
+        else:
+            # Original JEPA: probes take [B, 1, T, C, W]
+            obs = eeg.unsqueeze(1)
+
         # Losses
-        reg_loss = regression_probe(x, features)
-        cls_loss = classification_probe(x, features)
+        reg_loss = regression_probe(obs, features)
+        cls_loss = classification_probe(obs, features)
 
         # Predictions (from heads applied to frozen encoder output)
-        state = jepa.encode(x)  # [B, D, T, 1, 1]
+        state = jepa.encode(obs)  # [B, D, T, 1, 1]
         reg_pred = regression_probe.head(state)  # [B, T, n_features]
         cls_pred = classification_probe.head(state)  # [B, T, n_features]
 

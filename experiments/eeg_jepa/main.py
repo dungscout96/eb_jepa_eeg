@@ -9,6 +9,8 @@ Two evaluation decoder probes are trained alongside JEPA:
   2. Classification probe: predicts binary movie feature labels (BCEWithLogitsLoss)
 """
 
+import copy
+import math
 from pathlib import Path
 
 import fire
@@ -24,13 +26,16 @@ from eb_jepa.architectures import (
     MovieFeatureHead,
     Projector,
     EEGEncoder,
+    EEGEncoderTokens,
+    MaskedPredictor,
     MLPEEGPredictor,
     StateOnlyPredictor,
 )
 from eb_jepa.datasets.hbn import JEPAMovieDataset
-from eb_jepa.jepa import JEPA, JEPAProbe
+from eb_jepa.jepa import JEPA, JEPAProbe, MaskedJEPA, MaskedJEPAProbe
 from eb_jepa.logging import get_logger
 from eb_jepa.losses import SquareLossSeq, VCLoss
+from eb_jepa.masking import MultiBlockMaskCollator
 from eb_jepa.training_utils import (
     get_default_dev_name,
     get_exp_name,
@@ -232,41 +237,96 @@ def run(
     # ------------------------------------------------------------------
     logger.info("Initializing model...")
     n_times = train_set.n_times
-    encoder_kwargs = {}
-    for key in ("encoder_embed_dim", "encoder_depth", "encoder_heads", "encoder_head_dim"):
-        if cfg.model.get(key) is not None:
-            encoder_kwargs[key.replace("encoder_", "")] = cfg.model[key]
-    encoder = EEGEncoder(
-        n_chans, cfg.model.henc, cfg.model.dstc,
-        chs_info=chs_info, n_times=n_times, **encoder_kwargs,
-    )
-    predictor_model = MLPEEGPredictor(
-        cfg.model.dstc * 2, cfg.model.hpre, cfg.model.dstc
-    )
-    predictor = StateOnlyPredictor(predictor_model, context_length=2)
-    projector = Projector(
-        f"{cfg.model.dstc}-{cfg.model.dstc * 4}-{cfg.model.dstc * 4}"
-    )
-    regularizer = VCLoss(cfg.loss.std_coeff, cfg.loss.cov_coeff, proj=projector)
-    ploss = SquareLossSeq(projector)
-    jepa = JEPA(encoder, encoder, predictor, regularizer, ploss).to(device)
+    use_masked_jepa = cfg.model.get("use_masked_jepa", False)
+
+    if use_masked_jepa:
+        # V-JEPA masked prediction mode
+        embed_dim = cfg.model.encoder_embed_dim
+        encoder = EEGEncoderTokens(
+            n_chans=n_chans,
+            n_times=n_times,
+            embed_dim=embed_dim,
+            depth=cfg.model.encoder_depth,
+            heads=cfg.model.encoder_heads,
+            head_dim=cfg.model.encoder_head_dim,
+            n_windows=cfg.data.n_windows,
+            patch_size=cfg.model.get("patch_size", 200),
+            patch_overlap=cfg.model.get("patch_overlap", 20),
+            freqs=cfg.model.get("freqs", 4),
+            chs_info=chs_info,
+            mlp_dim_ratio=cfg.model.get("mlp_dim_ratio", 2.66),
+        )
+        target_encoder = copy.deepcopy(encoder)
+        predictor = MaskedPredictor(
+            embed_dim=embed_dim,
+            depth=cfg.model.get("predictor_depth", 2),
+            heads=cfg.model.encoder_heads,
+            head_dim=cfg.model.encoder_head_dim,
+            mlp_dim_ratio=cfg.model.get("mlp_dim_ratio", 2.66),
+        )
+        masking_cfg = cfg.get("masking", {})
+        mask_collator = MultiBlockMaskCollator(
+            n_channels=n_chans,
+            n_windows=cfg.data.n_windows,
+            n_patches_per_window=encoder.n_patches_per_window,
+            n_pred_masks_short=masking_cfg.get("n_pred_masks_short", 2),
+            n_pred_masks_long=masking_cfg.get("n_pred_masks_long", 2),
+            short_channel_scale=tuple(masking_cfg.get("short_channel_scale", [0.08, 0.15])),
+            short_patch_scale=tuple(masking_cfg.get("short_patch_scale", [0.3, 0.6])),
+            long_channel_scale=tuple(masking_cfg.get("long_channel_scale", [0.15, 0.35])),
+            long_patch_scale=tuple(masking_cfg.get("long_patch_scale", [0.5, 1.0])),
+            min_context_fraction=masking_cfg.get("min_context_fraction", 0.15),
+        )
+        projector = Projector(f"{embed_dim}-{embed_dim * 4}-{embed_dim * 4}")
+        regularizer = VCLoss(cfg.loss.std_coeff, cfg.loss.cov_coeff, proj=projector)
+        jepa = MaskedJEPA(encoder, target_encoder, predictor, mask_collator, regularizer).to(device)
+
+        # Representation dim for probes is embed_dim (not dstc)
+        rep_dim = embed_dim
+    else:
+        # Original JEPA mode
+        encoder_kwargs = {}
+        for key in ("encoder_embed_dim", "encoder_depth", "encoder_heads", "encoder_head_dim"):
+            if cfg.model.get(key) is not None:
+                encoder_kwargs[key.replace("encoder_", "")] = cfg.model[key]
+        encoder = EEGEncoder(
+            n_chans, cfg.model.henc, cfg.model.dstc,
+            chs_info=chs_info, n_times=n_times, **encoder_kwargs,
+        )
+        predictor_model = MLPEEGPredictor(
+            cfg.model.dstc * 2, cfg.model.hpre, cfg.model.dstc
+        )
+        predictor = StateOnlyPredictor(predictor_model, context_length=2)
+        projector = Projector(
+            f"{cfg.model.dstc}-{cfg.model.dstc * 4}-{cfg.model.dstc * 4}"
+        )
+        regularizer = VCLoss(cfg.loss.std_coeff, cfg.loss.cov_coeff, proj=projector)
+        ploss = SquareLossSeq(projector)
+        jepa = JEPA(encoder, encoder, predictor, regularizer, ploss).to(device)
+        rep_dim = cfg.model.dstc
 
     # ------------------------------------------------------------------
     # Initialize evaluation decoder probes
     # ------------------------------------------------------------------
 
     # 1. Regression probe: continuous movie feature prediction (MSELoss)
-    reg_head = MovieFeatureHead(cfg.model.dstc, cfg.model.hdec, n_features)
+    reg_head = MovieFeatureHead(rep_dim, cfg.model.hdec, n_features)
     reg_loss_fn = RegressionLoss(
         feature_stats["mean"].to(device),
         feature_stats["std"].to(device),
     )
-    regression_probe = JEPAProbe(jepa, reg_head, reg_loss_fn).to(device)
+    if use_masked_jepa:
+        regression_probe = MaskedJEPAProbe(jepa, reg_head, reg_loss_fn).to(device)
+    else:
+        regression_probe = JEPAProbe(jepa, reg_head, reg_loss_fn).to(device)
 
     # 2. Classification probe: binary movie feature prediction (BCEWithLogitsLoss)
-    cls_head = MovieFeatureHead(cfg.model.dstc, cfg.model.hdec, n_features)
+    cls_head = MovieFeatureHead(rep_dim, cfg.model.hdec, n_features)
     cls_loss_fn = ClassificationLoss(feature_median.to(device))
-    classification_probe = JEPAProbe(jepa, cls_head, cls_loss_fn).to(device)
+    if use_masked_jepa:
+        classification_probe = MaskedJEPAProbe(jepa, cls_head, cls_loss_fn).to(device)
+    else:
+        classification_probe = JEPAProbe(jepa, cls_head, cls_loss_fn).to(device)
 
     # Log model info
     encoder_params = sum(p.numel() for p in encoder.parameters())
@@ -288,7 +348,14 @@ def run(
     classification_probe.train()
 
     # Separate optimizers: JEPA is purely self-supervised, probes are online eval
-    optimizer = Adam(jepa.parameters(), lr=cfg.optim.lr)
+    if use_masked_jepa:
+        # Only optimize context encoder + predictor (target encoder is EMA)
+        optimizer = Adam(
+            list(jepa.context_encoder.parameters()) + list(jepa.predictor.parameters()),
+            lr=cfg.optim.lr,
+        )
+    else:
+        optimizer = Adam(jepa.parameters(), lr=cfg.optim.lr)
     probe_optimizer = Adam(
         list(regression_probe.head.parameters())
         + list(classification_probe.head.parameters()),
@@ -320,35 +387,68 @@ def run(
         )
 
         for eeg, features in pbar:
-            # eeg: [B, T, C, W] -> [B, 1, T, C, W] for JEPA encoder
-            x = eeg.unsqueeze(1).to(device)
+            eeg = eeg.to(device)
             features = features.to(device)  # [B, T, n_features]
 
-            # --- JEPA pretraining (self-supervised, no labels) ---
-            optimizer.zero_grad()
-            _, (jepa_loss, regl, _, regldict, pl) = jepa.unroll(
-                x,
-                actions=None,
-                nsteps=cfg.model.steps,
-                unroll_mode="parallel",
-                compute_loss=True,
-                return_all_steps=False,
-            )
-            jepa_loss.backward()
-            optimizer.step()
+            if use_masked_jepa:
+                # --- V-JEPA masked pretraining ---
+                optimizer.zero_grad()
+                jepa_loss, loss_dict = jepa(eeg)  # eeg: [B, T, C, W]
+                jepa_loss.backward()
+                optimizer.step()
 
-            # --- Probe training (online eval on frozen encoder) ---
-            probe_optimizer.zero_grad()
-            reg_loss = regression_probe(x, features)
-            cls_loss = classification_probe(x, features)
-            (reg_loss + cls_loss).backward()
-            probe_optimizer.step()
+                # EMA update of target encoder
+                ema_start = cfg.model.get("ema_momentum", 0.996)
+                ema_end = cfg.model.get("ema_momentum_end", 1.0)
+                total_steps = cfg.optim.epochs * len(train_loader)
+                momentum = ema_end - (ema_end - ema_start) * (
+                    math.cos(math.pi * global_step / total_steps) + 1
+                ) / 2
+                jepa.update_target_encoder(momentum)
+
+                regl = loss_dict.get("reg_loss", 0.0)
+                pl = loss_dict.get("pred_loss", 0.0)
+                regldict = {k: v for k, v in loss_dict.items()
+                            if k not in ("total_loss", "reg_loss", "pred_loss")}
+
+                # --- Probe training ---
+                probe_optimizer.zero_grad()
+                reg_loss = regression_probe(eeg, features)
+                cls_loss = classification_probe(eeg, features)
+                (reg_loss + cls_loss).backward()
+                probe_optimizer.step()
+
+            else:
+                # --- Original JEPA pretraining ---
+                x = eeg.unsqueeze(1)  # [B, 1, T, C, W] for JEPA encoder
+
+                optimizer.zero_grad()
+                _, (jepa_loss, regl, _, regldict, pl) = jepa.unroll(
+                    x,
+                    actions=None,
+                    nsteps=cfg.model.steps,
+                    unroll_mode="parallel",
+                    compute_loss=True,
+                    return_all_steps=False,
+                )
+                jepa_loss.backward()
+                optimizer.step()
+
+                # --- Probe training (online eval on frozen encoder) ---
+                probe_optimizer.zero_grad()
+                reg_loss = regression_probe(x, features)
+                cls_loss = classification_probe(x, features)
+                (reg_loss + cls_loss).backward()
+                probe_optimizer.step()
+
+                regl = regl.item()
+                pl = pl.item()
 
             pbar.set_postfix(
                 {
                     "loss": f"{jepa_loss.item():.4f}",
-                    "vc": f"{regl.item():.4f}",
-                    "pred": f"{pl.item():.4f}",
+                    "vc": f"{float(regl):.4f}",
+                    "pred": f"{float(pl):.4f}",
                     "reg": f"{reg_loss.item():.4f}",
                     "cls": f"{cls_loss.item():.4f}",
                 }
@@ -360,8 +460,8 @@ def run(
 
                 step_metrics = {
                     "train_step/jepa_loss": jepa_loss.item(),
-                    "train_step/vc_loss": regl.item(),
-                    "train_step/pred_loss": pl.item(),
+                    "train_step/vc_loss": float(regl),
+                    "train_step/pred_loss": float(pl),
                     "train_step/reg_loss": reg_loss.item(),
                     "train_step/cls_loss": cls_loss.item(),
                 }
@@ -388,8 +488,8 @@ def run(
             train_metrics = {
                 "epoch": epoch,
                 "train/loss": jepa_loss.item(),
-                "train/vc_loss": regl.item(),
-                "train/pred_loss": pl.item(),
+                "train/vc_loss": float(regl),
+                "train/pred_loss": float(pl),
                 "train/reg_loss": reg_loss.item(),
                 "train/cls_loss": cls_loss.item(),
             }
@@ -407,8 +507,8 @@ def run(
                 epoch,
                 {
                     "loss": jepa_loss.item(),
-                    "vc": regl.item(),
-                    "pred": pl.item(),
+                    "vc": float(regl),
+                    "pred": float(pl),
                     "val_reg": val_logs.get("val/reg_loss", 0),
                     "val_cls": val_logs.get("val/cls_loss", 0),
                 },

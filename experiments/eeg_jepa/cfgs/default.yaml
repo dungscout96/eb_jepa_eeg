@@ -40,6 +40,25 @@ model:
   # Training
   steps: 4          # Number of prediction steps during training
 
+  # V-JEPA masked prediction (set use_masked_jepa: true to enable)
+  use_masked_jepa: true
+  patch_size: 200         # Temporal patch size in samples
+  patch_overlap: 20       # Overlap between patches
+  freqs: 4               # Fourier positional encoding frequencies
+  mlp_dim_ratio: 2.66    # FFN hidden dim = embed_dim * mlp_dim_ratio
+  predictor_depth: 2     # Transformer depth for predictor (shallower than encoder)
+  ema_momentum: 0.996    # EMA momentum start
+  ema_momentum_end: 1.0  # EMA momentum end (cosine schedule)
+
+masking:
+  n_pred_masks_short: 2             # Number of short-range prediction masks
+  n_pred_masks_long: 2              # Number of long-range prediction masks
+  short_channel_scale: [0.08, 0.15] # Fraction of channels per short mask
+  short_patch_scale: [0.3, 0.6]     # Fraction of patches per short mask
+  long_channel_scale: [0.15, 0.35]  # Fraction of channels per long mask
+  long_patch_scale: [0.5, 1.0]      # Fraction of patches per long mask
+  min_context_fraction: 0.15        # Minimum fraction of tokens as context
+
 loss:
   # Variance-Covariance regularization
   cov_coeff: 1.0    # Covariance loss weight (reduced from 100)

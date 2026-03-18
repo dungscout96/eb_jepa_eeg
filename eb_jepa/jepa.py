@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from eb_jepa.logging import get_logger
 
@@ -233,5 +234,134 @@ class JEPAProbe(nn.Module):
         """Forward pass for training the head (JEPA encoder gradients are detached)."""
         with torch.no_grad():
             state = self.jepa.encode(observations)
+        output = self.head(state.detach())
+        return self.hcost(output, targets)
+
+
+class MaskedJEPA(nn.Module):
+    """V-JEPA style masked prediction for EEG.
+
+    - context_encoder: processes only unmasked (context) tokens
+    - target_encoder: EMA copy, processes ALL tokens (no masking), frozen
+    - predictor: predicts masked token representations from context
+
+    Args:
+        context_encoder: EEGEncoderTokens instance (trainable)
+        target_encoder: EEGEncoderTokens instance (EMA copy, no gradients)
+        predictor: MaskedPredictor instance (trainable)
+        mask_collator: MultiBlockMaskCollator instance
+        regularizer: VCLoss or similar (optional, for anti-collapse)
+    """
+
+    def __init__(self, context_encoder, target_encoder, predictor, mask_collator, regularizer=None):
+        super().__init__()
+        self.context_encoder = context_encoder
+        self.target_encoder = target_encoder
+        self.predictor = predictor
+        self.mask_collator = mask_collator
+        self.regularizer = regularizer
+
+        # Freeze target encoder
+        for p in self.target_encoder.parameters():
+            p.requires_grad = False
+
+    @torch.no_grad()
+    def update_target_encoder(self, momentum: float):
+        """EMA update of target encoder from context encoder."""
+        for p_ctx, p_tgt in zip(self.context_encoder.parameters(), self.target_encoder.parameters()):
+            p_tgt.data.lerp_(p_ctx.data, 1.0 - momentum)
+
+    def forward(self, eeg: torch.Tensor) -> tuple[torch.Tensor, dict]:
+        """Forward pass: mask, encode, predict, compute loss.
+
+        Args:
+            eeg: [B, T, C, W] raw EEG
+
+        Returns:
+            (total_loss, loss_dict) where loss_dict contains individual loss components
+        """
+        B = eeg.shape[0]
+        device = eeg.device
+
+        # 1. Generate masks
+        mask_result = self.mask_collator()
+        context_mask = mask_result.context_mask.to(device)
+        pred_masks = [pm.to(device) for pm in mask_result.pred_masks]
+
+        # 2. Get positional embeddings (full, unmasked)
+        _, pos_embed = self.context_encoder.tokenize(eeg)  # [B, C*T*P, D]
+
+        # 3. Context encoding: only unmasked tokens
+        ctx_tokens = self.context_encoder.encode_tokens(eeg, mask=context_mask)  # [B, n_ctx, D]
+
+        # 4. Target encoding: all tokens (no masking), no gradients
+        with torch.no_grad():
+            tgt_tokens = self.target_encoder.encode_tokens(eeg, mask=None)  # [B, C*T*P, D]
+
+        # 5. Gather positional embeddings for context and prediction targets
+        ctx_pos = pos_embed[:, context_mask]  # [B, n_ctx, D]
+
+        # Concatenate all prediction mask indices and their targets
+        if len(pred_masks) == 0:
+            # No prediction masks (edge case) — return zero loss
+            zero = torch.tensor(0.0, device=device, requires_grad=True)
+            return zero, {"pred_loss": 0.0, "reg_loss": 0.0}
+
+        all_pred_indices = torch.cat(pred_masks).unique()
+        tgt_pos = pos_embed[:, all_pred_indices]  # [B, n_pred, D]
+        tgt_representations = tgt_tokens[:, all_pred_indices]  # [B, n_pred, D]
+
+        # 6. Predictor: predict representations at masked positions
+        predictions = self.predictor(ctx_tokens, ctx_pos, tgt_pos)  # [B, n_pred, D]
+
+        # 7. Prediction loss: MSE between predictions and target representations
+        pred_loss = F.mse_loss(predictions, tgt_representations.detach())
+
+        # 8. Regularizer loss (optional, on context representations)
+        loss_dict = {"pred_loss": pred_loss.item()}
+        reg_loss = torch.tensor(0.0, device=device)
+        if self.regularizer is not None:
+            # VCLoss expects [B, C, T, H, W] — reshape ctx_tokens to [B, D, n_ctx, 1, 1]
+            ctx_for_reg = ctx_tokens.permute(0, 2, 1).unsqueeze(-1).unsqueeze(-1)
+            reg_loss, reg_loss_unweighted, reg_dict = self.regularizer(ctx_for_reg)
+            loss_dict["reg_loss"] = reg_loss.item()
+            loss_dict.update(reg_dict)
+
+        total_loss = pred_loss + reg_loss
+        loss_dict["total_loss"] = total_loss.item()
+
+        return total_loss, loss_dict
+
+    @torch.no_grad()
+    def encode(self, eeg: torch.Tensor) -> torch.Tensor:
+        """Encode EEG without masking (for probes).
+
+        Args:
+            eeg: [B, T, C, W]
+
+        Returns:
+            [B, D, T, 1, 1] pooled per-window representations
+        """
+        tokens = self.context_encoder.encode_tokens(eeg, mask=None)
+        return self.context_encoder.pool_to_windows(tokens)
+
+
+class MaskedJEPAProbe(nn.Module):
+    """Probe for MaskedJEPA: trains a head on frozen encoder representations.
+
+    Similar to JEPAProbe but works with MaskedJEPA's token-based encoder.
+    """
+
+    def __init__(self, masked_jepa, head, hcost):
+        super().__init__()
+        self.masked_jepa = masked_jepa
+        self.head = head
+        self.hcost = hcost
+
+    def forward(self, eeg, targets):
+        """Forward pass: encode with frozen MaskedJEPA, apply head, compute loss."""
+        with torch.no_grad():
+            # Encode without masking, pool to [B, D, T, 1, 1]
+            state = self.masked_jepa.encode(eeg)
         output = self.head(state.detach())
         return self.hcost(output, targets)
