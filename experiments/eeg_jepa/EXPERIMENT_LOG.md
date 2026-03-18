@@ -1,3 +1,24 @@
+## 03/02/2026
+The numbers tell a clear story. Look at the key signal:
+
+pred_loss: 0.25 → 0.009 — the predictor nearly perfectly predicts the next state
+probe metrics: ~chance — the representations carry no movie-feature information
+This means the prediction task is too easy, not irrelevant. The predictor achieves near-zero loss by learning trivially predictable patterns (EEG is largely stationary over consecutive 2-second windows — same subject, same brain state). The encoder never needs to encode anything about the movie stimulus to satisfy the objective.
+
+Think of it this way: if I ask you to predict what someone's EEG will look like 2 seconds from now, you'd mostly just copy the current signal. That's what the predictor learned. It doesn't need to know what movie frame is playing.
+
+A few ways to make the pretraining objective more aligned with downstream tasks:
+
+Longer prediction horizon — predict further into the future (e.g., 10-20 seconds ahead) where the trivial copy strategy fails
+Masking strategy — instead of predicting next-window, mask random windows in the sequence and predict them from context (like MAE/I-JEPA), forcing the encoder to capture content rather than continuity
+Harder negatives — contrastive approach where the model must distinguish which movie segment an EEG window came from
+The current steps=4 with StateOnlyPredictor pairs consecutive frames — that's essentially a 1-step prediction repeated 4 times. The signal barely changes between consecutive windows, so the objective is trivially satisfied.
+
+Want me to implement one of these approaches?
+
+Ideas:
+- Have multiple agents run on different branches of the repo, run different experiments. Each have hyperparameter sweeps. Monitor loss. Surface one that show improved probe performance. Summarize all experiments run for reflection later.
+
 ## 03/01/2026
 ### Summary
 The experiment pipeline is now sound and ready for experimentation. Here's what was done:
