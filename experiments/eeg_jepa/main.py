@@ -36,6 +36,7 @@ from eb_jepa.jepa import JEPA, JEPAProbe, MaskedJEPA, MaskedJEPAProbe
 from eb_jepa.logging import get_logger
 from eb_jepa.losses import SquareLossSeq, VCLoss
 from eb_jepa.masking import MultiBlockMaskCollator
+from eb_jepa.sanity_checks import SanityCheckHook
 from eb_jepa.training_utils import (
     get_default_dev_name,
     get_exp_name,
@@ -362,6 +363,24 @@ def run(
         lr=cfg.optim.lr,
     )
 
+    # ------------------------------------------------------------------
+    # Sanity check hook (collapse detection, grad norms, linear probe)
+    # ------------------------------------------------------------------
+    sanity_cfg = cfg.get("sanity_checks", {})
+    sanity_hook = SanityCheckHook(
+        embed_dim=rep_dim,
+        feature_median=feature_median,
+        n_pred_masks_short=masking_cfg.get("n_pred_masks_short", 2) if use_masked_jepa else 2,
+        log_every_steps=sanity_cfg.get("log_every_steps", 50),
+        probe_every_steps=sanity_cfg.get("probe_every_steps", 200),
+        probe_train_steps=sanity_cfg.get("probe_train_steps", 30),
+        probe_buffer_size=sanity_cfg.get("probe_buffer_size", 512),
+        cosim_n_pairs=sanity_cfg.get("cosim_n_pairs", 128),
+        horizon_every_steps=sanity_cfg.get("horizon_every_steps", 200),
+        # Disable hook for non-masked JEPA (hook is designed for MaskedJEPA internals)
+        enabled=sanity_cfg.get("enabled", True) and use_masked_jepa,
+    )
+
     # Log configuration
     log_config(cfg)
 
@@ -395,6 +414,15 @@ def run(
                 optimizer.zero_grad()
                 jepa_loss, loss_dict = jepa(eeg)  # eeg: [B, T, C, W]
                 jepa_loss.backward()
+                # Gradient norm captured here (before optimizer clears grads)
+                torch.nn.utils.clip_grad_norm_(
+                    list(jepa.context_encoder.parameters())
+                    + list(jepa.predictor.parameters()),
+                    max_norm=1.0,
+                )
+                sanity_metrics = sanity_hook.step(
+                    global_step, eeg, features, jepa, loss_dict
+                )
                 optimizer.step()
 
                 # EMA update of target encoder
@@ -443,6 +471,8 @@ def run(
 
                 regl = regl.item()
                 pl = pl.item()
+                # Sanity hook disabled for non-masked JEPA; emit empty dict
+                sanity_metrics = {}
 
             pbar.set_postfix(
                 {
@@ -454,7 +484,7 @@ def run(
                 }
             )
 
-            # Per-step wandb logging for training metrics
+            # Per-step wandb logging for training metrics + sanity checks
             if wandb_run:
                 import wandb
 
@@ -464,6 +494,7 @@ def run(
                     "train_step/pred_loss": float(pl),
                     "train_step/reg_loss": reg_loss.item(),
                     "train_step/cls_loss": cls_loss.item(),
+                    **sanity_metrics,
                 }
                 for k, v in regldict.items():
                     step_metrics[f"train_step/{k}"] = float(v)

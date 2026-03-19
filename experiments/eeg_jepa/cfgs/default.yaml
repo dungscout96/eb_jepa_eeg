@@ -74,3 +74,12 @@ logging:
   log_every: 1        # Log every N epochs
   save_every: 10      # Save checkpoint every N epochs
   tqdm_silent: false  # Disable tqdm progress bars
+
+sanity_checks:
+  enabled: true             # Set false to disable all sanity check logging
+  log_every_steps: 50       # How often (steps) to log embedding/collapse/grad metrics
+  probe_every_steps: 200    # How often (steps) to train & eval the downstream linear probe
+  probe_train_steps: 30     # SGD steps per linear probe evaluation round
+  probe_buffer_size: 512    # Max (embedding, label) samples kept for linear probe training
+  cosim_n_pairs: 128        # Random pairs for cosine-similarity collapse check
+  horizon_every_steps: 200  # How often (steps) to compute short vs long pred losses
