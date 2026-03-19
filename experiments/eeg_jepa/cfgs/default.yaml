@@ -8,9 +8,9 @@ meta:
 data:
   batch_size: 64
   num_workers: 4
-  n_windows: 16          # Number of windows per sample
+  n_windows: 4          # Number of windows per sample
   window_size_seconds: 2  # Window duration in seconds
-  temporal_stride: 4      # Stride between sampled windows (1=contiguous, 4=8s apart)
+  temporal_stride: 1      # Stride between sampled windows (1=contiguous, 4=8s apart)
   preprocessed: true     # Use preprocessed data (set true + preprocessed_dir to use)
   preprocessed_dir: null  # Auto-detects known paths; set explicitly to override
   # HBN dataset parameters
@@ -42,7 +42,7 @@ model:
 
   # V-JEPA masked prediction (set use_masked_jepa: true to enable)
   use_masked_jepa: true
-  patch_size: 200         # Temporal patch size in samples
+  patch_size: 50         # Temporal patch size in samples
   patch_overlap: 20       # Overlap between patches
   freqs: 4               # Fourier positional encoding frequencies
   mlp_dim_ratio: 2.66    # FFN hidden dim = embed_dim * mlp_dim_ratio
