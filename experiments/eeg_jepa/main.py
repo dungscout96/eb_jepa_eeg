@@ -167,7 +167,11 @@ def run(
 
     wandb_run = setup_wandb(
         project="eb_jepa",
-        config={"example": "eeg_jepa", **OmegaConf.to_container(cfg, resolve=True)},
+        config={
+            "example": "eeg_jepa",
+            **OmegaConf.to_container(cfg, resolve=True),
+            # probe_label_name is resolved after datasets load; we update it below
+        },
         run_dir=exp_dir,
         run_name=exp_name,
         tags=["eeg_jepa", f"seed_{cfg.meta.seed}"],
@@ -367,8 +371,14 @@ def run(
     # Sanity check hook (collapse detection, grad norms, linear probe)
     # ------------------------------------------------------------------
     sanity_cfg = cfg.get("sanity_checks", {})
+    probe_label_name = getattr(train_set, "probe_label_name", "none")
+    logger.info("Sanity-check linear probe label: '%s'", probe_label_name)
+    if wandb_run:
+        import wandb
+        wandb.config.update({"sanity_checks/probe_label": probe_label_name}, allow_val_change=True)
     sanity_hook = SanityCheckHook(
         embed_dim=rep_dim,
+        # feature_median is the luminance fallback — used only when probe_labels are NaN
         feature_median=feature_median,
         n_pred_masks_short=masking_cfg.get("n_pred_masks_short", 2) if use_masked_jepa else 2,
         log_every_steps=sanity_cfg.get("log_every_steps", 50),
@@ -405,9 +415,11 @@ def run(
             disable=cfg.logging.get("tqdm_silent", False),
         )
 
-        for eeg, features in pbar:
+        for eeg, features, probe_labels in pbar:
             eeg = eeg.to(device)
             features = features.to(device)  # [B, T, n_features]
+            # probe_labels: [B] float (NaN where no subject metadata); stays on CPU
+            # for the hook — no need to move to device
 
             if use_masked_jepa:
                 # --- V-JEPA masked pretraining ---
@@ -421,7 +433,8 @@ def run(
                     max_norm=1.0,
                 )
                 sanity_metrics = sanity_hook.step(
-                    global_step, eeg, features, jepa, loss_dict
+                    global_step, eeg, features, jepa, loss_dict,
+                    probe_labels=probe_labels,
                 )
                 optimizer.step()
 

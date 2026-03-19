@@ -2,6 +2,7 @@
 
 import gc
 import logging
+import math
 import os
 from pathlib import Path
 
@@ -263,6 +264,91 @@ def _load_dataset(
 
 
 # ---------------------------------------------------------------------------
+# Subject metadata helpers
+# ---------------------------------------------------------------------------
+
+
+def _extract_recording_metadata(window_ds_metadata: "pd.DataFrame") -> dict:
+    """Pull subject-level attributes from a braindecode window metadata DataFrame.
+
+    ``window_ds.get_metadata()`` returns one row per window, but subject
+    attributes (age, sex, participant_id, …) are constant across all windows
+    in the same recording, so we only inspect the first row.
+
+    Returns a dict of whatever subject-level columns are present; missing or
+    null values are omitted.
+    """
+    subject_cols = ("age", "sex", "gender", "participant_id", "site", "diagnosis")
+    row = window_ds_metadata.iloc[0]
+    meta = {}
+    for col in subject_cols:
+        if col in window_ds_metadata.columns:
+            val = row[col]
+            if pd.notna(val):
+                meta[col] = val
+    return meta
+
+
+def _compute_probe_labels(
+    metadata_list: list[dict],
+) -> tuple[list[float], str]:
+    """Derive a binary probe label from per-recording subject metadata.
+
+    Priority order:
+      1. **age** — binarised as ``age > median(age)`` across the split.
+      2. **sex / gender** — Male/M → 1.0, Female/F → 0.0.
+      3. Fallback → all ``float('nan')`` (hook will use luminance instead).
+
+    A label column is accepted if at least 50 % of recordings have a valid value.
+
+    Returns
+    -------
+    labels : list[float]
+        Per-recording binary label (0.0/1.0) or ``float('nan')`` when unknown.
+    label_name : str
+        Human-readable description of the label used.
+    """
+    n = len(metadata_list)
+    if n == 0:
+        return [], "none"
+
+    # ---- Try age ----
+    ages: list[float] = []
+    for m in metadata_list:
+        try:
+            ages.append(float(m["age"]))
+        except (KeyError, TypeError, ValueError):
+            ages.append(float("nan"))
+    valid_ages = [a for a in ages if not math.isnan(a)]
+    if len(valid_ages) >= n * 0.5:
+        median_age = float(np.median(valid_ages))
+        labels = [
+            float(a > median_age) if not math.isnan(a) else float("nan")
+            for a in ages
+        ]
+        return labels, f"age_gt_{median_age:.1f}"
+
+    # ---- Try sex / gender ----
+    male_terms = {"m", "male"}
+    female_terms = {"f", "female"}
+    sex_labels: list[float] = []
+    for m in metadata_list:
+        raw = str(m.get("sex", m.get("gender", ""))).strip().lower()
+        if raw in male_terms:
+            sex_labels.append(1.0)
+        elif raw in female_terms:
+            sex_labels.append(0.0)
+        else:
+            sex_labels.append(float("nan"))
+    valid_sex = [s for s in sex_labels if not math.isnan(s)]
+    if len(valid_sex) >= n * 0.5:
+        return sex_labels, "sex_male_vs_female"
+
+    # ---- No usable metadata ----
+    return [float("nan")] * n, "none"
+
+
+# ---------------------------------------------------------------------------
 # Datasets
 # ---------------------------------------------------------------------------
 
@@ -475,9 +561,10 @@ class HBNMovieDataset(Dataset):
 
         self.sfreq = None
         # Lightweight storage: file paths + absolute sample indices per recording
-        self._fif_paths = []       # str per recording
-        self._crop_inds = []       # np.ndarray (n_windows, 3) per recording
-        self.labels = []           # pd.Series per recording
+        self._fif_paths = []             # str per recording
+        self._crop_inds = []             # np.ndarray (n_windows, 3) per recording
+        self.labels = []                 # pd.Series per recording
+        self._recording_metadata = []    # dict per recording (subject-level attributes)
         total_recordings = 0
         total_rejected = 0
 
@@ -566,13 +653,23 @@ class HBNMovieDataset(Dataset):
 
                 # braindecode's i_start_in_trial uses absolute sample indices;
                 # get_window_movie_metadata expects onsets relative to video_start.
-                abs_onsets = window_ds.get_metadata()["i_start_in_trial"]
+                window_meta_df = window_ds.get_metadata()
+                abs_onsets = window_meta_df["i_start_in_trial"]
                 window_onsets = abs_onsets - video_start_sample
                 movie_features_for_windows = window_onsets.apply(self._get_movie_features_for_window)
+
+                # Extract subject-level attributes (age, sex, …) from braindecode metadata.
+                # These are the same for every window in a recording, so we only look
+                # at the first row.  Missing / null columns are silently skipped.
+                try:
+                    subj_meta = _extract_recording_metadata(window_meta_df)
+                except Exception:
+                    subj_meta = {}
 
                 self._fif_paths.append(fif_path)
                 self._crop_inds.append(crop_inds)
                 self.labels.append(movie_features_for_windows)
+                self._recording_metadata.append(subj_meta)
 
                 # Explicitly close Raw file handles before moving on
                 rec.raw.close()
@@ -655,6 +752,7 @@ class JEPAMovieDataset(HBNMovieDataset):
         # Parent already stored _fif_paths, _crop_inds, labels (all lightweight).
         filtered_paths = []
         filtered_crops = []
+        filtered_metadata = []
         self.feature_recordings = []
         self._n_chans = None
         self._n_times = None
@@ -677,6 +775,7 @@ class JEPAMovieDataset(HBNMovieDataset):
 
             filtered_paths.append(self._fif_paths[rec_idx])
             filtered_crops.append(crop_inds)
+            filtered_metadata.append(self._recording_metadata[rec_idx])
             self.feature_recordings.append(feats)
 
             # Capture shape from first valid recording (one cheap read)
@@ -690,7 +789,22 @@ class JEPAMovieDataset(HBNMovieDataset):
         # Replace parent's storage with filtered set
         self._fif_paths = filtered_paths
         self._crop_inds = filtered_crops
+        self._recording_metadata = filtered_metadata
         del self.labels  # labels are now in feature_recordings
+
+        # Derive binary probe labels from subject metadata (age / sex).
+        # Falls back to all-NaN if metadata is not available; the sanity
+        # check hook will then use luminance as a fallback label instead.
+        self._probe_labels, self.probe_label_name = _compute_probe_labels(
+            self._recording_metadata
+        )
+        n_valid = sum(1 for v in self._probe_labels if not math.isnan(v))
+        logger.info(
+            "Probe label: '%s', valid for %d/%d recordings",
+            self.probe_label_name,
+            n_valid,
+            len(self._probe_labels),
+        )
 
         # Compute or set per-channel normalization stats
         if eeg_norm_stats is not None:
@@ -783,7 +897,11 @@ class JEPAMovieDataset(HBNMovieDataset):
         )
         eeg = (eeg - self._eeg_mean) / self._eeg_std
 
-        return eeg, feats[indices]
+        # Binary subject label (age > median, sex, …) — scalar float tensor.
+        # NaN means metadata was unavailable for this recording.
+        probe_label = torch.tensor(self._probe_labels[idx], dtype=torch.float32)
+
+        return eeg, feats[indices], probe_label
 
 
 class HBNMovieProbeDataset(HBNMovieDataset):

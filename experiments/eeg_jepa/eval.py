@@ -55,7 +55,7 @@ def validation_loop(
     cls_loss_sum = 0.0
     n_batches = 0
 
-    for eeg, features in tqdm(val_loader, desc="Validating", leave=False):
+    for eeg, features, _ in tqdm(val_loader, desc="Validating", leave=False):
         eeg = eeg.to(device)
         features = features.to(device)  # [B, T, n_features]
 

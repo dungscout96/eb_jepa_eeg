@@ -3,18 +3,19 @@
 Tracks collapse detection, training stability, and downstream signal metrics,
 logging everything to W&B under the ``sanity/`` prefix.
 
-Typical usage in the training loop (after optimizer.step()):
+Typical usage in the training loop (after backward(), before optimizer.step()):
 
     hook = SanityCheckHook(
         embed_dim=64,
-        feature_median=train_set.compute_feature_median(),
+        feature_median=train_set.compute_feature_median(),  # luminance fallback
         n_pred_masks_short=2,
         log_every_steps=50,
         probe_every_steps=200,
     )
 
-    # inside the loop:
-    sanity_metrics = hook.step(step, eeg, features, jepa, loss_dict)
+    # inside the loop (probe_labels = [B] binary float from __getitem__):
+    sanity_metrics = hook.step(step, eeg, features, jepa, loss_dict,
+                               probe_labels=probe_labels)
     if wandb_run and sanity_metrics:
         wandb.log(sanity_metrics, step=global_step)
 
@@ -40,12 +41,15 @@ Training stability
     sanity/grad_norm                 combined grad norm for encoder + predictor
 
 Downstream signal
-    sanity/linear_probe_acc          binary-classification accuracy on luminance label
-                                     (proxy for "does the representation carry signal?")
-                                     rises during training if embeddings are informative.
-                                     Note: age would be a better label but is not available
-                                     in the per-batch data; luminance is a simple visual feature
-                                     that is trivially decoded if embeddings capture visual info.
+    sanity/linear_probe_acc          binary-classification accuracy of a lightweight
+                                     linear probe trained on frozen embeddings.
+                                     Label source (in priority order):
+                                       1. Subject metadata: age > median  OR  sex M/F
+                                          (passed in via ``probe_labels`` each step)
+                                       2. Luminance fallback: luminance_mean > median
+                                          (used when probe_labels are all NaN)
+                                     Rising accuracy during training indicates the
+                                     representation is becoming semantically meaningful.
 """
 
 from __future__ import annotations
@@ -69,7 +73,9 @@ class SanityCheckHook:
     Args:
         embed_dim: Encoder embedding dimension (used to initialise the linear probe).
         feature_median: [n_features] CPU tensor — per-feature median on the training
-            set. Used to binarise the luminance feature for the linear probe.
+            set. Used only as a luminance fallback when no real subject labels are
+            available (i.e. ``probe_labels`` are all NaN). Pass ``None`` to disable
+            the fallback entirely.
         n_pred_masks_short: Number of short-range prediction masks in the collator.
             The first ``n_pred_masks_short`` entries in ``mask_result.pred_masks``
             are short; the rest are long-range.
@@ -85,14 +91,14 @@ class SanityCheckHook:
         enabled: Set to False to disable all metric computation (hook becomes a no-op).
     """
 
-    # Index of luminance_mean in JEPAMovieDataset.DEFAULT_FEATURES
+    # Index of luminance_mean in JEPAMovieDataset.DEFAULT_FEATURES —
     # ["contrast_rms", "luminance_mean", "entropy", "scene_natural_score"]
     LUMINANCE_FEATURE_IDX: int = 1
 
     def __init__(
         self,
         embed_dim: int,
-        feature_median: torch.Tensor,
+        feature_median: torch.Tensor | None = None,
         n_pred_masks_short: int = 2,
         log_every_steps: int = 50,
         probe_every_steps: int = 200,
@@ -104,7 +110,7 @@ class SanityCheckHook:
         enabled: bool = True,
     ) -> None:
         self.embed_dim = embed_dim
-        self.feature_median = feature_median.cpu()
+        self.feature_median = feature_median.cpu() if feature_median is not None else None
         self.n_pred_masks_short = n_pred_masks_short
         self.log_every_steps = log_every_steps
         self.probe_every_steps = probe_every_steps
@@ -135,15 +141,23 @@ class SanityCheckHook:
     def step(
         self,
         step: int,
-        eeg: torch.Tensor,       # [B, T, C, W]
-        features: torch.Tensor,  # [B, T, n_features]
-        jepa,                    # MaskedJEPA
-        loss_dict: dict,         # from jepa.forward()
+        eeg: torch.Tensor,          # [B, T, C, W]
+        features: torch.Tensor,     # [B, T, n_features]
+        jepa,                       # MaskedJEPA
+        loss_dict: dict,            # from jepa.forward()
+        probe_labels: torch.Tensor | None = None,  # [B] binary float (NaN = unknown)
     ) -> dict:
         """Compute and return sanity metrics for the current training step.
 
         Call this *after* ``optimizer.step()`` so that ``.grad`` tensors are still
         populated. The returned dict can be directly merged into the W&B log call.
+
+        Args:
+            probe_labels: Per-sample binary labels from the dataset's subject metadata
+                (age > median, sex M/F, …). Values of NaN indicate no metadata was
+                available for that recording. When all values are NaN the hook falls
+                back to binarised luminance from ``features``. Pass ``None`` to
+                always use the luminance fallback.
 
         Returns an empty dict when ``enabled=False`` or when nothing is scheduled
         this step.
@@ -160,7 +174,7 @@ class SanityCheckHook:
             metrics.update(self._compute_embedding_metrics(eeg, jepa))
             metrics.update(self._compute_grad_norm(jepa))
             metrics.update(self._compute_loss_trend())
-            self._update_probe_buffer(eeg, features, jepa)
+            self._update_probe_buffer(eeg, features, jepa, probe_labels)
 
         if step % self.probe_every_steps == 0 and len(self._emb_buffer) >= 16:
             metrics.update(self._train_and_eval_probe(eeg.device))
@@ -309,19 +323,46 @@ class SanityCheckHook:
         eeg: torch.Tensor,
         features: torch.Tensor,
         jepa,
+        probe_labels: torch.Tensor | None,
     ) -> None:
-        """Accumulate embeddings + binary luminance labels into a rolling buffer."""
+        """Accumulate embeddings + binary labels into a rolling buffer.
+
+        Label priority:
+          1. ``probe_labels`` (subject metadata: age > median, sex) — used for
+             samples where the value is not NaN.
+          2. Luminance fallback — used when probe_labels are None or all NaN,
+             provided ``feature_median`` was supplied at construction time.
+        """
         with torch.no_grad():
             tokens = jepa.context_encoder.encode_tokens(eeg, mask=None)
             emb = tokens.mean(dim=1).cpu()  # [B, D]
 
-        lum_idx = self.LUMINANCE_FEATURE_IDX
-        # Average luminance over temporal windows, then threshold at training median
-        lum_vals = features[:, :, lum_idx].mean(dim=1).cpu()  # [B]
-        binary_labels = (lum_vals > self.feature_median[lum_idx]).float()  # [B]
+        B = emb.shape[0]
 
-        self._emb_buffer.extend(emb.unbind(0))
-        self._label_buffer.extend(binary_labels.unbind(0))
+        # Build per-sample labels and validity mask
+        labels = torch.full((B,), float("nan"))
+        if probe_labels is not None:
+            # probe_labels: [B] float tensor, NaN where metadata is absent
+            labels = probe_labels.cpu().float()
+
+        valid = ~torch.isnan(labels)
+
+        # For samples without subject metadata, fall back to luminance label
+        if self.feature_median is not None and not valid.all():
+            lum_idx = self.LUMINANCE_FEATURE_IDX
+            lum_vals = features[:, :, lum_idx].mean(dim=1).cpu()
+            lum_labels = (lum_vals > self.feature_median[lum_idx]).float()
+            # Fill in fallback only for samples without real labels
+            labels[~valid] = lum_labels[~valid]
+            valid = torch.ones(B, dtype=torch.bool)  # all samples now have a label
+
+        if not valid.any():
+            return  # no labels available at all — skip this batch
+
+        for i in range(B):
+            if valid[i]:
+                self._emb_buffer.append(emb[i])
+                self._label_buffer.append(labels[i])
 
         # Trim to max buffer size (drop oldest)
         excess = len(self._emb_buffer) - self.probe_buffer_size
@@ -333,9 +374,9 @@ class SanityCheckHook:
         """Train the linear probe on buffered embeddings, evaluate on held-out split.
 
         Uses an 80/20 train/val split of the current buffer. Reports validation
-        accuracy as ``sanity/linear_probe_acc``. Values consistently near 0.5
-        suggest the embeddings carry no luminance signal; values >0.6 and rising
-        indicate the representation is becoming semantically meaningful.
+        accuracy as ``sanity/linear_probe_acc``. Values near 0.5 suggest the
+        embeddings carry no signal for this label; values >0.6 and rising during
+        training indicate the representation is becoming semantically meaningful.
         """
         embs = torch.stack(self._emb_buffer)    # [N, D]
         labels = torch.stack(self._label_buffer)  # [N]
