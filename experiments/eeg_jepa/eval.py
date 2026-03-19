@@ -11,16 +11,12 @@ from sklearn.metrics import (
 )
 from tqdm import tqdm
 
-from eb_jepa.jepa import MaskedJEPA
-
-
 @torch.inference_mode()
 def validation_loop(
     val_loader,
     jepa,
     regression_probe,
     classification_probe,
-    steps,
     device,
     feature_stats,
     feature_median,
@@ -29,11 +25,10 @@ def validation_loop(
     """Run validation and compute regression + classification metrics.
 
     Args:
-        val_loader: DataLoader yielding (eeg, features) tuples.
-        jepa: JEPA or MaskedJEPA model.
-        regression_probe: JEPAProbe or MaskedJEPAProbe with continuous MSE loss.
-        classification_probe: JEPAProbe or MaskedJEPAProbe with binary BCE loss.
-        steps: Number of JEPA prediction steps (unused here, kept for API).
+        val_loader: DataLoader yielding (eeg, features, probe_label) tuples.
+        jepa: MaskedJEPA model.
+        regression_probe: MaskedJEPAProbe with continuous MSE loss.
+        classification_probe: MaskedJEPAProbe with binary BCE loss.
         device: Torch device.
         feature_stats: Dict with "mean" and "std" tensors from training set.
         feature_median: Tensor of per-feature medians from training set.
@@ -42,8 +37,6 @@ def validation_loop(
     Returns:
         Dict of validation metrics.
     """
-    is_masked = isinstance(jepa, MaskedJEPA)
-
     jepa.eval()
     regression_probe.eval()
     classification_probe.eval()
@@ -59,19 +52,12 @@ def validation_loop(
         eeg = eeg.to(device)
         features = features.to(device)  # [B, T, n_features]
 
-        if is_masked:
-            # MaskedJEPA: probes take [B, T, C, W] directly
-            obs = eeg
-        else:
-            # Original JEPA: probes take [B, 1, T, C, W]
-            obs = eeg.unsqueeze(1)
-
         # Losses
-        reg_loss = regression_probe(obs, features)
-        cls_loss = classification_probe(obs, features)
+        reg_loss = regression_probe(eeg, features)
+        cls_loss = classification_probe(eeg, features)
 
         # Predictions (from heads applied to frozen encoder output)
-        state = jepa.encode(obs)  # [B, D, T, 1, 1]
+        state = jepa.encode(eeg)  # [B, D, T, 1, 1]
         reg_pred = regression_probe.head(state)  # [B, T, n_features]
         cls_pred = classification_probe.head(state)  # [B, T, n_features]
 

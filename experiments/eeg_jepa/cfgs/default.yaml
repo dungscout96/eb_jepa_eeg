@@ -21,31 +21,20 @@ data:
   visual_processing_delay_s: 0.3
 
 model:
-  # Encoder (braindecode model, n_chans auto-detected from data)
-  henc: 32          # Hidden dimension in encoder (unused by REVE, kept for API)
-  dstc: 64          # Output representation dimension
-
-  # REVE encoder architecture (small config for limited data)
+  # REVE encoder architecture (n_chans auto-detected from data)
   encoder_embed_dim: 64
   encoder_depth: 4
   encoder_heads: 4
   encoder_head_dim: 16
 
-  # Predictor
-  hpre: 128         # Hidden dimension in predictor
-
   # Decoder heads
   hdec: 64          # Hidden dimension in movie feature heads
 
-  # Training
-  steps: 4          # Number of prediction steps during training
-
-  # V-JEPA masked prediction (set use_masked_jepa: true to enable)
-  use_masked_jepa: true
+  # Masked prediction (V-JEPA style)
   patch_size: 50         # Temporal patch size in samples
-  patch_overlap: 20       # Overlap between patches
+  patch_overlap: 20      # Overlap between patches
   freqs: 4               # Fourier positional encoding frequencies
-  mlp_dim_ratio: 2.66    # FFN hidden dim = embed_dim * mlp_dim_ratio
+  mlp_dim_ratio: 2.66   # FFN hidden dim = embed_dim * mlp_dim_ratio
   predictor_depth: 2     # Transformer depth for predictor (shallower than encoder)
   ema_momentum: 0.996    # EMA momentum start
   ema_momentum_end: 1.0  # EMA momentum end (cosine schedule)
