@@ -46,6 +46,9 @@ logger = logging.getLogger(__name__)
 RELEASES = {
     "R1": "ds005505",
     "R2": "ds005506",
+    "R3": "ds005507",
+    "R4": "ds005508",
+    "R5": "ds005509",
     "R6": "ds005510",
 }
 
