@@ -29,19 +29,19 @@ job = Job(
     cluster="jamming",
     # Absolute path to the repository on the jamming workstation.
     # Update this if your remote checkout lives elsewhere.
-    repo_path="/home/dtyoung/eb_jepa_eeg",
+    repo_path="/home/dung/Documents/eb_jepa_eeg",
     command=(
-        "uv run python experiments/eeg_jepa/main.py"
-        " sanity_checks.enabled=true"
-        " logging.log_wandb=true"
-        " logging.wandb_group=sanity_checks"
-        " data.batch_size=32"          # smaller batch for quick iteration
-        " optim.epochs=20"             # short run to verify sanity metrics
+        "PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py"
+        # " sanity_checks.enabled=true"
+        # " logging.log_wandb=true"
+        # " logging.wandb_group=sanity_checks"
+        # " data.batch_size=32"          # smaller batch for quick iteration
+        # " optim.epochs=20"             # short run to verify sanity metrics
     ),
     # Full path to the virtual environment (conda or venv) on the remote.
     # Adjust to match the actual environment name on jamming.
-    venv="/home/dtyoung/miniconda3/envs/eb_jepa",
-    branch="feature/sanity-checks",
+    venv="__none__",
+    branch="main",
     env_vars={
         "WANDB_API_KEY": os.environ.get("WANDB_API_KEY", ""),
         "WANDB_PROJECT": "eb_jepa",
@@ -55,7 +55,7 @@ job = Job(
 # Dry run — inspect the generated script before committing to submit
 # ---------------------------------------------------------------------------
 
-DRY_RUN = True
+DRY_RUN = False
 
 if __name__ == "__main__":
     script = job.submit(dry_run=True)
@@ -67,8 +67,8 @@ if __name__ == "__main__":
 
     if not DRY_RUN:
         # Uncomment to actually submit:
-        # job_id = job.submit()
-        # print(f"Submitted job: {job_id}")
+        job_id = job.submit()
+        print(f"Submitted job: {job_id}")
         pass
     else:
         print(
