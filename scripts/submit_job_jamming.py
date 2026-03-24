@@ -32,16 +32,13 @@ job = Job(
     repo_path="/home/dung/Documents/eb_jepa_eeg",
     command=(
         "PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py"
-        # " sanity_checks.enabled=true"
-        # " logging.log_wandb=true"
-        # " logging.wandb_group=sanity_checks"
-        # " data.batch_size=32"          # smaller batch for quick iteration
-        # " optim.epochs=20"             # short run to verify sanity metrics
+        " --optim.epochs=30"            # short sweep run for fast iteration
+        # sweep/mar23 — baseline: all defaults except epochs=30
     ),
     # Full path to the virtual environment (conda or venv) on the remote.
     # Adjust to match the actual environment name on jamming.
     venv="__none__",
-    branch="main",
+    branch="sweep/mar23",
     env_vars={
         "WANDB_API_KEY": os.environ.get("WANDB_API_KEY", ""),
         "WANDB_PROJECT": "eb_jepa",
