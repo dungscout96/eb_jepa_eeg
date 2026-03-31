@@ -44,6 +44,21 @@
 - **Action needed**: Inspect the actual mask statistics (what fraction of tokens are
   context vs masked) to understand if the masking is actually changing.
 
+## Exp 5: 2x mask scales (~63% masked vs 38% baseline)
+- **Run**: js7tp4cq | **Commit**: 38fa14e
+- **Config**: short_ch=[0.15,0.30], short_p=[0.5,0.8], long_ch=[0.30,0.60], long_p=[0.7,1.0]
+- **Results**: pred_loss=0.101, cosim=0.946, embed_std=0.527, probe_acc=0.484, val_reg=0.829
+- **Note**: First attempt OOM'd — two processes ran simultaneously on GPU. Resubmitted OK.
+- **Observation**: Pred loss much lower (0.101 vs 0.182) — the model handles the harder
+  prediction task well. embed_std slightly up (0.527 vs 0.449). But cosim still ~0.94.
+  The masking ratio increased substantially but collapse persists.
+- **Insight**: Verified min_context_fraction was non-binding (exp4 explanation confirmed).
+  With P=32, the mask blocks only cover ~38% at default scales. 2x scales reached ~63%.
+  Even at 63% masking, collapse is unchanged. The model finds a near-constant representation
+  that still achieves low prediction loss — suggesting the predictor is powerful enough to
+  compensate even with limited encoder information.
+- **Status**: Marginal improvement in embed_std, keep for now but collapse unsolved.
+
 ## Key Takeaways So Far
 1. **VC regularization alone can't fix collapse** — increasing std_coeff made it worse.
    The model may be "gaming" the variance penalty.
@@ -52,7 +67,11 @@
 3. **lr doesn't explain collapse** — both 1e-4 and 3e-4 collapse similarly.
 4. **min_context_fraction change had zero effect** — identical results to baseline.
    Need to verify the masking collator is actually respecting this parameter.
-5. **Next directions to try** (prioritized):
-   - Investigate masking code — verify masks are actually changing with config
-   - Model capacity — depth=2 or embed_dim=32 to prevent shortcut collapse
+5. **min_context_fraction was non-binding** — default masks only cover ~38% of 4128
+   cells, well below the 85% cap. Confirmed by code analysis (P=32 with 129 channels).
+6. **2x mask scales (63% masked) didn't break collapse** — pred_loss improved but
+   cosim unchanged. The predictor compensates for limited encoder info.
+7. **Next directions to try** (prioritized):
+   - Reduce predictor capacity (depth=1) — force encoder to carry more information
+   - Model capacity — depth=2 or embed_dim=32 to limit shortcut pathways
    - EMA momentum — higher starting momentum (0.999) slows target encoder updates
