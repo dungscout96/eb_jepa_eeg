@@ -11,3 +11,4 @@ dcb7251	uwxc8euh	0.156	0.469	0.947	0.776	0.804	0.694	discard	depth=2 + ema=0.999
 418b4b6	whuzihcb	0.236	0.516	0.919	4.554	0.801	0.692	keep	depth=2 + lr=1e-3 (NEW BEST: cosim=0.92, embed_std=4.6)
 22aafe7	tusb7trn	0.521	0.609	0.940	23.790	0.809	0.694	discard	depth=2 + lr=3e-3 (too aggressive, probes degraded)
 7788737	uxt7ds3c	6.489	0.689	0.859	6.735	0.923	0.694	discard	depth=2 + lr=1e-3 x100ep (diverged after ep30)
+7b44178	x4w1vylz	5.834	0.612	0.844	4.750	0.922	0.693	discard	depth=2 + lr=1e-3 + cosine schedule x100ep (diverged same as exp12)

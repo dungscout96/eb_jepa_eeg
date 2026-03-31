@@ -150,6 +150,25 @@
   beyond that. Needs a learning rate schedule (cosine decay or warmup+decay) to be stable
   for 100 epochs.
 
+## Exp 13: depth=2 + lr=1e-3 + cosine schedule x100ep (DISCARDED — diverged same as exp12)
+- **Run**: x4w1vylz | **Commit**: 7b44178 (to revert)
+- **Config**: encoder_depth=2, lr=1e-3, lr_min=1e-6, warmup_epochs=5, epochs=100
+- **Results**: pred_loss=5.83, cosim=0.844, embed_std=4.75, probe_acc=0.611, val_reg=0.922, val_cls=0.693
+- **Observation**: The cosine LR schedule did NOT fix the divergence. Same oscillation pattern
+  as exp12 starting at epoch ~30, with pred_loss spiking between 0.3 and 23.9 throughout.
+  Final metrics look "OK" on cosim (0.844 — best ever) and embed_std (4.75) but val_reg=0.922
+  is the worst seen (baseline 0.828), downstream regression probes are near zero or negative.
+  - grad_norm=1.0000 throughout — gradient clipping always active; real gradients >> 1.0
+  - Divergence epoch is identical to exp12 (~ep30), unaffected by LR schedule
+- **Insight**: The instability is structural. The LR schedule reduces lr but the gradient
+  norms remain clipped at 1.0 even late in training. Two key signals:
+  1. The divergence onset is tied to a specific epoch (~30), not a specific lr value
+  2. Gradient clipping is always saturated — the optimizer is fighting large gradients
+     from the prediction loss throughout the entire run
+- **Conclusion**: lr=1e-3 itself is the problem for long runs, not the schedule shape.
+  The cosine infrastructure is sound but needs a lower initial lr. Next: depth=2 + lr=3e-4
+  (default, conservative) + cosine schedule for 100 epochs.
+
 ## Key Takeaways So Far
 1. **VC regularization alone can't fix collapse** — increasing std_coeff made it worse.
    The model may be "gaming" the variance penalty.
@@ -174,6 +193,9 @@
    lr=1e-3 is the sweet spot for depth=2.
 13. **depth=2 + lr=1e-3 for 100 epochs diverged** — pred_loss exploded after epoch 30.
    lr=1e-3 is only stable for ~30 epochs without a schedule.
-14. **Next directions to try** (prioritized):
-   - depth=2 + lr schedule (cosine decay 1e-3→1e-5) for 100 epochs — stable long run
-   - depth=2 + lr=3e-4 (default) for 100 epochs — safer full run with depth=2 benefit
+14. **depth=2 + lr=1e-3 + cosine schedule also diverged** — same spiky pattern, grad_norm
+   always at max clip (1.0). The instability is from gradients too large for lr=1e-3,
+   not the schedule shape. The divergence onset at epoch ~30 is consistent and structural.
+15. **Next directions to try** (prioritized):
+   - depth=2 + lr=3e-4 (default) + cosine schedule for 100 epochs — conservative full run
+   - depth=2 + lower grad clip (max_norm=0.3) + lr=1e-3 — tighter clipping to prevent spikes
