@@ -111,6 +111,22 @@
   and probe metrics regardless of masking or EMA changes.
 - **Status**: Discard (no improvement over simpler depth=2 alone).
 
+## Exp 10: encoder_depth=2 + lr=1e-3 (NEW BEST!)
+- **Run**: whuzihcb | **Commit**: 418b4b6
+- **Config**: encoder_depth=2, lr=1e-3 (3x higher than default)
+- **Results**: pred_loss=0.236, cosim=0.919, embed_std=4.554, probe_acc=0.516, val_reg=0.801
+- **Observation**: BREAKTHROUGH! First time cosim dropped below 0.94 (now 0.919).
+  embed_std exploded to 4.55 (10x baseline!). Downstream probes improved:
+  - val_reg 0.801 (best)
+  - val_cls 0.692 (best)
+  - cls_luminance_auc 0.590 (new high)
+  - reg_entropy_corr 0.154 (best)
+  - probe_acc 0.516 (above chance)
+  The higher lr with a smaller encoder is the winning combination — the smaller model
+  needs more aggressive optimization to learn diverse features, and it can't take shortcuts
+  because it lacks capacity.
+- **Status**: KEEP. New best config. Try pushing lr even higher (3e-3) or extending epochs.
+
 ## Key Takeaways So Far
 1. **VC regularization alone can't fix collapse** — increasing std_coeff made it worse.
    The model may be "gaming" the variance penalty.
@@ -129,7 +145,9 @@
    Shallower encoder forces more informative representations.
 9. **depth=2 + 2x masks ≈ depth=2 alone** — masking doesn't add on top of shallower encoder.
 10. **depth=2 + ema=0.999 ≈ depth=2 alone** — EMA momentum doesn't matter here.
-11. **Next directions to try** (prioritized):
-   - encoder_depth=2 + lr=1e-3 — smaller model may benefit from higher lr
-   - encoder_depth=2 for 100 epochs — see if longer training helps probes
-   - Try entirely different approach if lr=1e-3 doesn't help
+11. **depth=2 + lr=1e-3 is NEW BEST** — cosim=0.919 (first <0.94!), embed_std=4.55.
+   The smaller encoder + higher lr combination breaks the collapse pattern.
+12. **Next directions to try** (prioritized):
+   - depth=2 + lr=3e-3 — push lr even higher
+   - depth=2 + lr=1e-3 for 100 epochs — longer training
+   - depth=2 + lr=1e-3 + 2x masks — combine with best masking
