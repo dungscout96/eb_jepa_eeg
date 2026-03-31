@@ -138,6 +138,18 @@
   The lr=3e-3 overshoots — embeddings are noisy rather than informative.
 - **Conclusion**: lr=1e-3 is the sweet spot for depth=2. Higher lr causes instability.
 
+## Exp 12: depth=2 + lr=1e-3 for 100 epochs (DISCARDED — diverged)
+- **Run**: uxt7ds3c | **Commit**: 7788737 (to revert)
+- **Config**: encoder_depth=2, lr=1e-3, epochs=100
+- **Results**: pred_loss=6.49, cosim=0.859, embed_std=6.73, probe_acc=0.689, val_reg=0.923
+- **Observation**: Training diverged after ~epoch 30. Pred loss spiked massively from epoch 25
+  onward (4.8→8.4→32.3→26.2...). Up to epoch 24 it was healthy (cosim=0.916, pred_loss~0.3)
+  but then completely destabilized. Probe_acc=0.689 is our highest but downstream regression
+  probes degraded (val_reg=0.923, worse than baseline 0.828).
+- **Conclusion**: lr=1e-3 is unstable for long runs. It works for 30 epochs but diverges
+  beyond that. Needs a learning rate schedule (cosine decay or warmup+decay) to be stable
+  for 100 epochs.
+
 ## Key Takeaways So Far
 1. **VC regularization alone can't fix collapse** — increasing std_coeff made it worse.
    The model may be "gaming" the variance penalty.
@@ -160,6 +172,8 @@
    The smaller encoder + higher lr combination breaks the collapse pattern.
 12. **lr=3e-3 too aggressive** — embeddings unstable, regression probes degraded.
    lr=1e-3 is the sweet spot for depth=2.
-13. **Next directions to try** (prioritized):
-   - depth=2 + lr=1e-3 for 100 epochs — longer training with best config
-   - depth=2 + lr=1e-3 + 2x masks — combine with best masking
+13. **depth=2 + lr=1e-3 for 100 epochs diverged** — pred_loss exploded after epoch 30.
+   lr=1e-3 is only stable for ~30 epochs without a schedule.
+14. **Next directions to try** (prioritized):
+   - depth=2 + lr schedule (cosine decay 1e-3→1e-5) for 100 epochs — stable long run
+   - depth=2 + lr=3e-4 (default) for 100 epochs — safer full run with depth=2 benefit
