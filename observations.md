@@ -72,6 +72,24 @@
   collapse. The predictor needs enough capacity to learn the prediction task; without it,
   the gradient signal to the encoder degrades rather than becoming more informative.
 
+## Exp 7: encoder_depth=2 (BEST SO FAR — KEEP)
+- **Run**: yfzgaoy8 | **Commit**: e2b5a53
+- **Config**: encoder_depth=2 (halved from 4), everything else default
+- **Results**: pred_loss=0.193, cosim=0.947, embed_std=0.795, probe_acc=0.469, val_reg=0.803
+- **Observation**: BEST result yet! While cosim is still ~0.94, embed_std nearly doubled
+  (0.795 vs 0.449 baseline) and downstream probes improved across the board:
+  - val_reg 0.803 vs 0.828 (lower = better)
+  - cls_entropy_auc 0.580 vs 0.503 (notable improvement)
+  - cls_luminance_auc 0.575 vs 0.549
+  - reg_entropy_corr 0.146 vs 0.119
+  - reg_luminance_corr 0.194 vs 0.164
+- **Insight**: A shallower encoder can't take shortcuts as easily — with only 2 transformer
+  layers, the encoder must preserve more input structure in its representations, leading to
+  higher embed_std and better downstream performance despite similar global cosim.
+  The cosim metric may be misleading — local structure can improve even when global
+  similarity is high.
+- **Status**: KEEP. Try combining with other improvements (2x masks, EMA momentum).
+
 ## Key Takeaways So Far
 1. **VC regularization alone can't fix collapse** — increasing std_coeff made it worse.
    The model may be "gaming" the variance penalty.
@@ -86,7 +104,9 @@
    cosim unchanged. The predictor compensates for limited encoder info.
 7. **predictor_depth=1 made collapse much worse** — embed_std=0.062, the system needs
    a capable predictor to maintain any signal. Don't reduce predictor further.
-8. **Next directions to try** (prioritized):
-   - Encoder depth=2 — reduce encoder capacity to limit shortcut pathways
-   - EMA momentum=0.999 — slower target updates may stabilize representations
-   - Combined: 2x masks + depth=2 (test interaction if individuals show promise)
+8. **encoder_depth=2 is best so far** — embed_std=0.795, downstream probes improved.
+   Shallower encoder forces more informative representations.
+9. **Next directions to try** (prioritized):
+   - encoder_depth=2 + 2x mask scales (combine two promising changes)
+   - encoder_depth=2 + EMA momentum=0.999
+   - encoder_depth=2 + higher lr (1e-3, since smaller model may benefit)
