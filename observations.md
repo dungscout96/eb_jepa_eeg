@@ -102,6 +102,15 @@
   but not additive for representation quality.
 - **Status**: Keep (on par with exp7), but depth=2 alone is simpler and equally effective.
 
+## Exp 9: encoder_depth=2 + ema_momentum=0.999
+- **Run**: uwxc8euh | **Commit**: dcb7251
+- **Config**: encoder_depth=2, ema_momentum=0.999 (default 0.996)
+- **Results**: pred_loss=0.156, cosim=0.947, embed_std=0.776, probe_acc=0.469, val_reg=0.804
+- **Observation**: Essentially identical to depth=2 alone. EMA momentum=0.999 didn't
+  add any value. The depth=2 finding is robust — it produces the same embed_std (~0.78-0.80)
+  and probe metrics regardless of masking or EMA changes.
+- **Status**: Discard (no improvement over simpler depth=2 alone).
+
 ## Key Takeaways So Far
 1. **VC regularization alone can't fix collapse** — increasing std_coeff made it worse.
    The model may be "gaming" the variance penalty.
@@ -119,6 +128,8 @@
 8. **encoder_depth=2 is best so far** — embed_std=0.795, downstream probes improved.
    Shallower encoder forces more informative representations.
 9. **depth=2 + 2x masks ≈ depth=2 alone** — masking doesn't add on top of shallower encoder.
-10. **Next directions to try** (prioritized):
-   - encoder_depth=2 + EMA momentum=0.999 — slower target updates
+10. **depth=2 + ema=0.999 ≈ depth=2 alone** — EMA momentum doesn't matter here.
+11. **Next directions to try** (prioritized):
    - encoder_depth=2 + lr=1e-3 — smaller model may benefit from higher lr
+   - encoder_depth=2 for 100 epochs — see if longer training helps probes
+   - Try entirely different approach if lr=1e-3 doesn't help
