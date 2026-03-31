@@ -4,3 +4,4 @@ f230a22	jrepxrw9	0.182	0.500	0.940	0.449	0.828	0.693	keep	baseline (defaults, ep
 c7674a5	fjz1riz8	0.189	0.516	0.952	0.317	0.832	0.693	discard	lr=1e-4 (collapse unchanged, slower learning)
 fac59e5	20qsvrfm	0.182	0.500	0.940	0.449	0.828	0.693	discard	min_context_fraction=0.30 (identical to baseline)
 38fa14e	js7tp4cq	0.101	0.484	0.946	0.527	0.829	0.693	keep	2x mask scales (~63% masked, embed_std up slightly)
+8f6411b	m7uvrncw	0.214	0.438	0.960	0.062	0.597	0.693	discard	predictor_depth=1 (much worse collapse, embed_std=0.06)

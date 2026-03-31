@@ -59,6 +59,19 @@
   compensate even with limited encoder information.
 - **Status**: Marginal improvement in embed_std, keep for now but collapse unsolved.
 
+## Exp 6: predictor_depth=1 (DISCARDED)
+- **Run**: m7uvrncw | **Commit**: 8f6411b (to revert)
+- **Config**: predictor_depth=1 (halved from 2), everything else default
+- **Results**: pred_loss=0.214, cosim=0.960, embed_std=0.062, probe_acc=0.438, val_reg=0.597
+- **Observation**: Collapse got MUCH worse — embed_std cratered to 0.062 (from 0.449!),
+  cosim up to 0.96. The weaker predictor couldn't compensate, but instead of forcing the
+  encoder to be more informative, the whole system collapsed harder. val_reg=0.597 looks
+  better but is misleading — with near-zero variance embeddings, the regression head
+  simply learned the target mean.
+- **Conclusion**: Reducing predictor capacity alone destabilizes training and accelerates
+  collapse. The predictor needs enough capacity to learn the prediction task; without it,
+  the gradient signal to the encoder degrades rather than becoming more informative.
+
 ## Key Takeaways So Far
 1. **VC regularization alone can't fix collapse** — increasing std_coeff made it worse.
    The model may be "gaming" the variance penalty.
@@ -71,7 +84,9 @@
    cells, well below the 85% cap. Confirmed by code analysis (P=32 with 129 channels).
 6. **2x mask scales (63% masked) didn't break collapse** — pred_loss improved but
    cosim unchanged. The predictor compensates for limited encoder info.
-7. **Next directions to try** (prioritized):
-   - Reduce predictor capacity (depth=1) — force encoder to carry more information
-   - Model capacity — depth=2 or embed_dim=32 to limit shortcut pathways
-   - EMA momentum — higher starting momentum (0.999) slows target encoder updates
+7. **predictor_depth=1 made collapse much worse** — embed_std=0.062, the system needs
+   a capable predictor to maintain any signal. Don't reduce predictor further.
+8. **Next directions to try** (prioritized):
+   - Encoder depth=2 — reduce encoder capacity to limit shortcut pathways
+   - EMA momentum=0.999 — slower target updates may stabilize representations
+   - Combined: 2x masks + depth=2 (test interaction if individuals show promise)
