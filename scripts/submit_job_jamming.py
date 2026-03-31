@@ -35,7 +35,11 @@ job = Job(
         "git fetch origin && git checkout -B sweep/mar30 origin/sweep/mar30 && git pull --ff-only &&"
         " PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py"
         " --optim.epochs=30"            # short sweep run for fast iteration
-        # sweep/mar30 — baseline: all defaults except epochs=30
+        ' --masking.short_channel_scale="[0.15,0.30]"'
+        ' --masking.short_patch_scale="[0.5,0.8]"'
+        ' --masking.long_channel_scale="[0.30,0.60]"'
+        ' --masking.long_patch_scale="[0.7,1.0]"'
+        # sweep/mar30 — exp5: 2x mask scales (~63% masked vs 38% baseline)
     ),
     # Full path to the virtual environment (conda or venv) on the remote.
     # Adjust to match the actual environment name on jamming.
