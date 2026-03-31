@@ -36,10 +36,10 @@ job = Job(
         " PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py"
         " --optim.epochs=100"           # full run
         " --model.encoder_depth=2"      # best individual change (exp7)
-        " --optim.lr=0.001"             # peak lr (exp10 sweet spot)
+        " --optim.lr=3e-4"              # conservative default lr (stable)
         " --optim.lr_min=1e-6"          # cosine decay floor
         " --optim.warmup_epochs=5"      # 5-epoch linear warmup
-        # sweep/mar30 — exp13: depth=2 + lr=1e-3 cosine schedule x100ep
+        # sweep/mar30 — exp14: depth=2 + lr=3e-4 cosine schedule x100ep
     ),
     # Full path to the virtual environment (conda or venv) on the remote.
     # Adjust to match the actual environment name on jamming.
