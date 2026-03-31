@@ -32,16 +32,27 @@
 - **Conclusion**: Collapse is not caused by lr being too high. The default lr=3e-4 is fine.
   The problem is deeper — likely in the masking/architecture.
 
+## Exp 4: min_context_fraction=0.30 (DISCARDED)
+- **Run**: 20qsvrfm | **Commit**: fac59e5 (to revert)
+- **Config**: min_context_fraction=0.30 (2x baseline 0.15), everything else default
+- **Results**: pred_loss=0.182, cosim=0.940, embed_std=0.449, probe_acc=0.500, val_reg=0.828
+- **Observation**: Results are IDENTICAL to baseline. The masking override had zero effect
+  on any metric. W&B config confirms 0.30 was set. Two possibilities:
+  1. min_context_fraction doesn't meaningfully change the masking — the mask collator
+     may already produce masks with >30% context at default settings
+  2. The model converges to the same collapsed attractor regardless of context amount
+- **Action needed**: Inspect the actual mask statistics (what fraction of tokens are
+  context vs masked) to understand if the masking is actually changing.
+
 ## Key Takeaways So Far
 1. **VC regularization alone can't fix collapse** — increasing std_coeff made it worse.
    The model may be "gaming" the variance penalty.
 2. **Collapse is the primary blocker** — until cosim comes down significantly, probes
    will stay at chance.
 3. **lr doesn't explain collapse** — both 1e-4 and 3e-4 collapse similarly.
-4. **Next directions to try** (prioritized):
-   - Masking parameters — more aggressive masking (higher min_context_fraction=0.25)
-     forces the encoder to encode more diverse information per token
-   - Smaller model / different architecture — depth=2 or embed_dim=32 may prevent
-     the model from having enough capacity to "shortcut" into collapse
-   - EMA momentum — higher starting momentum (0.999) slows target encoder updates,
-     which can stabilize training
+4. **min_context_fraction change had zero effect** — identical results to baseline.
+   Need to verify the masking collator is actually respecting this parameter.
+5. **Next directions to try** (prioritized):
+   - Investigate masking code — verify masks are actually changing with config
+   - Model capacity — depth=2 or embed_dim=32 to prevent shortcut collapse
+   - EMA momentum — higher starting momentum (0.999) slows target encoder updates
