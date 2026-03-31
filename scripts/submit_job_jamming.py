@@ -36,11 +36,8 @@ job = Job(
         " PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py"
         " --optim.epochs=30"            # short sweep run for fast iteration
         " --model.encoder_depth=2"      # best individual change (exp7)
-        ' --masking.short_channel_scale="[0.15,0.30]"'
-        ' --masking.short_patch_scale="[0.5,0.8]"'
-        ' --masking.long_channel_scale="[0.30,0.60]"'
-        ' --masking.long_patch_scale="[0.7,1.0]"'
-        # sweep/mar30 — exp8: encoder_depth=2 + 2x mask scales (combine best changes)
+        " --optim.lr=0.001"             # 3x higher lr for smaller model
+        # sweep/mar30 — exp10: encoder_depth=2 + lr=1e-3
     ),
     # Full path to the virtual environment (conda or venv) on the remote.
     # Adjust to match the actual environment name on jamming.
