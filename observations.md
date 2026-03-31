@@ -169,6 +169,21 @@
   The cosine infrastructure is sound but needs a lower initial lr. Next: depth=2 + lr=3e-4
   (default, conservative) + cosine schedule for 100 epochs.
 
+## Exp 14: depth=2 + lr=3e-4 + cosine schedule x100ep (DISCARDED — re-collapsed mid-run)
+- **Run**: 81e4qhzg | **Commit**: 5d9332c
+- **Config**: encoder_depth=2, lr=3e-4, lr_min=1e-6, warmup_epochs=5, epochs=100
+- **Results**: pred_loss=1.01, cosim=0.907, embed_std=0.648, probe_acc=0.612, val_reg=0.916, val_cls=0.692
+- **Trend**:
+  - ep24: cosim=0.928, embed_std=0.262 (borderline)
+  - ep49: cosim=0.984, embed_std=0.085 — **hard collapse**
+  - ep74: cosim=0.982, embed_std=0.123 (still collapsed)
+  - ep99: cosim=0.907, embed_std=0.648 (partial recovery)
+- **Observation**: No catastrophic divergence (grad_norm=0.362, not clipped) but the model
+  drifts into collapse by ep49. The conservative lr provides insufficient gradient signal
+  to sustain diverse representations over 100 epochs. Pred_loss still spikes occasionally
+  (ep69: 6.1, ep93: 4.1) but doesn't blow up like lr=1e-3 runs.
+- **Conclusion**: lr=3e-4 too conservative for 100ep. lr=1e-3 too aggressive. Try lr=5e-4.
+
 ## Key Takeaways So Far
 1. **VC regularization alone can't fix collapse** — increasing std_coeff made it worse.
    The model may be "gaming" the variance penalty.
@@ -196,6 +211,9 @@
 14. **depth=2 + lr=1e-3 + cosine schedule also diverged** — same spiky pattern, grad_norm
    always at max clip (1.0). The instability is from gradients too large for lr=1e-3,
    not the schedule shape. The divergence onset at epoch ~30 is consistent and structural.
-15. **Next directions to try** (prioritized):
-   - depth=2 + lr=3e-4 (default) + cosine schedule for 100 epochs — conservative full run
+15. **depth=2 + lr=3e-4 + cosine schedule re-collapsed** — stable (no divergence), but
+   embed_std collapsed from 0.26 at ep24 to 0.085 at ep49, partial recovery to 0.65 by ep99.
+   The conservative lr can't sustain the diverse representations — model drifts back to collapse.
+16. **Next directions to try** (prioritized):
+   - depth=2 + lr=5e-4 (middle ground) + cosine schedule — enough signal to prevent mid-run collapse without divergence
    - depth=2 + lower grad clip (max_norm=0.3) + lr=1e-3 — tighter clipping to prevent spikes

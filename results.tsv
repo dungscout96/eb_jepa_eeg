@@ -12,3 +12,4 @@ dcb7251	uwxc8euh	0.156	0.469	0.947	0.776	0.804	0.694	discard	depth=2 + ema=0.999
 22aafe7	tusb7trn	0.521	0.609	0.940	23.790	0.809	0.694	discard	depth=2 + lr=3e-3 (too aggressive, probes degraded)
 7788737	uxt7ds3c	6.489	0.689	0.859	6.735	0.923	0.694	discard	depth=2 + lr=1e-3 x100ep (diverged after ep30)
 7b44178	x4w1vylz	5.834	0.612	0.844	4.750	0.922	0.693	discard	depth=2 + lr=1e-3 + cosine schedule x100ep (diverged same as exp12)
+5d9332c	81e4qhzg	1.013	0.612	0.907	0.648	0.916	0.692	discard	depth=2 + lr=3e-4 + cosine schedule x100ep (re-collapsed mid-run ep49)
