@@ -36,7 +36,7 @@ dependencies = [
     "submitit",
     "tqdm",
     "pymunk",
-    "decord",
+    "decord; sys_platform == 'linux' or sys_platform == 'win32'",
     "omegaconf",
     "ruamel.yaml",
     "hydra-core",
