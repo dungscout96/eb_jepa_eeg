@@ -90,6 +90,18 @@
   similarity is high.
 - **Status**: KEEP. Try combining with other improvements (2x masks, EMA momentum).
 
+## Exp 8: encoder_depth=2 + 2x mask scales
+- **Run**: 1od352tn | **Commit**: 2740405
+- **Config**: encoder_depth=2, short_ch=[0.15,0.30], short_p=[0.5,0.8], long_ch=[0.30,0.60], long_p=[0.7,1.0]
+- **Results**: pred_loss=0.056, cosim=0.951, embed_std=0.802, probe_acc=0.484, val_reg=0.803
+- **Observation**: Combination is roughly on par with depth=2 alone. Pred loss much lower
+  (0.056 — model easily handles harder masking task), but embed_std (0.80) and probe
+  metrics are within noise of exp7. The 2x masks don't add meaningful value on top of
+  the shallower encoder.
+- **Conclusion**: The encoder depth is the dominant factor. 2x mask scales are orthogonal
+  but not additive for representation quality.
+- **Status**: Keep (on par with exp7), but depth=2 alone is simpler and equally effective.
+
 ## Key Takeaways So Far
 1. **VC regularization alone can't fix collapse** — increasing std_coeff made it worse.
    The model may be "gaming" the variance penalty.
@@ -106,7 +118,7 @@
    a capable predictor to maintain any signal. Don't reduce predictor further.
 8. **encoder_depth=2 is best so far** — embed_std=0.795, downstream probes improved.
    Shallower encoder forces more informative representations.
-9. **Next directions to try** (prioritized):
-   - encoder_depth=2 + 2x mask scales (combine two promising changes)
-   - encoder_depth=2 + EMA momentum=0.999
-   - encoder_depth=2 + higher lr (1e-3, since smaller model may benefit)
+9. **depth=2 + 2x masks ≈ depth=2 alone** — masking doesn't add on top of shallower encoder.
+10. **Next directions to try** (prioritized):
+   - encoder_depth=2 + EMA momentum=0.999 — slower target updates
+   - encoder_depth=2 + lr=1e-3 — smaller model may benefit from higher lr

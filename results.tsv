@@ -6,3 +6,4 @@ fac59e5	20qsvrfm	0.182	0.500	0.940	0.449	0.828	0.693	discard	min_context_fractio
 38fa14e	js7tp4cq	0.101	0.484	0.946	0.527	0.829	0.693	keep	2x mask scales (~63% masked, embed_std up slightly)
 8f6411b	m7uvrncw	0.214	0.438	0.960	0.062	0.597	0.693	discard	predictor_depth=1 (much worse collapse, embed_std=0.06)
 e2b5a53	yfzgaoy8	0.193	0.469	0.947	0.795	0.803	0.693	keep	encoder_depth=2 (BEST: embed_std=0.80, probes improved)
+2740405	1od352tn	0.056	0.484	0.951	0.802	0.803	0.694	keep	depth=2 + 2x masks (on par with depth=2 alone)
