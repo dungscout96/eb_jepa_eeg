@@ -127,6 +127,17 @@
   because it lacks capacity.
 - **Status**: KEEP. New best config. Try pushing lr even higher (3e-3) or extending epochs.
 
+## Exp 11: encoder_depth=2 + lr=3e-3 (DISCARDED)
+- **Run**: tusb7trn | **Commit**: 22aafe7 (to revert)
+- **Config**: encoder_depth=2, lr=3e-3 (10x default)
+- **Results**: pred_loss=0.521, cosim=0.940, embed_std=23.79, probe_acc=0.609, val_reg=0.809
+- **Observation**: Too aggressive. embed_std exploded to 23.8 (unstable embeddings).
+  Pred_loss high (0.52) — model not learning the prediction task well.
+  Probe_acc=0.609 (highest seen) but downstream regression probes degraded badly
+  (negative correlations for contrast, entropy). Cosim bounced back to 0.94.
+  The lr=3e-3 overshoots — embeddings are noisy rather than informative.
+- **Conclusion**: lr=1e-3 is the sweet spot for depth=2. Higher lr causes instability.
+
 ## Key Takeaways So Far
 1. **VC regularization alone can't fix collapse** — increasing std_coeff made it worse.
    The model may be "gaming" the variance penalty.
@@ -147,7 +158,8 @@
 10. **depth=2 + ema=0.999 ≈ depth=2 alone** — EMA momentum doesn't matter here.
 11. **depth=2 + lr=1e-3 is NEW BEST** — cosim=0.919 (first <0.94!), embed_std=4.55.
    The smaller encoder + higher lr combination breaks the collapse pattern.
-12. **Next directions to try** (prioritized):
-   - depth=2 + lr=3e-3 — push lr even higher
-   - depth=2 + lr=1e-3 for 100 epochs — longer training
+12. **lr=3e-3 too aggressive** — embeddings unstable, regression probes degraded.
+   lr=1e-3 is the sweet spot for depth=2.
+13. **Next directions to try** (prioritized):
+   - depth=2 + lr=1e-3 for 100 epochs — longer training with best config
    - depth=2 + lr=1e-3 + 2x masks — combine with best masking

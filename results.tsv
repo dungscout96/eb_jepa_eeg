@@ -9,3 +9,4 @@ e2b5a53	yfzgaoy8	0.193	0.469	0.947	0.795	0.803	0.693	keep	encoder_depth=2 (BEST:
 2740405	1od352tn	0.056	0.484	0.951	0.802	0.803	0.694	keep	depth=2 + 2x masks (on par with depth=2 alone)
 dcb7251	uwxc8euh	0.156	0.469	0.947	0.776	0.804	0.694	discard	depth=2 + ema=0.999 (no improvement over depth=2)
 418b4b6	whuzihcb	0.236	0.516	0.919	4.554	0.801	0.692	keep	depth=2 + lr=1e-3 (NEW BEST: cosim=0.92, embed_std=4.6)
+22aafe7	tusb7trn	0.521	0.609	0.940	23.790	0.809	0.694	discard	depth=2 + lr=3e-3 (too aggressive, probes degraded)
