@@ -31,14 +31,16 @@ job = Job(
     # Update this if your remote checkout lives elsewhere.
     repo_path="/home/dung/Documents/eb_jepa_eeg",
     command=(
-        "PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py"
+        # Fetch + checkout explicitly so new sweep branches are found on jamming
+        "git fetch origin && git checkout -B sweep/mar30 origin/sweep/mar30 && git pull --ff-only &&"
+        " PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py"
         " --optim.epochs=30"            # short sweep run for fast iteration
         # sweep/mar30 — baseline: all defaults except epochs=30
     ),
     # Full path to the virtual environment (conda or venv) on the remote.
     # Adjust to match the actual environment name on jamming.
     venv="__none__",
-    branch="sweep/mar30",
+    branch="",  # skip neurolab branch management; handled manually above
     env_vars={
         "WANDB_API_KEY": os.environ.get("WANDB_API_KEY", ""),
         "WANDB_PROJECT": "eb_jepa",
