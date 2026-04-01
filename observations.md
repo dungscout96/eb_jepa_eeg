@@ -213,6 +213,23 @@
   EMA + masking + Smooth L1 (Huber) loss only. Our VCLoss may be a competing objective.
 - **Next**: disable VCLoss entirely (exp17), then try Smooth L1 prediction loss (exp18).
 
+## Exp 17: depth=2 + lr=5e-4 + NO VCLoss x100ep (KEEP — BEST downstream!)
+- **Run**: 3wqdh95m | **Commit**: 5b8a340
+- **Config**: encoder_depth=2, lr=5e-4, std_coeff=0, cov_coeff=0, cosine LR, epochs=100
+- **Results**: pred_loss=0.210, cosim=0.907, embed_std=0.757, probe_acc=0.476, val_reg=0.676
+- **Trend**:
+  - ep24: cosim=0.981, embed_std=0.109 (collapsed)
+  - ep49: cosim=0.989, embed_std=0.072 (hard collapse)
+  - ep74: cosim=0.950, embed_std=0.464 (recovering)
+  - ep99: cosim=0.907, embed_std=0.757 (recovered)
+- **Observation**: BEST val_reg ever (0.676 vs prev best 0.801)! pred_loss=0.210 is stable
+  (no divergence or spikes). The mid-run collapse still occurs (ep49: cosim=0.989) but
+  the model recovers fully by ep99. Critically, removing VCLoss dramatically improved
+  downstream regression probes despite similar cosim/embed_std to runs with VCLoss.
+  VCLoss was indeed a competing objective that hurt representation quality.
+- **vc_loss=0 throughout** confirms VCLoss was properly disabled.
+- **Next**: try Smooth L1 (Huber) loss to match V-JEPA exactly (exp18).
+
 ## Key Takeaways So Far
 1. **VC regularization alone can't fix collapse** — increasing std_coeff made it worse.
    The model may be "gaming" the variance penalty.
@@ -250,6 +267,10 @@
 18. **VCLoss may be a competing objective** — V-JEPA/I-JEPA do NOT use VICReg. EMA + masking
    is their sole collapse prevention. VCLoss decorrelates dimensions, which may fight the
    prediction task. Also, V-JEPA uses Smooth L1 (Huber) loss, not MSE.
-19. **Next directions to try** (prioritized):
-   - depth=2 + lr=5e-4 + no VCLoss (exp17) — align with V-JEPA/I-JEPA
-   - depth=2 + lr=5e-4 + no VCLoss + Smooth L1 loss (exp18) — full V-JEPA alignment
+19. **Removing VCLoss = BEST downstream performance!** val_reg=0.676 (vs 0.828 baseline).
+   VCLoss was actively hurting representation quality. pred_loss stable at 0.210.
+   Mid-run collapse still occurs but model recovers. Collapse and downstream quality
+   are partially decoupled — good representations possible even with high cosim.
+20. **Next directions to try** (prioritized):
+   - depth=2 + lr=5e-4 + no VCLoss + Smooth L1 (exp18) — full V-JEPA alignment
+   - depth=2 + lr=1e-3 + no VCLoss (exp19) — combine best lr with no VCLoss
