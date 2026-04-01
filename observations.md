@@ -230,6 +230,23 @@
 - **vc_loss=0 throughout** confirms VCLoss was properly disabled.
 - **Next**: try Smooth L1 (Huber) loss to match V-JEPA exactly (exp18).
 
+## Exp 18: depth=2 + lr=5e-4 + NO VCLoss + Huber loss x100ep (KEEP — BEST cosim!)
+- **Run**: dpw6f8vj | **Commit**: af87876
+- **Config**: encoder_depth=2, lr=5e-4, std_coeff=0, cov_coeff=0, pred_loss_type=smooth_l1
+- **Results**: pred_loss=0.066, cosim=0.885, embed_std=0.805, probe_acc=0.476, val_reg=0.676
+- **Trend**:
+  - ep24: cosim=0.933, embed_std=0.222 (mild collapse)
+  - ep49: cosim=0.965, embed_std=0.130 (collapsed but less than exp17)
+  - ep74: cosim=0.884, embed_std=0.637 (strong recovery)
+  - ep99: cosim=0.885, embed_std=0.805 (stable)
+- **Observation**: BEST cosim ever (0.885 vs prev best 0.907). Huber loss tames gradients
+  dramatically — grad_norm=0.075 (vs 0.2-1.0 in all previous runs). No pred_loss spikes
+  at all. val_reg=0.676 ties exp17. The Huber loss is more robust to outlier predictions,
+  preventing the gradient explosions that caused divergence at higher lr.
+  Mid-run collapse still occurs but recovery is faster and stronger than MSE.
+- **Next**: try lr=1e-3 + no VCLoss + Huber (exp19) — higher lr gave best diversity
+  in 30ep runs, and Huber should prevent the divergence that killed 100ep runs at lr=1e-3.
+
 ## Key Takeaways So Far
 1. **VC regularization alone can't fix collapse** — increasing std_coeff made it worse.
    The model may be "gaming" the variance penalty.
@@ -271,6 +288,9 @@
    VCLoss was actively hurting representation quality. pred_loss stable at 0.210.
    Mid-run collapse still occurs but model recovers. Collapse and downstream quality
    are partially decoupled — good representations possible even with high cosim.
-20. **Next directions to try** (prioritized):
-   - depth=2 + lr=5e-4 + no VCLoss + Smooth L1 (exp18) — full V-JEPA alignment
-   - depth=2 + lr=1e-3 + no VCLoss (exp19) — combine best lr with no VCLoss
+20. **Huber loss = BEST cosim + stable gradients!** cosim=0.885, grad_norm=0.075.
+   No pred_loss spikes. Huber clamps gradient from outlier predictions. Combined with
+   no VCLoss, this is the V-JEPA-aligned config and our best result.
+21. **Next directions to try** (prioritized):
+   - depth=2 + lr=1e-3 + no VCLoss + Huber (exp19) — higher lr gave best 30ep diversity,
+     Huber should prevent divergence that killed 100ep runs at lr=1e-3
