@@ -253,13 +253,15 @@ class MaskedJEPA(nn.Module):
         regularizer: VCLoss or similar (optional, for anti-collapse)
     """
 
-    def __init__(self, context_encoder, target_encoder, predictor, mask_collator, regularizer=None):
+    def __init__(self, context_encoder, target_encoder, predictor, mask_collator, regularizer=None,
+                 pred_loss_type="mse"):
         super().__init__()
         self.context_encoder = context_encoder
         self.target_encoder = target_encoder
         self.predictor = predictor
         self.mask_collator = mask_collator
         self.regularizer = regularizer
+        self.pred_loss_type = pred_loss_type
 
         # Freeze target encoder
         for p in self.target_encoder.parameters():
@@ -314,8 +316,11 @@ class MaskedJEPA(nn.Module):
         # 6. Predictor: predict representations at masked positions
         predictions = self.predictor(ctx_tokens, ctx_pos, tgt_pos)  # [B, n_pred, D]
 
-        # 7. Prediction loss: MSE between predictions and target representations
-        pred_loss = F.mse_loss(predictions, tgt_representations.detach())
+        # 7. Prediction loss between predictions and target representations
+        if self.pred_loss_type == "smooth_l1":
+            pred_loss = F.smooth_l1_loss(predictions, tgt_representations.detach())
+        else:
+            pred_loss = F.mse_loss(predictions, tgt_representations.detach())
 
         # 8. Regularizer loss (optional, on context representations)
         loss_dict = {"pred_loss": pred_loss.item()}

@@ -39,9 +39,9 @@ job = Job(
         " --optim.lr=5e-4"              # middle ground lr
         " --optim.lr_min=1e-6"          # cosine decay floor
         " --optim.warmup_epochs=5"      # 5-epoch linear warmup
-        " --model.ema_momentum=0.998"   # constant EMA (no ramp to 1.0)
-        " --model.ema_momentum_end=0.998"  # same as start = constant momentum
-        # sweep/mar30 — exp16: depth=2 + lr=5e-4 + constant ema=0.998 x100ep
+        " --loss.std_coeff=0"           # disable VCLoss (not used in V-JEPA/I-JEPA)
+        " --loss.cov_coeff=0"           # disable VCLoss
+        # sweep/mar30 — exp17: depth=2 + lr=5e-4 + NO VCLoss x100ep
     ),
     # Full path to the virtual environment (conda or venv) on the remote.
     # Adjust to match the actual environment name on jamming.

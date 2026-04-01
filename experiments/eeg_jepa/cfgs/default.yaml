@@ -49,9 +49,10 @@ masking:
   min_context_fraction: 0.15        # Minimum fraction of tokens as context
 
 loss:
-  # Variance-Covariance regularization
+  # Variance-Covariance regularization (set both to 0 to disable — not used in V-JEPA/I-JEPA)
   cov_coeff: 1.0    # Covariance loss weight (reduced from 100)
   std_coeff: 1.0    # Standard deviation loss weight (reduced from 10)
+  pred_loss_type: mse  # Prediction loss: "mse" or "smooth_l1" (Huber, used in V-JEPA)
 
 optim:
   epochs: 100

@@ -265,10 +265,18 @@ def run(
         long_patch_scale=tuple(masking_cfg.get("long_patch_scale", [0.5, 1.0])),
         min_context_fraction=masking_cfg.get("min_context_fraction", 0.15),
     )
-    projector = Projector(f"{embed_dim}-{embed_dim * 4}-{embed_dim * 4}")
-    regularizer = VCLoss(cfg.loss.std_coeff, cfg.loss.cov_coeff, proj=projector)
+    # Regularizer (VCLoss) — disabled when both coefficients are 0
+    regularizer = None
+    if cfg.loss.std_coeff > 0 or cfg.loss.cov_coeff > 0:
+        projector = Projector(f"{embed_dim}-{embed_dim * 4}-{embed_dim * 4}")
+        regularizer = VCLoss(cfg.loss.std_coeff, cfg.loss.cov_coeff, proj=projector)
+
+    # Prediction loss type: "mse" (default) or "smooth_l1" (Huber, used in V-JEPA)
+    pred_loss_type = cfg.loss.get("pred_loss_type", "mse")
+
     jepa = MaskedJEPA(
-        encoder, target_encoder, predictor, mask_collator, regularizer
+        encoder, target_encoder, predictor, mask_collator, regularizer,
+        pred_loss_type=pred_loss_type,
     ).to(device)
 
     # ------------------------------------------------------------------
