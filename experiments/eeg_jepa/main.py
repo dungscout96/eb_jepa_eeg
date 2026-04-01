@@ -265,10 +265,18 @@ def run(
         long_patch_scale=tuple(masking_cfg.get("long_patch_scale", [0.5, 1.0])),
         min_context_fraction=masking_cfg.get("min_context_fraction", 0.15),
     )
-    projector = Projector(f"{embed_dim}-{embed_dim * 4}-{embed_dim * 4}")
-    regularizer = VCLoss(cfg.loss.std_coeff, cfg.loss.cov_coeff, proj=projector)
+    # Regularizer (VCLoss) — disabled when both coefficients are 0
+    regularizer = None
+    if cfg.loss.std_coeff > 0 or cfg.loss.cov_coeff > 0:
+        projector = Projector(f"{embed_dim}-{embed_dim * 4}-{embed_dim * 4}")
+        regularizer = VCLoss(cfg.loss.std_coeff, cfg.loss.cov_coeff, proj=projector)
+
+    # Prediction loss type: "mse" (default) or "smooth_l1" (Huber, used in V-JEPA)
+    pred_loss_type = cfg.loss.get("pred_loss_type", "mse")
+
     jepa = MaskedJEPA(
-        encoder, target_encoder, predictor, mask_collator, regularizer
+        encoder, target_encoder, predictor, mask_collator, regularizer,
+        pred_loss_type=pred_loss_type,
     ).to(device)
 
     # ------------------------------------------------------------------
@@ -309,6 +317,23 @@ def run(
         + list(classification_probe.head.parameters()),
         lr=cfg.optim.lr,
     )
+
+    # Cosine LR schedule with linear warmup (disabled if lr_min == 0)
+    lr_min = cfg.optim.get("lr_min", 0.0)
+    warmup_epochs = cfg.optim.get("warmup_epochs", 0)
+    total_epochs = cfg.optim.epochs
+
+    def lr_lambda(epoch):
+        if epoch < warmup_epochs:
+            return (epoch + 1) / max(warmup_epochs, 1)
+        if lr_min == 0.0:
+            return 1.0
+        progress = (epoch - warmup_epochs) / max(total_epochs - warmup_epochs, 1)
+        cosine = 0.5 * (1 + math.cos(math.pi * progress))
+        return lr_min / cfg.optim.lr + (1 - lr_min / cfg.optim.lr) * cosine
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    probe_scheduler = torch.optim.lr_scheduler.LambdaLR(probe_optimizer, lr_lambda)
 
     # ------------------------------------------------------------------
     # Sanity check hook
@@ -448,6 +473,8 @@ def run(
             for k, v in regldict.items():
                 train_metrics[f"train/{k}"] = float(v)
 
+            train_metrics["train/lr"] = scheduler.get_last_lr()[0]
+
             if wandb_run:
                 import wandb
                 wandb.log({**train_metrics, **val_logs}, step=global_step)
@@ -480,6 +507,9 @@ def run(
                 epoch=epoch,
                 step=global_step,
             )
+
+        scheduler.step()
+        probe_scheduler.step()
 
     # ------------------------------------------------------------------
     # Test set evaluation
