@@ -184,6 +184,21 @@
   (ep69: 6.1, ep93: 4.1) but doesn't blow up like lr=1e-3 runs.
 - **Conclusion**: lr=3e-4 too conservative for 100ep. lr=1e-3 too aggressive. Try lr=5e-4.
 
+## Exp 15: depth=2 + lr=5e-4 + cosine schedule x100ep (DISCARDED — still collapsed)
+- **Run**: 9obn1e50 | **Commit**: d1cac05
+- **Config**: encoder_depth=2, lr=5e-4, lr_min=1e-6, warmup_epochs=5, epochs=100
+- **Results**: pred_loss=1.81, cosim=0.910, embed_std=1.07, probe_acc=0.602, val_reg=0.919, val_cls=0.692
+- **Observation**: The middle-ground lr=5e-4 didn't improve over lr=3e-4 (exp14).
+  embed_std=1.07 (slightly better than exp14's 0.65 but far below exp10's 4.55).
+  Downstream probes mediocre. The LR sweep (3e-4, 5e-4, 1e-3) shows the problem is
+  NOT lr magnitude — it's the EMA target encoder freezing mid-training.
+- **Literature insight**: V-JEPA/I-JEPA/DINO use 0.996→1.0 cosine schedule over tens
+  of thousands of steps. Our ~1100-step run freezes the target encoder too early. V-JEPA 2
+  found constant EMA (no ramp) works equally well. The cosine momentum schedule reaching
+  ~0.9995 by step 850 creates a frozen, undercooked target encoder that the context
+  encoder collapses to match.
+- **Next**: constant EMA momentum=0.998 (no ramp to 1.0) to keep target encoder evolving.
+
 ## Key Takeaways So Far
 1. **VC regularization alone can't fix collapse** — increasing std_coeff made it worse.
    The model may be "gaming" the variance penalty.
@@ -214,6 +229,12 @@
 15. **depth=2 + lr=3e-4 + cosine schedule re-collapsed** — stable (no divergence), but
    embed_std collapsed from 0.26 at ep24 to 0.085 at ep49, partial recovery to 0.65 by ep99.
    The conservative lr can't sustain the diverse representations — model drifts back to collapse.
-16. **Next directions to try** (prioritized):
-   - depth=2 + lr=5e-4 (middle ground) + cosine schedule — enough signal to prevent mid-run collapse without divergence
-   - depth=2 + lower grad clip (max_norm=0.3) + lr=1e-3 — tighter clipping to prevent spikes
+16. **lr=5e-4 middle ground didn't help** — cosim=0.910, embed_std=1.07, val_reg=0.919.
+   LR sweep across 3e-4/5e-4/1e-3 shows lr is not the core issue.
+17. **Root cause identified: EMA target encoder freezes too early**. With only ~1100 steps,
+   the cosine momentum 0.996→1.0 reaches 0.9995 by step 850 — target encoder is frozen
+   before it learns useful representations. V-JEPA 2 found constant EMA works equally well.
+18. **Next directions to try** (prioritized):
+   - depth=2 + lr=5e-4 + constant ema=0.998 — keep target encoder evolving throughout
+   - depth=2 + lr=1e-3 + constant ema=0.998 — if 5e-4 too conservative with fixed EMA
+   - increase std_coeff to 5-10 — stronger anti-collapse (VICReg paper used 25)
