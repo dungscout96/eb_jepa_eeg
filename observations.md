@@ -199,6 +199,20 @@
   encoder collapses to match.
 - **Next**: constant EMA momentum=0.998 (no ramp to 1.0) to keep target encoder evolving.
 
+## Exp 16: depth=2 + lr=5e-4 + constant EMA=0.998 x100ep (DISCARDED — same collapse)
+- **Run**: bbjznfgl | **Commit**: f35bb8b
+- **Config**: encoder_depth=2, lr=5e-4, ema_momentum=0.998, ema_momentum_end=0.998 (constant)
+- **Results**: pred_loss=2.48, cosim=0.920, embed_std=0.98, probe_acc=0.573, val_reg=0.920
+- **Observation**: Constant EMA did NOT prevent collapse. Same mid-run collapse pattern
+  (ep49: cosim=0.990, embed_std=0.105). The EMA schedule (cosine vs constant) is not the
+  root cause — collapse happens regardless. However, ep71 briefly showed promising
+  downstream probes (reg_contrast_corr=0.26, cls_entropy_auc=0.60) before reverting.
+- **Key insight**: The EMA schedule hypothesis was wrong. The collapse is NOT from the
+  target encoder freezing. Must look at other factors.
+- **Literature finding**: V-JEPA and I-JEPA do NOT use VICReg regularization. They use
+  EMA + masking + Smooth L1 (Huber) loss only. Our VCLoss may be a competing objective.
+- **Next**: disable VCLoss entirely (exp17), then try Smooth L1 prediction loss (exp18).
+
 ## Key Takeaways So Far
 1. **VC regularization alone can't fix collapse** — increasing std_coeff made it worse.
    The model may be "gaming" the variance penalty.
@@ -231,10 +245,11 @@
    The conservative lr can't sustain the diverse representations — model drifts back to collapse.
 16. **lr=5e-4 middle ground didn't help** — cosim=0.910, embed_std=1.07, val_reg=0.919.
    LR sweep across 3e-4/5e-4/1e-3 shows lr is not the core issue.
-17. **Root cause identified: EMA target encoder freezes too early**. With only ~1100 steps,
-   the cosine momentum 0.996→1.0 reaches 0.9995 by step 850 — target encoder is frozen
-   before it learns useful representations. V-JEPA 2 found constant EMA works equally well.
-18. **Next directions to try** (prioritized):
-   - depth=2 + lr=5e-4 + constant ema=0.998 — keep target encoder evolving throughout
-   - depth=2 + lr=1e-3 + constant ema=0.998 — if 5e-4 too conservative with fixed EMA
-   - increase std_coeff to 5-10 — stronger anti-collapse (VICReg paper used 25)
+17. **EMA schedule is NOT the root cause** — constant ema=0.998 (exp16) collapsed the same.
+   The cosine momentum schedule reaching 0.9995 at step 850 was a red herring.
+18. **VCLoss may be a competing objective** — V-JEPA/I-JEPA do NOT use VICReg. EMA + masking
+   is their sole collapse prevention. VCLoss decorrelates dimensions, which may fight the
+   prediction task. Also, V-JEPA uses Smooth L1 (Huber) loss, not MSE.
+19. **Next directions to try** (prioritized):
+   - depth=2 + lr=5e-4 + no VCLoss (exp17) — align with V-JEPA/I-JEPA
+   - depth=2 + lr=5e-4 + no VCLoss + Smooth L1 loss (exp18) — full V-JEPA alignment
