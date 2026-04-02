@@ -328,9 +328,9 @@ class MaskedJEPA(nn.Module):
         if self.regularizer is not None:
             from eb_jepa.losses import SIGRegLoss
             if isinstance(self.regularizer, SIGRegLoss):
-                # SIGReg expects [N, D] — flatten batch and tokens
-                ctx_flat = ctx_tokens.reshape(-1, ctx_tokens.size(-1))
-                reg_loss, reg_loss_unweighted, reg_dict = self.regularizer(ctx_flat)
+                # SIGReg on mean-pooled embeddings [B, D] to avoid OOM
+                ctx_pooled = ctx_tokens.mean(dim=1)  # [B, D]
+                reg_loss, reg_loss_unweighted, reg_dict = self.regularizer(ctx_pooled)
             else:
                 # VCLoss expects [B, C, T, H, W] — reshape ctx_tokens
                 ctx_for_reg = ctx_tokens.permute(0, 2, 1).unsqueeze(-1).unsqueeze(-1)
@@ -413,14 +413,14 @@ class MaskedJEPANoEMA(nn.Module):
         else:
             pred_loss = F.mse_loss(predictions, tgt_representations)
 
-        # 8. SIGReg on ALL encoder tokens (not just context)
+        # 8. SIGReg on mean-pooled encoder embeddings [B, D] to avoid OOM
         loss_dict = {"pred_loss": pred_loss.item()}
         reg_loss = torch.tensor(0.0, device=device)
         if self.regularizer is not None:
             from eb_jepa.losses import SIGRegLoss
             if isinstance(self.regularizer, SIGRegLoss):
-                all_flat = all_tokens.reshape(-1, all_tokens.size(-1))
-                reg_loss, _, reg_dict = self.regularizer(all_flat)
+                all_pooled = all_tokens.mean(dim=1)  # [B, D]
+                reg_loss, _, reg_dict = self.regularizer(all_pooled)
             else:
                 ctx_for_reg = ctx_tokens.permute(0, 2, 1).unsqueeze(-1).unsqueeze(-1)
                 reg_loss, _, reg_dict = self.regularizer(ctx_for_reg)
