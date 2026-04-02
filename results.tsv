@@ -24,3 +24,4 @@ dd6dda8	n1pcoark	0.260	0.427	-0.003	3.982	0.674	1.011	0.692	discard	LeWM: no EMA
 4078d20	6urzjyny	0.199	0.612	0.894	1.097	0.916	0.771	0.692	keep	VCLoss(0.5,0.5) + Huber x100ep (BEST probe_acc=0.61! stable + best test_reg)
 391d69f	f3qu8boe	0.465	0.602	0.832	3.023	0.921	0.767	0.692	keep	VCLoss(0.5,0.5) + Huber + lr=1e-3 x100ep (best test_reg=0.767, less collapse, but probe_acc slightly lower)
 1b44999	t8f8iuf3	0.206	0.641	0.853	0.984	0.918	0.768	0.692	keep	VCLoss(0.25,0.25) + Huber x100ep (NEW BEST probe_acc=0.641! sweet spot for VCLoss strength)
+3935e58	td3cdx79	0.246	0.621	0.776	1.730	0.923	0.765	0.692	keep	VCLoss(0.1,0.1) + Huber x100ep (probe_acc dropped vs 0.25; confirms 0.25 is optimal)

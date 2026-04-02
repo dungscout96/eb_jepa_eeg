@@ -39,10 +39,10 @@ job = Job(
         " --optim.lr=5e-4"              # stable lr
         " --optim.lr_min=1e-6"          # cosine decay floor
         " --optim.warmup_epochs=5"      # 5-epoch linear warmup
-        " --loss.std_coeff=0.25"        # very mild VCLoss (testing lower bound)
-        " --loss.cov_coeff=0.25"        # very mild VCLoss
+        " --loss.std_coeff=0.1"         # minimal VCLoss (testing lower bound)
+        " --loss.cov_coeff=0.1"         # minimal VCLoss
         " --loss.pred_loss_type=smooth_l1"  # Huber loss (stable gradients)
-        # main — exp26: VCLoss(0.25,0.25) + Huber + depth=2 x100ep
+        # main — exp27: VCLoss(0.1,0.1) + Huber + depth=2 x100ep
     ),
     # Full path to the virtual environment (conda or venv) on the remote.
     # Adjust to match the actual environment name on jamming.
