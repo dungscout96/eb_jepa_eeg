@@ -22,3 +22,4 @@ dd6dda8	n1pcoark	0.260	0.427	-0.003	3.982	0.674	1.011	0.692	discard	LeWM: no EMA
 2955358	5vjyyi7z	0.260	0.427	-0.003	3.982	0.674*	1.011	0.692	discard	EMA + SIGReg(0.1) + Huber x100ep (*val_reg noisy mean~0.84; identical to exp21)
 44a84b9	0cat441w	0.141	0.485	0.048	2.893	0.676	1.011	0.692	keep	EMA + weak SIGReg(0.01) + Huber x100ep (probe_acc recovered, same val/test gap)
 4078d20	6urzjyny	0.199	0.612	0.894	1.097	0.916	0.771	0.692	keep	VCLoss(0.5,0.5) + Huber x100ep (BEST probe_acc=0.61! stable + best test_reg)
+391d69f	f3qu8boe	0.465	0.602	0.832	3.023	0.921	0.767	0.692	keep	VCLoss(0.5,0.5) + Huber + lr=1e-3 x100ep (best test_reg=0.767, less collapse, but probe_acc slightly lower)
