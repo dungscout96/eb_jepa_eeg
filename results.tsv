@@ -17,4 +17,3 @@ d1cac05	9obn1e50	1.809	0.602	0.910	1.071	0.919	0.692	discard	depth=2 + lr=5e-4 +
 f35bb8b	bbjznfgl	2.483	0.573	0.920	0.982	0.920	0.692	discard	depth=2 + lr=5e-4 + constant ema=0.998 x100ep (same collapse, EMA schedule not the cause)
 5b8a340	3wqdh95m	0.210	0.476	0.907	0.757	0.676	0.693	keep	depth=2 + lr=5e-4 + NO VCLoss x100ep (BEST val_reg=0.676! stable pred_loss)
 af87876	dpw6f8vj	0.066	0.476	0.885	0.805	0.676	0.693	keep	depth=2 + lr=5e-4 + NO VCLoss + Huber x100ep (BEST cosim=0.885, grad_norm=0.075)
-cfb8e6b	v6fqtt6n	0.072	0.495	0.908	0.868	0.676	0.693	keep	depth=2 + lr=1e-3 + NO VCLoss + Huber x100ep (stable! no divergence with Huber)
