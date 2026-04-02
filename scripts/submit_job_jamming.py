@@ -41,10 +41,10 @@ job = Job(
         " --optim.warmup_epochs=5"      # 5-epoch linear warmup
         " --model.use_ema=true"         # EMA target encoder (standard V-JEPA)
         " --loss.regularizer=sigreg"    # SIGReg instead of VCLoss
-        " --loss.sigreg.coeff=0.1"      # SIGReg weight (lambda)
+        " --loss.sigreg.coeff=0.01"     # 10x weaker SIGReg (0.1 killed downstream signal)
         " --loss.sigreg.num_slices=256" # random projections
         " --loss.pred_loss_type=smooth_l1"  # Huber loss
-        # feature/sigreg — exp22: EMA + SIGReg + Huber x100ep (hybrid: stable target + SIGReg anti-collapse)
+        # feature/sigreg — exp23: EMA + weak SIGReg(0.01) + Huber x100ep
     ),
     # Full path to the virtual environment (conda or venv) on the remote.
     # Adjust to match the actual environment name on jamming.
