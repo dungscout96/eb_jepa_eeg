@@ -32,17 +32,18 @@ job = Job(
     repo_path="/home/dung/Documents/eb_jepa_eeg",
     command=(
         # Fetch + checkout explicitly so new sweep branches are found on jamming
-        "git fetch origin && git checkout -B sweep/mar30 origin/sweep/mar30 && git pull --ff-only &&"
+        "git fetch origin && git checkout -B feature/sigreg origin/feature/sigreg && git pull --ff-only &&"
         " PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py"
         " --optim.epochs=100"           # full run
         " --model.encoder_depth=2"      # best individual change (exp7)
-        " --optim.lr=1e-3"              # higher lr (best diversity in 30ep run)
+        " --optim.lr=5e-4"              # stable lr
         " --optim.lr_min=1e-6"          # cosine decay floor
         " --optim.warmup_epochs=5"      # 5-epoch linear warmup
-        " --loss.std_coeff=0"           # disable VCLoss (not used in V-JEPA/I-JEPA)
-        " --loss.cov_coeff=0"           # disable VCLoss
+        " --loss.regularizer=sigreg"    # SIGReg instead of VCLoss
+        " --loss.sigreg.coeff=0.1"      # SIGReg weight (lambda)
+        " --loss.sigreg.num_slices=256" # random projections
         " --loss.pred_loss_type=smooth_l1"  # Huber loss (used in V-JEPA)
-        # sweep/mar30 — exp19: depth=2 + lr=1e-3 + NO VCLoss + Huber x100ep
+        # feature/sigreg — exp20: depth=2 + lr=5e-4 + SIGReg + Huber x100ep
     ),
     # Full path to the virtual environment (conda or venv) on the remote.
     # Adjust to match the actual environment name on jamming.

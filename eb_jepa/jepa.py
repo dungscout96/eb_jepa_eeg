@@ -326,9 +326,15 @@ class MaskedJEPA(nn.Module):
         loss_dict = {"pred_loss": pred_loss.item()}
         reg_loss = torch.tensor(0.0, device=device)
         if self.regularizer is not None:
-            # VCLoss expects [B, C, T, H, W] — reshape ctx_tokens to [B, D, n_ctx, 1, 1]
-            ctx_for_reg = ctx_tokens.permute(0, 2, 1).unsqueeze(-1).unsqueeze(-1)
-            reg_loss, reg_loss_unweighted, reg_dict = self.regularizer(ctx_for_reg)
+            from eb_jepa.losses import SIGRegLoss
+            if isinstance(self.regularizer, SIGRegLoss):
+                # SIGReg expects [N, D] — flatten batch and tokens
+                ctx_flat = ctx_tokens.reshape(-1, ctx_tokens.size(-1))
+                reg_loss, reg_loss_unweighted, reg_dict = self.regularizer(ctx_flat)
+            else:
+                # VCLoss expects [B, C, T, H, W] — reshape ctx_tokens
+                ctx_for_reg = ctx_tokens.permute(0, 2, 1).unsqueeze(-1).unsqueeze(-1)
+                reg_loss, reg_loss_unweighted, reg_dict = self.regularizer(ctx_for_reg)
             loss_dict["reg_loss"] = reg_loss.item()
             loss_dict.update(reg_dict)
 
