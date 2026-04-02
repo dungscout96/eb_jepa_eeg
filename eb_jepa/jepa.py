@@ -357,6 +357,90 @@ class MaskedJEPA(nn.Module):
         return self.context_encoder.pool_to_windows(tokens)
 
 
+class MaskedJEPANoEMA(nn.Module):
+    """LeWorldModel-style masked prediction for EEG (no EMA target encoder).
+
+    Unlike MaskedJEPA, uses a single encoder for both context and target.
+    Gradients flow through both branches. SIGReg prevents collapse instead of EMA.
+
+    Reference: LeWorldModel (arXiv:2603.19312)
+    """
+
+    def __init__(self, encoder, predictor, mask_collator, regularizer,
+                 pred_loss_type="smooth_l1"):
+        super().__init__()
+        self.context_encoder = encoder  # single encoder, used for both context & target
+        self.predictor = predictor
+        self.mask_collator = mask_collator
+        self.regularizer = regularizer
+        self.pred_loss_type = pred_loss_type
+
+    def forward(self, eeg: torch.Tensor) -> tuple[torch.Tensor, dict]:
+        B = eeg.shape[0]
+        device = eeg.device
+
+        # 1. Generate masks
+        mask_result = self.mask_collator()
+        context_mask = mask_result.context_mask.to(device)
+        pred_masks = [pm.to(device) for pm in mask_result.pred_masks]
+
+        # 2. Get positional embeddings
+        _, pos_embed = self.context_encoder.tokenize(eeg)
+
+        # 3. Full encoding (ALL tokens, WITH gradients — no EMA, no detach)
+        all_tokens = self.context_encoder.encode_tokens(eeg, mask=None)  # [B, C*T*P, D]
+
+        # 4. Context encoding (unmasked tokens only)
+        ctx_tokens = self.context_encoder.encode_tokens(eeg, mask=context_mask)  # [B, n_ctx, D]
+
+        # 5. Gather positions and targets
+        ctx_pos = pos_embed[:, context_mask]
+
+        if len(pred_masks) == 0:
+            zero = torch.tensor(0.0, device=device, requires_grad=True)
+            return zero, {"pred_loss": 0.0, "reg_loss": 0.0}
+
+        all_pred_indices = torch.cat(pred_masks).unique()
+        tgt_pos = pos_embed[:, all_pred_indices]
+        tgt_representations = all_tokens[:, all_pred_indices]  # gradients flow!
+
+        # 6. Predictor
+        predictions = self.predictor(ctx_tokens, ctx_pos, tgt_pos)
+
+        # 7. Prediction loss (NO .detach() — gradients flow through target)
+        if self.pred_loss_type == "smooth_l1":
+            pred_loss = F.smooth_l1_loss(predictions, tgt_representations)
+        else:
+            pred_loss = F.mse_loss(predictions, tgt_representations)
+
+        # 8. SIGReg on ALL encoder tokens (not just context)
+        loss_dict = {"pred_loss": pred_loss.item()}
+        reg_loss = torch.tensor(0.0, device=device)
+        if self.regularizer is not None:
+            from eb_jepa.losses import SIGRegLoss
+            if isinstance(self.regularizer, SIGRegLoss):
+                all_flat = all_tokens.reshape(-1, all_tokens.size(-1))
+                reg_loss, _, reg_dict = self.regularizer(all_flat)
+            else:
+                ctx_for_reg = ctx_tokens.permute(0, 2, 1).unsqueeze(-1).unsqueeze(-1)
+                reg_loss, _, reg_dict = self.regularizer(ctx_for_reg)
+            loss_dict["reg_loss"] = reg_loss.item()
+            loss_dict.update(reg_dict)
+
+        total_loss = pred_loss + reg_loss
+        loss_dict["total_loss"] = total_loss.item()
+        return total_loss, loss_dict
+
+    @torch.no_grad()
+    def encode(self, eeg: torch.Tensor) -> torch.Tensor:
+        tokens = self.context_encoder.encode_tokens(eeg, mask=None)
+        return self.context_encoder.pool_to_windows(tokens)
+
+    def update_target_encoder(self, momentum: float):
+        """No-op — no EMA in this architecture."""
+        pass
+
+
 class MaskedJEPAProbe(nn.Module):
     """Probe for MaskedJEPA: trains a head on frozen encoder representations.
 

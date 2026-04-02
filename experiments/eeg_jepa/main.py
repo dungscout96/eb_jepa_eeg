@@ -30,7 +30,7 @@ from eb_jepa.architectures import (
     Projector,
 )
 from eb_jepa.datasets.hbn import JEPAMovieDataset
-from eb_jepa.jepa import MaskedJEPA, MaskedJEPAProbe
+from eb_jepa.jepa import MaskedJEPA, MaskedJEPANoEMA, MaskedJEPAProbe
 from eb_jepa.logging import get_logger
 from eb_jepa.losses import VCLoss, SIGRegLoss
 from eb_jepa.masking import MultiBlockMaskCollator
@@ -251,7 +251,9 @@ def run(
         chs_info=chs_info,
         mlp_dim_ratio=cfg.model.get("mlp_dim_ratio", 2.66),
     )
-    target_encoder = copy.deepcopy(encoder)
+    use_ema = cfg.model.get("use_ema", True)
+    if use_ema:
+        target_encoder = copy.deepcopy(encoder)
     predictor = MaskedPredictor(
         embed_dim=embed_dim,
         depth=cfg.model.get("predictor_depth", 2),
@@ -287,10 +289,16 @@ def run(
     # Prediction loss type: "mse" (default) or "smooth_l1" (Huber, used in V-JEPA)
     pred_loss_type = cfg.loss.get("pred_loss_type", "mse")
 
-    jepa = MaskedJEPA(
-        encoder, target_encoder, predictor, mask_collator, regularizer,
-        pred_loss_type=pred_loss_type,
-    ).to(device)
+    if use_ema:
+        jepa = MaskedJEPA(
+            encoder, target_encoder, predictor, mask_collator, regularizer,
+            pred_loss_type=pred_loss_type,
+        ).to(device)
+    else:
+        jepa = MaskedJEPANoEMA(
+            encoder, predictor, mask_collator, regularizer,
+            pred_loss_type=pred_loss_type,
+        ).to(device)
 
     # ------------------------------------------------------------------
     # Online evaluation probes (trained on frozen encoder representations)
