@@ -35,14 +35,14 @@ job = Job(
         "git fetch origin && git checkout main && git pull --ff-only &&"
         " PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py"
         " --optim.epochs=100"           # full run
-        " --model.encoder_depth=2"      # best individual change (exp7)
+        " --model.encoder_depth=4"      # original depth (more capacity)
         " --optim.lr=5e-4"              # stable lr
         " --optim.lr_min=1e-6"          # cosine decay floor
         " --optim.warmup_epochs=5"      # 5-epoch linear warmup
-        " --loss.std_coeff=0.1"         # minimal VCLoss (testing lower bound)
-        " --loss.cov_coeff=0.1"         # minimal VCLoss
+        " --loss.std_coeff=0.25"        # optimal VCLoss (exp26 sweet spot)
+        " --loss.cov_coeff=0.25"        # optimal VCLoss
         " --loss.pred_loss_type=smooth_l1"  # Huber loss (stable gradients)
-        # main — exp27: VCLoss(0.1,0.1) + Huber + depth=2 x100ep
+        # main — exp28: VCLoss(0.25,0.25) + Huber + depth=4 x100ep
     ),
     # Full path to the virtual environment (conda or venv) on the remote.
     # Adjust to match the actual environment name on jamming.
