@@ -983,6 +983,35 @@ class MovieFeatureHead(nn.Module):
         return out.view(B, T, -1)  # [B, T, n_features]
 
 
+class TemporalMovieFeatureHead(nn.Module):
+    """MLP head with temporal context for predicting per-timestep movie features.
+
+    Like MovieFeatureHead but concatenates a global temporal mean to each
+    window's representation before the MLP, giving the probe access to
+    cross-window context.  Input/output shapes are identical to MovieFeatureHead.
+    """
+
+    def __init__(self, in_dim, hidden_dim, n_features):
+        super().__init__()
+        # Input is 2*in_dim: local window repr + global mean across windows
+        self.net = nn.Sequential(
+            nn.Linear(in_dim * 2, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, n_features),
+        )
+        self.apply(init_module_weights)
+
+    def forward(self, x):
+        # x: [B, D, T, 1, 1] from JEPA encoder
+        B, D, T = x.shape[:3]
+        x = x.view(B, D, T).permute(0, 2, 1)  # [B, T, D]
+        x_global = x.mean(dim=1, keepdim=True).expand_as(x)  # [B, T, D]
+        x = torch.cat([x, x_global], dim=-1)  # [B, T, 2D]
+        x = x.reshape(B * T, D * 2)
+        out = self.net(x)  # [B*T, n_features]
+        return out.view(B, T, -1)  # [B, T, n_features]
+
+
 class MLPEEGPredictor(TemporalBatchMixin, nn.Module):
     """MLP predictor for flat EEG embeddings.
 
