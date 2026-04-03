@@ -28,6 +28,7 @@ from eb_jepa.architectures import (
     MaskedPredictor,
     MovieFeatureHead,
     Projector,
+    TemporalMovieFeatureHead,
 )
 from eb_jepa.datasets.hbn import JEPAMovieDataset
 from eb_jepa.jepa import MaskedJEPA, MaskedJEPAProbe
@@ -282,14 +283,15 @@ def run(
     # ------------------------------------------------------------------
     # Online evaluation probes (trained on frozen encoder representations)
     # ------------------------------------------------------------------
-    reg_head = MovieFeatureHead(embed_dim, cfg.model.hdec, n_features)
+    HeadClass = TemporalMovieFeatureHead if cfg.model.get("temporal_probe", False) else MovieFeatureHead
+    reg_head = HeadClass(embed_dim, cfg.model.hdec, n_features)
     reg_loss_fn = RegressionLoss(
         feature_stats["mean"].to(device),
         feature_stats["std"].to(device),
     )
     regression_probe = MaskedJEPAProbe(jepa, reg_head, reg_loss_fn).to(device)
 
-    cls_head = MovieFeatureHead(embed_dim, cfg.model.hdec, n_features)
+    cls_head = HeadClass(embed_dim, cfg.model.hdec, n_features)
     cls_loss_fn = ClassificationLoss(feature_median.to(device))
     classification_probe = MaskedJEPAProbe(jepa, cls_head, cls_loss_fn).to(device)
 
