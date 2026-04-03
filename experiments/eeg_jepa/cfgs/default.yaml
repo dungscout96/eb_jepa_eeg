@@ -29,6 +29,7 @@ model:
 
   # Decoder heads
   hdec: 64          # Hidden dimension in movie feature heads
+  temporal_probe: false  # Concat global temporal mean to per-window probe input
 
   # Masked prediction (V-JEPA style)
   patch_size: 50         # Temporal patch size in samples
