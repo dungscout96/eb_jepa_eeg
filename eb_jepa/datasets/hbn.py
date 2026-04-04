@@ -823,18 +823,34 @@ class JEPAMovieDataset(HBNMovieDataset):
         )
 
     def _compute_norm_stats(self):
-        """Compute per-channel mean/std by streaming one recording at a time.
+        """Compute per-channel mean/std, using cached stats if available.
 
-        Uses running sums so only O(n_channels) memory is needed regardless
-        of dataset size.  Each recording's FIF file is opened, read in full,
-        and closed before moving to the next.
+        Looks for ``normalization_stats.npz`` in each preprocessed split
+        directory (saved by the preprocessing pipeline).  Falls back to
+        streaming computation over all recordings if no cache is found.
         """
+        # Try to load cached stats from preprocessed directory
+        if self._fif_paths:
+            # Stats file lives next to the split directory (e.g. .../R1/ThePresent/normalization_stats.npz)
+            first_fif = Path(self._fif_paths[0])
+            for parent in [first_fif.parent, first_fif.parent.parent, first_fif.parent.parent.parent]:
+                cache_file = parent / "normalization_stats.npz"
+                if cache_file.exists():
+                    cached = np.load(cache_file)
+                    mean = torch.from_numpy(cached["mean"]).float()
+                    std = torch.from_numpy(cached["std"]).float().clamp(min=1e-8)
+                    self._eeg_mean = mean[None, :, None]  # [1, C, 1]
+                    self._eeg_std = std[None, :, None]
+                    logger.info("Loaded cached norm stats from %s (%d channels)", cache_file, mean.shape[0])
+                    return
+
+        # Fallback: stream through all recordings
+        logger.info("No cached norm stats found — computing from %d recordings...", len(self._fif_paths))
         channel_sum = None
         channel_sum_sq = None
         total_timepoints = 0
 
         for fif_path, crop_inds in zip(self._fif_paths, self._crop_inds):
-            # Read all windows for this recording at once (one file open)
             windows = _read_raw_windows(fif_path, crop_inds)  # (n_win, C, T)
             x = torch.from_numpy(windows).double()
             if channel_sum is None:

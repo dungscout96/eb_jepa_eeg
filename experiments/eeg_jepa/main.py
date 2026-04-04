@@ -206,17 +206,22 @@ def run(
     feature_stats = train_set.compute_feature_stats()
     feature_median = train_set.compute_feature_median()
 
+    num_workers = cfg.data.num_workers
     train_loader = DataLoader(
         train_set,
         batch_size=cfg.data.batch_size,
         shuffle=True,
-        num_workers=cfg.data.num_workers,
+        num_workers=num_workers,
+        pin_memory=True,
+        persistent_workers=num_workers > 0,
     )
     val_loader = DataLoader(
         val_set,
         batch_size=cfg.data.batch_size,
         shuffle=False,
-        num_workers=cfg.data.num_workers,
+        num_workers=num_workers,
+        pin_memory=True,
+        persistent_workers=num_workers > 0,
     )
     log_data_info(
         "HBN EEG Movie",
@@ -553,7 +558,8 @@ def run(
         test_set,
         batch_size=cfg.data.batch_size,
         shuffle=False,
-        num_workers=cfg.data.num_workers,
+        num_workers=num_workers,
+        pin_memory=True,
     )
     test_logs = validation_loop(
         test_loader,
