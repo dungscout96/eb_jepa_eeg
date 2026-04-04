@@ -130,7 +130,7 @@ def build_jobs():
                 env_vars={
                     "WANDB_API_KEY": os.environ.get("WANDB_API_KEY", ""),
                     "WANDB_PROJECT": "eb_jepa",
-                    "EB_JEPA_PREPROCESSED_DIR": "/projects/bbnv/kkokate/hbn_preprocessed",
+                    "HBN_PREPROCESS_DIR": "/projects/bbnv/kkokate/hbn_preprocessed",
                 },
             )
             jobs.append((job_name, job, desc, chunk))
