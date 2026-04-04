@@ -53,7 +53,7 @@ job = Job(
         "WANDB_PROJECT": "eb_jepa",
         # Use the preprocessed data cache if available on jamming.
         # Remove or update this if the cache path differs on the workstation.
-        "EB_JEPA_PREPROCESSED_DIR": "/mnt/v1/dtyoung/data/eb_jepa_eeg/hbn_preprocessed",
+        "HBN_PREPROCESS_DIR": "/mnt/v1/dtyoung/data/eb_jepa_eeg/hbn_preprocessed",
     },
 )
 
