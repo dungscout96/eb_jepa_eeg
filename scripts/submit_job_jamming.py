@@ -33,16 +33,14 @@ job = Job(
     command=(
         # Fetch + checkout explicitly so new sweep branches are found on jamming
         "git fetch origin && git checkout main && git pull --ff-only &&"
+        # === exp33: batch_size=128 (best config otherwise unchanged) ===
         " PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py"
-        " --optim.epochs=100"           # full run
-        " --model.encoder_depth=4"      # original depth (more capacity)
-        " --optim.lr=5e-4"              # stable lr
-        " --optim.lr_min=1e-6"          # cosine decay floor
-        " --optim.warmup_epochs=5"      # 5-epoch linear warmup
-        " --loss.std_coeff=0.25"        # optimal VCLoss (exp26 sweet spot)
-        " --loss.cov_coeff=0.25"        # optimal VCLoss
-        " --loss.pred_loss_type=smooth_l1"  # Huber loss (stable gradients)
-        # main — exp28: VCLoss(0.25,0.25) + Huber + depth=4 x100ep
+        " --optim.epochs=100 --model.encoder_depth=2 --optim.lr=5e-4"
+        " --optim.lr_min=1e-6 --optim.warmup_epochs=5"
+        " --data.batch_size=128"
+        " --loss.std_coeff=0.25 --loss.cov_coeff=0.25"
+        " --loss.pred_loss_type=smooth_l1"
+        # main — exp33: batch_size=128 + VCLoss(0.25) + Huber x100ep
     ),
     # Full path to the virtual environment (conda or venv) on the remote.
     # Adjust to match the actual environment name on jamming.

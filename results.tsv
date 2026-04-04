@@ -26,3 +26,8 @@ dd6dda8	n1pcoark	0.260	0.427	-0.003	3.982	0.674	1.011	0.692	discard	LeWM: no EMA
 1b44999	t8f8iuf3	0.206	0.641	0.853	0.984	0.918	0.768	0.692	keep	VCLoss(0.25,0.25) + Huber x100ep (NEW BEST probe_acc=0.641! sweet spot for VCLoss strength)
 3935e58	td3cdx79	0.246	0.621	0.776	1.730	0.923	0.765	0.692	keep	VCLoss(0.1,0.1) + Huber x100ep (probe_acc dropped vs 0.25; confirms 0.25 is optimal)
 64b08f4	6px0c74s	0.044	0.612	0.968	0.108	1.007	1.217	0.689	discard	VCLoss(0.25,0.25) + Huber + depth=4 x100ep (collapsed: cosim=0.97, embed_std=0.11, test_reg=1.22)
+7b61cab	5zzo35ta	0.063	0.563	0.877	1.012	0.706	0.875	0.690	discard	VCLoss(0.25,0.25) + Huber + temporal_probe x100ep (val_reg improved but test_reg worse — probe overfits)
+—	3i4b262d	0.436	0.631	0.750	5.772	0.919	0.769	0.692	keep	VCLoss(0.25,0.25) + Huber + lr=1e-3 x100ep (best cosim=0.75 but probe_acc slightly lower)
+—	4avqbzd7	0.296	0.621	0.881	0.717	0.924	0.844	0.692	discard	VCLoss(0.25,0.25) + Huber + 200ep (longer training hurt — probe_acc dropped, test_reg degraded)
+—	mvya17iv	1.444	0.641	0.865	1.035	0.923	0.765	0.692	keep	VCLoss(0.25,0.25) + MSE x100ep (tied best probe_acc=0.641, best test_reg=0.765)
+—	—	0.066	0.485	0.965	0.581	1.085	0.718	0.692	discard	VCLoss(0.25,0.25) + Huber + bs=128 x100ep (collapsed: cosim=0.97, VCLoss too weak for larger batch)
