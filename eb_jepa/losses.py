@@ -399,3 +399,42 @@ class BCS(nn.Module):
         invariance_loss = F.mse_loss(z1, z2).mean()
         total_loss = invariance_loss + self.lmbd * bcs
         return {"loss": total_loss, "bcs_loss": bcs, "invariance_loss": invariance_loss}
+
+
+class SIGRegLoss(nn.Module):
+    """SIGReg regularizer for masked JEPA (single-view).
+
+    Enforces that encoder embeddings follow an isotropic Gaussian distribution
+    using the Epps-Pulley test on random 1D projections (Cramér-Wold theorem).
+
+    Reference: LeWorldModel (arXiv:2603.19312)
+    """
+
+    def __init__(self, num_slices=256, coeff=0.1):
+        super().__init__()
+        self.num_slices = num_slices
+        self.coeff = coeff
+        self.step = 0
+
+    def forward(self, z):
+        """Compute SIGReg loss on embeddings.
+
+        Args:
+            z: [N, D] flattened embeddings (batch*tokens, embed_dim)
+
+        Returns:
+            (weighted_loss, unweighted_loss, loss_dict)
+        """
+        with torch.no_grad():
+            dev = z.device
+            g = torch.Generator(device=dev)
+            g.manual_seed(self.step)
+            A = torch.randn(z.size(1), self.num_slices, device=dev, generator=g)
+            A /= A.norm(p=2, dim=0)
+
+        proj = z @ A  # [N, num_slices]
+        self.step += 1
+
+        sigreg = epps_pulley(proj).mean()
+        weighted = self.coeff * sigreg
+        return weighted, sigreg, {"sigreg_loss": sigreg.item()}

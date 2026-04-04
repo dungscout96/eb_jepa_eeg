@@ -37,7 +37,8 @@ model:
   freqs: 4               # Fourier positional encoding frequencies
   mlp_dim_ratio: 2.66   # FFN hidden dim = embed_dim * mlp_dim_ratio
   predictor_depth: 2     # Transformer depth for predictor (shallower than encoder)
-  ema_momentum: 0.996    # EMA momentum start
+  use_ema: true           # Use EMA target encoder (V-JEPA style). Set false for LeWM style.
+  ema_momentum: 0.996    # EMA momentum start (ignored when use_ema=false)
   ema_momentum_end: 1.0  # EMA momentum end (cosine schedule)
 
 masking:
@@ -50,9 +51,14 @@ masking:
   min_context_fraction: 0.15        # Minimum fraction of tokens as context
 
 loss:
-  # Variance-Covariance regularization (set both to 0 to disable — not used in V-JEPA/I-JEPA)
+  regularizer: vc     # "vc" (VCLoss), "sigreg", or "none" (when std/cov both 0)
+  # VCLoss settings (only used when regularizer=vc)
   cov_coeff: 1.0    # Covariance loss weight (reduced from 100)
   std_coeff: 1.0    # Standard deviation loss weight (reduced from 10)
+  # SIGReg settings (only used when regularizer=sigreg)
+  sigreg:
+    num_slices: 256   # Number of random projection directions
+    coeff: 0.1        # SIGReg loss weight (lambda)
   pred_loss_type: mse  # Prediction loss: "mse" or "smooth_l1" (Huber, used in V-JEPA)
 
 optim:

@@ -42,8 +42,7 @@ job = Job(
         " --loss.std_coeff=0.25"        # optimal VCLoss (exp26 sweet spot)
         " --loss.cov_coeff=0.25"        # optimal VCLoss
         " --loss.pred_loss_type=smooth_l1"  # Huber loss
-        " --model.temporal_probe=true"  # temporal context in probe head
-        # main — exp29: best config (exp26) + temporal probe x100ep
+        # best config: VCLoss(0.25) + Huber + depth=2 + lr=5e-4 + bs=64
     ),
     # Full path to the virtual environment (conda or venv) on the remote.
     # Adjust to match the actual environment name on jamming.

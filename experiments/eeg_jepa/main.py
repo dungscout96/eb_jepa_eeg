@@ -31,9 +31,9 @@ from eb_jepa.architectures import (
     TemporalMovieFeatureHead,
 )
 from eb_jepa.datasets.hbn import JEPAMovieDataset
-from eb_jepa.jepa import MaskedJEPA, MaskedJEPAProbe
+from eb_jepa.jepa import MaskedJEPA, MaskedJEPANoEMA, MaskedJEPAProbe
 from eb_jepa.logging import get_logger
-from eb_jepa.losses import VCLoss
+from eb_jepa.losses import VCLoss, SIGRegLoss
 from eb_jepa.masking import MultiBlockMaskCollator
 from eb_jepa.sanity_checks import SanityCheckHook
 from eb_jepa.training_utils import (
@@ -140,11 +140,17 @@ def run(
         else:
             sweep_name = get_default_dev_name()
             stride_suffix = f"_stride{temporal_stride}" if temporal_stride > 1 else ""
+            reg_type = cfg.loss.get("regularizer", "vc")
+            if reg_type == "sigreg":
+                reg_suffix = f"_sigreg{cfg.loss.sigreg.get('coeff', 0.1)}"
+            elif cfg.loss.std_coeff > 0 or cfg.loss.cov_coeff > 0:
+                reg_suffix = f"_std{cfg.loss.std_coeff}_cov{cfg.loss.cov_coeff}"
+            else:
+                reg_suffix = "_noreg"
             exp_name = (
                 f"eeg_jepa_bs{cfg.data.batch_size}"
                 f"_lr{cfg.optim.lr}"
-                f"_std{cfg.loss.std_coeff}"
-                f"_cov{cfg.loss.cov_coeff}"
+                f"{reg_suffix}"
                 f"{stride_suffix}"
             )
             exp_dir = get_unified_experiment_dir(
@@ -246,7 +252,9 @@ def run(
         chs_info=chs_info,
         mlp_dim_ratio=cfg.model.get("mlp_dim_ratio", 2.66),
     )
-    target_encoder = copy.deepcopy(encoder)
+    use_ema = cfg.model.get("use_ema", True)
+    if use_ema:
+        target_encoder = copy.deepcopy(encoder)
     predictor = MaskedPredictor(
         embed_dim=embed_dim,
         depth=cfg.model.get("predictor_depth", 2),
@@ -266,19 +274,32 @@ def run(
         long_patch_scale=tuple(masking_cfg.get("long_patch_scale", [0.5, 1.0])),
         min_context_fraction=masking_cfg.get("min_context_fraction", 0.15),
     )
-    # Regularizer (VCLoss) — disabled when both coefficients are 0
+    # Regularizer — VCLoss, SIGReg, or none
     regularizer = None
-    if cfg.loss.std_coeff > 0 or cfg.loss.cov_coeff > 0:
+    reg_type = cfg.loss.get("regularizer", "vc")
+    if reg_type == "sigreg":
+        sigreg_cfg = cfg.loss.get("sigreg", {})
+        regularizer = SIGRegLoss(
+            num_slices=sigreg_cfg.get("num_slices", 256),
+            coeff=sigreg_cfg.get("coeff", 0.1),
+        )
+    elif cfg.loss.std_coeff > 0 or cfg.loss.cov_coeff > 0:
         projector = Projector(f"{embed_dim}-{embed_dim * 4}-{embed_dim * 4}")
         regularizer = VCLoss(cfg.loss.std_coeff, cfg.loss.cov_coeff, proj=projector)
 
     # Prediction loss type: "mse" (default) or "smooth_l1" (Huber, used in V-JEPA)
     pred_loss_type = cfg.loss.get("pred_loss_type", "mse")
 
-    jepa = MaskedJEPA(
-        encoder, target_encoder, predictor, mask_collator, regularizer,
-        pred_loss_type=pred_loss_type,
-    ).to(device)
+    if use_ema:
+        jepa = MaskedJEPA(
+            encoder, target_encoder, predictor, mask_collator, regularizer,
+            pred_loss_type=pred_loss_type,
+        ).to(device)
+    else:
+        jepa = MaskedJEPANoEMA(
+            encoder, predictor, mask_collator, regularizer,
+            pred_loss_type=pred_loss_type,
+        ).to(device)
 
     # ------------------------------------------------------------------
     # Online evaluation probes (trained on frozen encoder representations)
