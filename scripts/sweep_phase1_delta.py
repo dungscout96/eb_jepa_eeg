@@ -1,21 +1,21 @@
 """Phase 1 sweep: temporal vs static pretraining on Delta (A40 GPUs).
 
 Sweeps n_windows × window_size_seconds with 3 seeds each.
-Groups small experiments to run in parallel on the same GPU to maximize
-utilization (A40 has 48GB VRAM; small configs use ~2GB each).
+Packs 2 experiments per SLURM job (parallel on same GPU) to maximize
+utilization. Each job uses num_workers=4 per experiment (8 cores total
+out of 16 available, ~50GB host RAM out of 62.5GB).
 
 Usage
 -----
 # 1. Preview generated SLURM scripts:
-uv run python scripts/sweep_phase1_delta.py
+PYTHONPATH=~/Documents/Research/scalable-infra-for-EEG-research/neurolab python scripts/sweep_phase1_delta.py
 
 # 2. Submit all jobs:
-uv run python scripts/sweep_phase1_delta.py --submit
+PYTHONPATH=~/Documents/Research/scalable-infra-for-EEG-research/neurolab python scripts/sweep_phase1_delta.py --submit
 """
 
 import os
 import sys
-from itertools import groupby
 
 from neurolab.jobs import Job
 
@@ -25,31 +25,27 @@ from neurolab.jobs import Job
 
 SEEDS = [2025, 42, 7]
 
-# (n_windows, window_size_seconds, batch_size, size_class)
-# size_class determines how many run in parallel per SLURM job
+# (n_windows, window_size_seconds, batch_size)
 GRID = [
     # Static (single window)
-    (1, 1, 64, "small"),
-    (1, 2, 64, "small"),
-    (1, 4, 64, "medium"),
+    (1, 1, 64),
+    (1, 2, 64),
+    (1, 4, 64),
     # Temporal (2 windows)
-    (2, 1, 64, "small"),
-    (2, 2, 64, "medium"),
-    (2, 4, 64, "medium"),
+    (2, 1, 64),
+    (2, 2, 64),
+    (2, 4, 64),
     # Temporal (4 windows)
-    (4, 1, 64, "medium"),
-    (4, 2, 64, "medium"),   # current best config
-    (4, 4, 32, "large"),    # bs=32 to fit in VRAM
+    (4, 1, 64),
+    (4, 2, 64),   # current best config
+    (4, 4, 32),   # bs=32 to fit in VRAM
     # Temporal (8 windows)
-    (8, 1, 64, "medium"),
-    (8, 2, 32, "large"),    # bs=32 to fit in VRAM
+    (8, 1, 64),
+    (8, 2, 32),   # bs=32 to fit in VRAM
 ]
 
-# How many experiments to run in parallel per size class
-PARALLEL = {"small": 4, "medium": 3, "large": 2}
-
-# SLURM time limits per size class (enough for longest experiment in group)
-TIME_LIMITS = {"small": "02:00:00", "medium": "02:00:00", "large": "03:00:00"}
+N_PARALLEL = 2  # 2 experiments per SLURM job
+TIME_LIMIT = "02:30:00"  # ~111 min per experiment, 2.5h gives margin
 
 # Fixed hyperparameters (best config from exp26)
 FIXED_ARGS = (
@@ -76,64 +72,54 @@ def _make_run_cmd(nw, ws, bs, seed):
         f" --data.n_windows={nw}"
         f" --data.window_size_seconds={ws}"
         f" --data.batch_size={bs}"
-        f" --data.num_workers=2"
+        f" --data.num_workers=4"
         f" --meta.seed={seed}"
         f"{FIXED_ARGS}"
     )
 
 
 def build_jobs():
-    """Group experiments into SLURM jobs by size class and seed.
-
-    For each size class, we pack `PARALLEL[size]` experiments into one SLURM
-    job, launching them as background processes (&) and waiting for all.
-    """
+    """Group experiments into SLURM jobs, 2 per job running in parallel."""
     # Expand grid × seeds
     all_runs = []
-    for nw, ws, bs, size in GRID:
+    for nw, ws, bs in GRID:
         for seed in SEEDS:
-            all_runs.append((nw, ws, bs, seed, size))
+            all_runs.append((nw, ws, bs, seed))
 
-    # Group by size class, then chunk into groups of PARALLEL[size]
-    all_runs.sort(key=lambda x: x[4])  # sort by size class
+    # Chunk into pairs
     jobs = []
+    for i in range(0, len(all_runs), N_PARALLEL):
+        chunk = all_runs[i : i + N_PARALLEL]
+        cmds = [_make_run_cmd(nw, ws, bs, seed) for nw, ws, bs, seed in chunk]
 
-    for size, group_iter in groupby(all_runs, key=lambda x: x[4]):
-        group = list(group_iter)
-        n_parallel = PARALLEL[size]
+        # Launch all in parallel with & and wait
+        parallel_cmd = " &\n".join(cmds) + " &\nwait"
 
-        for i in range(0, len(group), n_parallel):
-            chunk = group[i : i + n_parallel]
-            cmds = [_make_run_cmd(nw, ws, bs, seed) for nw, ws, bs, seed, _ in chunk]
+        # Descriptive name
+        desc = " + ".join(f"nw{nw}_ws{ws}s_s{seed}" for nw, ws, _, seed in chunk)
+        job_name = f"phase1_{i // N_PARALLEL:02d}"
 
-            # Launch all in parallel with & and wait
-            parallel_cmd = " &\n".join(cmds) + " &\nwait"
-
-            # Descriptive name
-            desc = " + ".join(f"nw{nw}_ws{ws}s_s{seed}" for nw, ws, _, seed, _ in chunk)
-            job_name = f"phase1_{size}_{i // n_parallel}"
-
-            job = Job(
-                name=job_name,
-                cluster="delta",
-                repo_path="/u/dtyoung/eb_jepa_eeg",
-                command=(
-                    "git fetch origin && git checkout main && git pull --ff-only &&\n"
-                    + parallel_cmd
-                ),
-                venv="__none__",
-                branch="",
-                partition="gpuA40x4",
-                time_limit=TIME_LIMITS[size],
-                mem_gb=64,
-                gpus=1,
-                env_vars={
-                    "WANDB_API_KEY": os.environ.get("WANDB_API_KEY", ""),
-                    "WANDB_PROJECT": "eb_jepa",
-                    "HBN_PREPROCESS_DIR": "/projects/bbnv/kkokate/hbn_preprocessed",
-                },
-            )
-            jobs.append((job_name, job, desc, chunk))
+        job = Job(
+            name=job_name,
+            cluster="delta",
+            repo_path="/u/dtyoung/eb_jepa_eeg",
+            command=(
+                "git fetch origin && git checkout main && git pull --ff-only &&\n"
+                + parallel_cmd
+            ),
+            venv="__none__",
+            branch="",
+            partition="gpuA40x4",
+            time_limit=TIME_LIMIT,
+            mem_gb=64,
+            gpus=1,
+            env_vars={
+                "WANDB_API_KEY": os.environ.get("WANDB_API_KEY", ""),
+                "WANDB_PROJECT": "eb_jepa",
+                "HBN_PREPROCESS_DIR": "/projects/bbnv/kkokate/hbn_preprocessed",
+            },
+        )
+        jobs.append((job_name, job, desc, chunk))
 
     return jobs
 
@@ -146,7 +132,9 @@ if __name__ == "__main__":
     submit = "--submit" in sys.argv
     jobs = build_jobs()
 
-    print(f"Phase 1 sweep: {sum(len(c) for _, _, _, c in jobs)} experiments in {len(jobs)} SLURM jobs\n")
+    total_exps = sum(len(c) for _, _, _, c in jobs)
+    print(f"Phase 1 sweep: {total_exps} experiments in {len(jobs)} SLURM jobs "
+          f"({N_PARALLEL} parallel per job, {TIME_LIMIT} each)\n")
 
     for name, job, desc, chunk in jobs:
         script = job.submit(dry_run=True)
