@@ -148,10 +148,12 @@ def run(
                 reg_suffix = f"_std{cfg.loss.std_coeff}_cov{cfg.loss.cov_coeff}"
             else:
                 reg_suffix = "_noreg"
+            nw_suffix = f"_nw{cfg.data.n_windows}_ws{cfg.data.window_size_seconds}s"
             exp_name = (
                 f"eeg_jepa_bs{cfg.data.batch_size}"
                 f"_lr{cfg.optim.lr}"
                 f"{reg_suffix}"
+                f"{nw_suffix}"
                 f"{stride_suffix}"
             )
             exp_dir = get_unified_experiment_dir(
