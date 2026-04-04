@@ -60,6 +60,7 @@ NUMERIC_FEATURES = JEPAMovieDataset.DEFAULT_FEATURES
 _PREPROCESSED_DIRS = [
     Path("/mnt/v1/dtyoung/data/eb_jepa_eeg/hbn_preprocessed"),
     Path("/expanse/projects/nemar/dtyoung/.cache/eb_jepa_eeg/hbn_preprocessed"),
+    Path("/projects/bbnv/kkokate/hbn_preprocessed"),  # Delta
 ]
 
 
