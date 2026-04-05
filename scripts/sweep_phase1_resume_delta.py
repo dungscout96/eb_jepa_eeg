@@ -5,13 +5,26 @@ Two categories:
   2. Resumes — 13 experiments interrupted by the 2.5 h time limit; picks up
      from the saved latest.pth.tar via --meta.load_model=true
 
-Design choices vs the original sweep:
-  - Large configs (nw≥4, ws≥4 OR nw=8, ws=2) run solo (1 per SLURM job)
-    to avoid GPU contention that caused 15+ min/epoch in paired runs.
-  - Small / medium configs are still paired (2 per job) to save allocations.
-  - Time limits are per-experiment estimates × 1.5× safety margin.
-  - A short random sleep before git pull reduces lock contention if jobs
-    happen to land on the same node.
+GPU-hour efficiency strategy
+-----------------------------
+Experiments are paired 2-per-SLURM-job.  Within each job they run either
+in parallel or sequentially depending on config size (n_windows × window_size):
+
+  n_windows × window_size ≤ PARALLEL_THRESHOLD
+      → background parallel (&+wait): wall = max(T1,T2), GPU-hrs = max(T1,T2)
+  n_windows × window_size > PARALLEL_THRESHOLD
+      → sequential (&&): wall = T1+T2, GPU-hrs = T1+T2
+
+Sequential pairing uses the *same* GPU-hours as 2 solo submissions but
+halves queue overhead.  Parallel pairing halves both wall time and GPU-hours.
+
+From observations: nw×ws=4 (nw4_ws1) ran fine in parallel; nw×ws=8
+(nw4_ws2, nw2_ws4) caused GPU contention → 5–15× slowdown.
+PARALLEL_THRESHOLD is therefore set to 4.
+
+Time limits are per-experiment solo estimates × 1.5× safety margin, summed
+for sequential pairs.  A short random sleep before git pull reduces the
+chance of index.lock collisions when many jobs start at the same time.
 
 Usage
 -----
@@ -128,37 +141,25 @@ RUNS = [
 ]
 
 # ---------------------------------------------------------------------------
-# Packing: pair runs with equal (or close) time limits to save allocations.
-# Runs solo if they have a unique/long time limit.
+# n_windows × window_size ≤ this → safe to run 2 experiments in parallel
+# (verified: nw4_ws1=4 completed fine; nw4_ws2=8 caused 5-15x slowdown)
 # ---------------------------------------------------------------------------
-
-def _group_by_time(runs):
-    """Return list of (time_limit, [run, ...]) groupings.
-
-    Runs with ≤1.5 h limit are paired (2 per job).
-    Runs with >1.5 h limit run solo to avoid GPU contention.
-    """
-    short = [r for r in runs if _minutes(r[5]) <= 90]
-    long_  = [r for r in runs if _minutes(r[5]) >  90]
-
-    jobs = []
-    # Pair short runs
-    for i in range(0, len(short), 2):
-        chunk = short[i : i + 2]
-        # Use the longer limit of the pair
-        tl = max(chunk, key=lambda r: _minutes(r[5]))[5]
-        jobs.append((tl, chunk))
-
-    # Solo for long runs
-    for r in long_:
-        jobs.append((r[5], [r]))
-
-    return jobs
+PARALLEL_THRESHOLD = 4
 
 
 def _minutes(t):
     h, m, _ = map(int, t.split(":"))
     return h * 60 + m
+
+
+def _add_times(t1, t2):
+    """Return HH:MM:SS string that is the sum of two HH:MM:SS strings."""
+    total = _minutes(t1) + _minutes(t2)
+    return f"{total // 60:02d}:{total % 60:02d}:00"
+
+
+def _can_parallelize(nw, ws):
+    return nw * ws <= PARALLEL_THRESHOLD
 
 
 def _make_run_cmd(nw, ws, bs, seed, ckpt_path):
@@ -177,26 +178,35 @@ def _make_run_cmd(nw, ws, bs, seed, ckpt_path):
 
 
 def build_jobs():
-    groups = _group_by_time(RUNS)
     jobs = []
-    for idx, (time_limit, chunk) in enumerate(groups):
+    for idx in range(0, len(RUNS), 2):
+        chunk = RUNS[idx : idx + 2]
         cmds = [_make_run_cmd(*r[:5]) for r in chunk]
-        n_parallel = len(chunk)
 
-        if n_parallel > 1:
-            parallel_cmd = " &\n".join(cmds) + " &\nwait"
+        if len(chunk) == 2 and all(_can_parallelize(r[0], r[1]) for r in chunk):
+            # Both small enough: run in parallel — wall = max, GPU-hrs = max
+            time_limit = max(chunk, key=lambda r: _minutes(r[5]))[5]
+            combined_cmd = " &\n".join(cmds) + " &\nwait"
+            mode = "parallel"
+        elif len(chunk) == 2:
+            # One or both too large: run sequentially — wall = sum, GPU-hrs = sum
+            # (same GPU-hrs as 2 solo jobs, but only 1 queue slot)
+            time_limit = _add_times(chunk[0][5], chunk[1][5])
+            combined_cmd = " &&\n".join(cmds)
+            mode = "sequential"
         else:
-            parallel_cmd = cmds[0]
+            time_limit = chunk[0][5]
+            combined_cmd = cmds[0]
+            mode = "solo"
 
         desc = " + ".join(
-            f"nw{nw}_ws{ws}s_s{seed}{'(resume)' if ck else '(fresh)'}"
-            for nw, ws, bs, seed, ck, _ in chunk
+            f"nw{nw}_ws{ws}s_s{seed}{'(resume)' if ck else '(fresh)'}[{tl}]"
+            for nw, ws, bs, seed, ck, tl in chunk
         )
-        job_name = f"p1r_{idx:02d}"
+        job_name = f"p1r_{idx // 2:02d}"
 
-        # Random sleep before git pull to avoid lock contention across concurrent jobs
         git_cmd = (
-            f"sleep $((RANDOM % 15)) &&"
+            "sleep $((RANDOM % 15)) &&"
             " git fetch origin && git checkout main && git pull --ff-only &&\n"
         )
 
@@ -204,7 +214,7 @@ def build_jobs():
             name=job_name,
             cluster="delta",
             repo_path="/u/dtyoung/eb_jepa_eeg",
-            command=git_cmd + parallel_cmd,
+            command=git_cmd + combined_cmd,
             venv="__none__",
             branch="",
             partition="gpuA40x4",
@@ -217,7 +227,7 @@ def build_jobs():
                 "HBN_PREPROCESS_DIR": "/projects/bbnv/kkokate/hbn_preprocessed",
             },
         )
-        jobs.append((job_name, job, desc, chunk))
+        jobs.append((job_name, job, desc, mode, chunk))
 
     return jobs
 
@@ -226,7 +236,7 @@ if __name__ == "__main__":
     submit = "--submit" in sys.argv
     jobs = build_jobs()
 
-    total_exps = sum(len(c) for _, _, _, c in jobs)
+    total_exps = sum(len(c) for _, _, _, _, c in jobs)
     fresh = sum(1 for r in RUNS if r[4] is None)
     resume = sum(1 for r in RUNS if r[4] is not None)
     print(
@@ -234,10 +244,10 @@ if __name__ == "__main__":
         f"({fresh} fresh, {resume} resumes) in {len(jobs)} SLURM jobs\n"
     )
 
-    for name, job, desc, chunk in jobs:
+    for name, job, desc, mode, chunk in jobs:
         script = job.submit(dry_run=True)
         print("=" * 72)
-        print(f"Job: {name}  [{chunk[0][5]}]  ({len(chunk)} exp(s))")
+        print(f"Job: {name}  [{job.time_limit}]  {mode}  ({len(chunk)} exp(s))")
         print(f"  Runs: {desc}")
         print("=" * 72)
         print(script)
@@ -247,8 +257,8 @@ if __name__ == "__main__":
         print("\n" + "=" * 72)
         print("SUBMITTING ALL JOBS")
         print("=" * 72)
-        for name, job, desc, chunk in jobs:
+        for name, job, desc, mode, chunk in jobs:
             job_id = job.submit()
-            print(f"  {name}: {job_id}  ({desc})")
+            print(f"  {name} [{mode}]: {job_id}  ({desc})")
     else:
         print(f"\n{len(jobs)} SLURM jobs ready. Run with --submit to send to Delta.")
