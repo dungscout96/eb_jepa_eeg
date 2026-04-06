@@ -44,7 +44,9 @@ from neurolab.jobs import Job
 # Checkpoint base path on Delta
 # ---------------------------------------------------------------------------
 
-CKPT_BASE = "/u/dtyoung/eb_jepa_eeg/checkpoints/eeg_jepa"
+CKPT_BASE = "/u/dtyoung/eb_jepa_eeg/checkpoints/eeg_jepa/dev_2026-04-05_22-50"
+CKPT_BASE_23 = "/u/dtyoung/eb_jepa_eeg/checkpoints/eeg_jepa/dev_2026-04-05_23-16"
+CKPT_BASE_23b = "/u/dtyoung/eb_jepa_eeg/checkpoints/eeg_jepa/dev_2026-04-05_23-17"
 
 # Fixed hyperparameters (same as original sweep)
 FIXED_ARGS = (
@@ -67,77 +69,49 @@ FIXED_ARGS = (
 # ---------------------------------------------------------------------------
 
 RUNS = [
-    # ── Fresh restarts ─────────────────────────────────────────────────────
-    # Crashed silently on gpub032 (node CUDA issue); no checkpoint saved
-    (2, 1, 64, 42,   None, "01:00:00"),
-    (2, 2, 64, 2025, None, "01:00:00"),
-    # Never ran: job 12 timed-out before seed2025 saved anything
-    (4, 4, 32, 2025, None, "06:00:00"),
-    # Never ran: job 16 failed immediately due to git index.lock
-    (8, 2, 32, 7,    None, "14:00:00"),
+    # ── Fresh restarts (no checkpoint saved) ──────────────────────────────
+    (1, 4, 64, 2025, None, "01:30:00"),  # parallel node contention
+    (1, 4, 64, 7,    None, "01:30:00"),
+    (4, 1, 64, 7,    None, "02:00:00"),
+    (4, 2, 64, 42,   None, "02:30:00"),
+    (4, 4, 32, 2025, None, "09:00:00"),
+    (4, 4, 32, 7,    None, "09:00:00"),
 
-    # ── Resumes from checkpoint ────────────────────────────────────────────
-    # nw=2, ws=4s  (ep 64 / 45 / 45 saved)
+    # ── Resumes ────────────────────────────────────────────────────────────
+    # nw2_ws4: ep64 / ep44 / ep44
     (2, 4, 64, 2025,
-     f"{CKPT_BASE}/dev_2026-04-04_18-03"
-     "/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw2_ws4s_seed2025/latest.pth.tar",
+     f"{CKPT_BASE}/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw2_ws4s_seed2025/latest.pth.tar",
      "01:30:00"),
     (2, 4, 64, 42,
-     f"{CKPT_BASE}/dev_2026-04-04_18-03"
-     "/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw2_ws4s_seed42/latest.pth.tar",
-     "01:30:00"),
+     f"{CKPT_BASE}/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw2_ws4s_seed42/latest.pth.tar",
+     "02:00:00"),
     (2, 4, 64, 7,
-     f"{CKPT_BASE}/dev_2026-04-04_18-03"
-     "/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw2_ws4s_seed7/latest.pth.tar",
-     "01:30:00"),
-
-    # nw=4, ws=2s  (ep 73 / 51 / 51 saved)
-    (4, 2, 64, 2025,
-     f"{CKPT_BASE}/dev_2026-04-04_18-04"
-     "/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw4_ws2s_seed2025/latest.pth.tar",
-     "01:30:00"),
-    (4, 2, 64, 42,
-     f"{CKPT_BASE}/dev_2026-04-04_18-09"
-     "/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw4_ws2s_seed42/latest.pth.tar",
-     "02:00:00"),
-    (4, 2, 64, 7,
-     f"{CKPT_BASE}/dev_2026-04-04_18-09"
-     "/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw4_ws2s_seed7/latest.pth.tar",
+     f"{CKPT_BASE}/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw2_ws4s_seed7/latest.pth.tar",
      "02:00:00"),
 
-    # nw=4, ws=4s  (ep 29 / 10 saved; seed2025 is a fresh start above)
+    # nw4_ws4: ep29 (seed2025 and s7 are fresh starts above)
     (4, 4, 32, 42,
-     f"{CKPT_BASE}/dev_2026-04-04_18-09"
-     "/eeg_jepa_bs32_lr0.0005_std0.25_cov0.25_nw4_ws4s_seed42/latest.pth.tar",
-     "04:00:00"),
-    (4, 4, 32, 7,
-     f"{CKPT_BASE}/dev_2026-04-04_18-13"
-     "/eeg_jepa_bs32_lr0.0005_std0.25_cov0.25_nw4_ws4s_seed7/latest.pth.tar",
-     "05:00:00"),
+     f"{CKPT_BASE_23}/eeg_jepa_bs32_lr0.0005_std0.25_cov0.25_nw4_ws4s_seed42/latest.pth.tar",
+     "06:00:00"),
 
-    # nw=8, ws=1s  (ep 48 / 51 / 51 saved)
-    (8, 1, 64, 2025,
-     f"{CKPT_BASE}/dev_2026-04-04_18-13"
-     "/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw8_ws1s_seed2025/latest.pth.tar",
-     "02:00:00"),
+    # nw8_ws1: ep49 / ep49
     (8, 1, 64, 42,
-     f"{CKPT_BASE}/dev_2026-04-04_18-19"
-     "/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw8_ws1s_seed42/latest.pth.tar",
-     "02:00:00"),
+     f"{CKPT_BASE_23}/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw8_ws1s_seed42/latest.pth.tar",
+     "03:00:00"),
     (8, 1, 64, 7,
-     f"{CKPT_BASE}/dev_2026-04-04_18-19"
-     "/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw8_ws1s_seed7/latest.pth.tar",
-     "02:00:00"),
+     f"{CKPT_BASE_23}/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw8_ws1s_seed7/latest.pth.tar",
+     "03:00:00"),
 
-    # nw=8, ws=2s  (ep 11 / 11 saved; seed7 is a fresh start above)
+    # nw8_ws2: ep11 / ep11 / ep33
     (8, 2, 32, 2025,
-     f"{CKPT_BASE}/dev_2026-04-04_18-19"
-     "/eeg_jepa_bs32_lr0.0005_std0.25_cov0.25_nw8_ws2s_seed2025/latest.pth.tar",
+     f"{CKPT_BASE_23b}/eeg_jepa_bs32_lr0.0005_std0.25_cov0.25_nw8_ws2s_seed2025/latest.pth.tar",
      "12:00:00"),
     (8, 2, 32, 42,
-     f"{CKPT_BASE}/dev_2026-04-04_18-19"
-     "/eeg_jepa_bs32_lr0.0005_std0.25_cov0.25_nw8_ws2s_seed42/latest.pth.tar",
+     f"{CKPT_BASE_23b}/eeg_jepa_bs32_lr0.0005_std0.25_cov0.25_nw8_ws2s_seed42/latest.pth.tar",
      "12:00:00"),
+    (8, 2, 32, 7,
+     f"{CKPT_BASE_23b}/eeg_jepa_bs32_lr0.0005_std0.25_cov0.25_nw8_ws2s_seed7/latest.pth.tar",
+     "10:00:00"),
 ]
 
 # ---------------------------------------------------------------------------
