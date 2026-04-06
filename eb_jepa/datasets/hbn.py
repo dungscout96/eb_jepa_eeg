@@ -823,29 +823,16 @@ class JEPAMovieDataset(HBNMovieDataset):
         )
 
     def _compute_norm_stats(self):
-        """Compute per-channel mean/std, using cached stats if available.
+        """Compute per-channel mean/std by streaming through all preprocessed recordings.
 
-        Looks for ``normalization_stats.npz`` in each preprocessed split
-        directory (saved by the preprocessing pipeline).  Falls back to
-        streaming computation over all recordings if no cache is found.
+        NOTE: The preprocessing pipeline saves a ``normalization_stats.npz`` next to
+        each release directory, but those stats are computed on the *intermediate*
+        (pre-normalization) FIF files in raw EEG units (~1e-5 V).  The FIF files
+        actually read at training time are the *already z-scored* outputs of pass 2,
+        which have unit scale.  Loading the cached stats and dividing again by ~1e-5
+        would multiply embeddings by ~100,000.  Always compute from the actual data.
         """
-        # Try to load cached stats from preprocessed directory
-        if self._fif_paths:
-            # Stats file lives next to the split directory (e.g. .../R1/ThePresent/normalization_stats.npz)
-            first_fif = Path(self._fif_paths[0])
-            for parent in [first_fif.parent, first_fif.parent.parent, first_fif.parent.parent.parent]:
-                cache_file = parent / "normalization_stats.npz"
-                if cache_file.exists():
-                    cached = np.load(cache_file)
-                    mean = torch.from_numpy(cached["mean"]).float()
-                    std = torch.from_numpy(cached["std"]).float().clamp(min=1e-8)
-                    self._eeg_mean = mean[None, :, None]  # [1, C, 1]
-                    self._eeg_std = std[None, :, None]
-                    logger.info("Loaded cached norm stats from %s (%d channels)", cache_file, mean.shape[0])
-                    return
-
-        # Fallback: stream through all recordings
-        logger.info("No cached norm stats found — computing from %d recordings...", len(self._fif_paths))
+        logger.info("Computing norm stats from %d recordings...", len(self._fif_paths))
         channel_sum = None
         channel_sum_sq = None
         total_timepoints = 0
