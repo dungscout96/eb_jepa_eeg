@@ -57,15 +57,12 @@ def extract_embeddings(encoder, dataset, n_samples=200):
     all_embeddings = []
     all_features = []
     all_rec_ids = []
-    all_window_ids = []
 
     n = min(n_samples, len(dataset))
     for i in range(n):
         eeg, features, *rest = dataset[i]
         # eeg: [n_windows, C, W]
-        tokens = encoder(eeg.unsqueeze(0))  # [1, n_tokens, embed_dim]
-        # Average over tokens per window to get per-window embedding
-        emb = tokens.squeeze(0).mean(dim=0)  # [embed_dim] (global avg)
+        tokens = encoder.encode_tokens(eeg.unsqueeze(0))  # [1, n_tokens, embed_dim]
         all_embeddings.append(tokens.squeeze(0))  # [n_tokens, embed_dim]
         all_features.append(features)
         all_rec_ids.append(i)
@@ -181,7 +178,7 @@ def temporal_analysis(encoder, dataset, out_dir, n_recordings=5):
     for rec_idx in range(min(n_recordings, len(dataset))):
         eeg, features, *rest = dataset[rec_idx]
         with torch.no_grad():
-            tokens = encoder(eeg.unsqueeze(0))  # [1, n_tokens, D]
+            tokens = encoder.encode_tokens(eeg.unsqueeze(0))  # [1, n_tokens, D]
         # Average tokens per window position
         emb = tokens.squeeze(0)  # [n_tokens, D]
         # PCA to 3D for trajectory
