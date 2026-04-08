@@ -253,7 +253,9 @@ def run(
 
     eval_sets = {}
     eval_loaders = {}
-    for split in splits.split(","):
+    if isinstance(splits, str):
+        splits = [s.strip() for s in splits.split(",")]
+    for split in splits:
         split = split.strip()
         split_set = JEPAMovieDataset(
             split=split,
