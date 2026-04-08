@@ -6,7 +6,7 @@ probes on the train set, then evaluates on val (and optionally test).
 Two probe types:
   1. Movie-feature probes (regression + classification) — evaluated per
      temporal clip, same as the online probes trained during training.
-     Labels: contrast_rms, luminance_mean, entropy, scene_natural_score.
+     Labels: contrast_rms, luminance_mean, position_in_movie, narrative_event_score.
 
   2. Subject-trait probe — evaluated per recording (one embedding per
      subject, pooled over all clips of that recording). Labels: age >
@@ -46,7 +46,6 @@ from eb_jepa.masking import MultiBlockMaskCollator
 from eb_jepa.training_utils import load_checkpoint, load_config, setup_device, setup_seed
 from experiments.eeg_jepa.eval import validation_loop
 from experiments.eeg_jepa.main import (
-    NUMERIC_FEATURES,
     ClassificationLoss,
     RegressionLoss,
     _PREPROCESSED_DIRS,
@@ -224,6 +223,7 @@ def run(
 
     preprocessed_dir = resolve_preprocessed_dir(cfg.data.get("preprocessed_dir", None))
     preprocessed = cfg.data.get("preprocessed", False)
+    feature_names = list(cfg.data.get("feature_names", JEPAMovieDataset.DEFAULT_FEATURES))
 
     # ------------------------------------------------------------------
     # Datasets
@@ -233,6 +233,7 @@ def run(
         split="train",
         n_windows=n_windows,
         window_size_seconds=window_size_seconds,
+        feature_names=feature_names,
         cfg=cfg.data,
         preprocessed=preprocessed,
         preprocessed_dir=preprocessed_dir,
@@ -258,6 +259,7 @@ def run(
             split=split,
             n_windows=n_windows,
             window_size_seconds=window_size_seconds,
+            feature_names=feature_names,
             eeg_norm_stats=train_set.get_eeg_norm_stats(),
             cfg=cfg.data,
             preprocessed=preprocessed,
@@ -278,7 +280,7 @@ def run(
     # ------------------------------------------------------------------
     n_chans = train_set.n_chans
     n_times = train_set.n_times
-    n_features = len(NUMERIC_FEATURES)
+    n_features = len(feature_names)
     embed_dim = cfg.model.encoder_embed_dim
     chs_info = train_set.get_chs_info()
     masking_cfg = cfg.get("masking", {})
@@ -406,7 +408,7 @@ def run(
         logger.info("Evaluating movie-feature probes on %s...", split)
         movie_metrics = validation_loop(
             loader, jepa, regression_probe, classification_probe,
-            device, feature_stats, feature_median, NUMERIC_FEATURES,
+            device, feature_stats, feature_median, feature_names,
         )
         for k, v in movie_metrics.items():
             all_metrics[f"probe_eval/{split}/{k.split('/', 1)[-1]}"] = v

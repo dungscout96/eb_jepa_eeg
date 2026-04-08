@@ -83,10 +83,18 @@ MOVIE_METADATA = {
         "duration": 203.3,  # 3 minutes 23 seconds
         "fps": 24,
         "frame_count": 4878,
-        "feature_csv": str(
-            PROJECT_ROOT / "data" / "output" / "The_Present" / "features.csv"
+        "feature_parquet": str(
+            PROJECT_ROOT / "movie_annotation" / "output" / "The_Present" / "features_enriched.parquet"
         ),
-    }
+    },
+    "DespicableMe": {
+        "duration": 170.6,
+        "fps": 25,
+        "frame_count": 4266,
+        "feature_parquet": str(
+            PROJECT_ROOT / "movie_annotation" / "output" / "despicable_me" / "features_enriched.parquet"
+        ),
+    },
 }
 
 _MOVIE_PATHS = {
@@ -443,9 +451,9 @@ class HBNDataset(Dataset):
 # ---------------------------------------------------------------------------
 
 def _preload_movie_features(task: str) -> dict:
-    """Load movie feature CSVs for the given task."""
-    csv_path = MOVIE_METADATA[task]["feature_csv"]
-    return {task: pd.read_csv(csv_path)}
+    """Load movie feature parquets for the given task."""
+    parquet_path = MOVIE_METADATA[task]["feature_parquet"]
+    return {task: pd.read_parquet(parquet_path)}
 
 
 def get_movie_metadata(task):
@@ -720,8 +728,8 @@ class JEPAMovieDataset(HBNMovieDataset):
     DEFAULT_FEATURES = [
         "contrast_rms",
         "luminance_mean",
-        "entropy",
-        "scene_natural_score",
+        "position_in_movie",
+        "narrative_event_score",
     ]
 
     def __init__(

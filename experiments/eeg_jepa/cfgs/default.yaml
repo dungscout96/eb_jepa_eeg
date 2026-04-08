@@ -13,6 +13,12 @@ data:
   temporal_stride: 1      # Stride between sampled windows (1=contiguous, 4=8s apart)
   preprocessed: true     # Use preprocessed data (set true + preprocessed_dir to use)
   preprocessed_dir: null  # Auto-detects known paths; set explicitly to override
+  # Movie feature names used for probe evaluation (regression + classification heads)
+  feature_names:
+    - contrast_rms
+    - luminance_mean
+    - position_in_movie
+    - narrative_event_score
   # HBN dataset parameters
   annotation_duration_tolerance_s: 1.0
   post_movie_visual_processing_s: 2.0

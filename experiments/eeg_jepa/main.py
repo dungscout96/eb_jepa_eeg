@@ -54,7 +54,7 @@ from experiments.eeg_jepa.eval import validation_loop
 
 logger = get_logger(__name__)
 
-NUMERIC_FEATURES = JEPAMovieDataset.DEFAULT_FEATURES
+NUMERIC_FEATURES = None  # resolved from cfg.data.feature_names at runtime
 
 # Known preprocessed data locations (checked in order for auto-detection)
 _PREPROCESSED_DIRS = [
@@ -184,12 +184,16 @@ def run(
     logger.info("Loading HBN Movie datasets...")
     preprocessed = cfg.data.get("preprocessed", False)
     preprocessed_dir = resolve_preprocessed_dir(cfg.data.get("preprocessed_dir", None))
+    feature_names = list(cfg.data.get("feature_names", JEPAMovieDataset.DEFAULT_FEATURES))
+    global NUMERIC_FEATURES
+    NUMERIC_FEATURES = feature_names
 
     train_set = JEPAMovieDataset(
         split="train",
         n_windows=cfg.data.n_windows,
         window_size_seconds=cfg.data.window_size_seconds,
         temporal_stride=temporal_stride,
+        feature_names=feature_names,
         cfg=cfg.data,
         preprocessed=preprocessed,
         preprocessed_dir=preprocessed_dir,
@@ -199,6 +203,7 @@ def run(
         n_windows=cfg.data.n_windows,
         window_size_seconds=cfg.data.window_size_seconds,
         temporal_stride=temporal_stride,
+        feature_names=feature_names,
         eeg_norm_stats=train_set.get_eeg_norm_stats(),
         cfg=cfg.data,
         preprocessed=preprocessed,
@@ -551,6 +556,7 @@ def run(
         n_windows=cfg.data.n_windows,
         window_size_seconds=cfg.data.window_size_seconds,
         temporal_stride=temporal_stride,
+        feature_names=feature_names,
         eeg_norm_stats=train_set.get_eeg_norm_stats(),
         cfg=cfg.data,
         preprocessed=preprocessed,

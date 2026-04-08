@@ -92,7 +92,7 @@ class SanityCheckHook:
     """
 
     # Index of luminance_mean in JEPAMovieDataset.DEFAULT_FEATURES —
-    # ["contrast_rms", "luminance_mean", "entropy", "scene_natural_score"]
+    # ["contrast_rms", "luminance_mean", "position_in_movie", "narrative_event_score"]
     LUMINANCE_FEATURE_IDX: int = 1
 
     def __init__(
