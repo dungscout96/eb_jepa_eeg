@@ -41,6 +41,7 @@ CKPT_APR6_0706 = "/u/dtyoung/eb_jepa_eeg/checkpoints/eeg_jepa/dev_2026-04-06_07-
 CKPT_APR6_0740 = "/u/dtyoung/eb_jepa_eeg/checkpoints/eeg_jepa/dev_2026-04-06_07-40"
 CKPT_APR6_0804 = "/u/dtyoung/eb_jepa_eeg/checkpoints/eeg_jepa/dev_2026-04-06_08-04"
 CKPT_APR6_0811 = "/u/dtyoung/eb_jepa_eeg/checkpoints/eeg_jepa/dev_2026-04-06_08-11"
+CKPT_APR6_1506 = "/u/dtyoung/eb_jepa_eeg/checkpoints/eeg_jepa/dev_2026-04-06_15-06"
 
 def ckpt(base, nw, ws, bs, seed):
     bs_str = f"bs{bs}"
@@ -94,7 +95,7 @@ CHECKPOINTS = [
     # nw4_ws4
     (4, 4, 32, 2025, ckpt(CKPT_APR6_0700, 4, 4, 32, 2025)),
     (4, 4, 32, 42,   ckpt(CKPT_APR6_0811, 4, 4, 32, 42)),
-    (4, 4, 32, 7,    ckpt(CKPT_APR6_0811, 4, 4, 32, 7)),
+    (4, 4, 32, 7,    ckpt(CKPT_APR6_1506, 4, 4, 32, 7)),
 
     # nw8_ws1
     (8, 1, 64, 2025, ckpt(CKPT_APR5_2316, 8, 1, 64, 2025)),
