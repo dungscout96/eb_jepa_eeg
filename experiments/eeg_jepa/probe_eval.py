@@ -211,15 +211,25 @@ def run(
     """
     setup_seed(seed)
     device = setup_device("auto")
+
+    checkpoint_path = Path(checkpoint)
+    assert checkpoint_path.exists(), f"Checkpoint not found: {checkpoint_path}"
+
+    # Infer encoder_depth from checkpoint state dict to avoid mismatch
+    _ckpt_sd = torch.load(checkpoint_path, map_location="cpu", weights_only=False).get("model_state_dict", {})
+    _depth = max(
+        int(k.split(".")[3]) + 1
+        for k in _ckpt_sd
+        if k.startswith("context_encoder.transformer.layers.")
+    )
+
     cfg = load_config(fname, {
         "data.n_windows": n_windows,
         "data.window_size_seconds": window_size_seconds,
         "data.batch_size": batch_size,
         "data.num_workers": num_workers,
+        "model.encoder_depth": _depth,
     })
-
-    checkpoint_path = Path(checkpoint)
-    assert checkpoint_path.exists(), f"Checkpoint not found: {checkpoint_path}"
 
     preprocessed_dir = resolve_preprocessed_dir(cfg.data.get("preprocessed_dir", None))
     preprocessed = cfg.data.get("preprocessed", False)
