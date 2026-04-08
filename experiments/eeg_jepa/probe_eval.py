@@ -210,7 +210,7 @@ def run(
         seed: Random seed.
     """
     setup_seed(seed)
-    device = setup_device(None)
+    device = setup_device("auto")
     cfg = load_config(fname, {
         "data.n_windows": n_windows,
         "data.window_size_seconds": window_size_seconds,
