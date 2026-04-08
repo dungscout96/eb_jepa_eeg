@@ -29,83 +29,64 @@ from neurolab.jobs import Job
 # Format: (n_windows, window_size_seconds, batch_size, seed, checkpoint_path)
 # ---------------------------------------------------------------------------
 
-CKPT_APR5_2250 = "/u/dtyoung/eb_jepa_eeg/checkpoints/eeg_jepa/dev_2026-04-05_22-50"
-CKPT_APR5_2316 = "/u/dtyoung/eb_jepa_eeg/checkpoints/eeg_jepa/dev_2026-04-05_23-16"
-CKPT_APR5_2317 = "/u/dtyoung/eb_jepa_eeg/checkpoints/eeg_jepa/dev_2026-04-05_23-17"
-CKPT_APR6_0657 = "/u/dtyoung/eb_jepa_eeg/checkpoints/eeg_jepa/dev_2026-04-06_06-57"
-CKPT_APR6_0700 = "/u/dtyoung/eb_jepa_eeg/checkpoints/eeg_jepa/dev_2026-04-06_07-00"
-CKPT_APR6_0701 = "/u/dtyoung/eb_jepa_eeg/checkpoints/eeg_jepa/dev_2026-04-06_07-01"
-CKPT_APR6_0702 = "/u/dtyoung/eb_jepa_eeg/checkpoints/eeg_jepa/dev_2026-04-06_07-02"
-CKPT_APR6_0705 = "/u/dtyoung/eb_jepa_eeg/checkpoints/eeg_jepa/dev_2026-04-06_07-05"
-CKPT_APR6_0706 = "/u/dtyoung/eb_jepa_eeg/checkpoints/eeg_jepa/dev_2026-04-06_07-06"
-CKPT_APR6_0740 = "/u/dtyoung/eb_jepa_eeg/checkpoints/eeg_jepa/dev_2026-04-06_07-40"
-CKPT_APR6_0804 = "/u/dtyoung/eb_jepa_eeg/checkpoints/eeg_jepa/dev_2026-04-06_08-04"
-CKPT_APR6_0811 = "/u/dtyoung/eb_jepa_eeg/checkpoints/eeg_jepa/dev_2026-04-06_08-11"
-CKPT_APR6_1506 = "/u/dtyoung/eb_jepa_eeg/checkpoints/eeg_jepa/dev_2026-04-06_15-06"
+BASE = "/u/dtyoung/eb_jepa_eeg/checkpoints/eeg_jepa"
 
-def ckpt(base, nw, ws, bs, seed):
-    bs_str = f"bs{bs}"
-    return (
-        f"{base}/eeg_jepa_{bs_str}_lr0.0005_std0.25_cov0.25"
-        f"_nw{nw}_ws{ws}s_seed{seed}/latest.pth.tar"
-    )
-
-# (nw, ws, bs, seed, checkpoint_path)
+# (nw, ws, bs, seed, checkpoint_path) — paths verified from Delta filesystem
 CHECKPOINTS = [
-    # nw1_ws1 — from original April 5 sweep
-    (1, 1, 64, 2025, ckpt(CKPT_APR5_2250, 1, 1, 64, 2025)),
-    (1, 1, 64, 42,   ckpt(CKPT_APR5_2250, 1, 1, 64, 42)),
-    (1, 1, 64, 7,    ckpt(CKPT_APR5_2250, 1, 1, 64, 7)),
+    # nw1_ws1
+    (1, 1, 64, 2025, f"{BASE}/dev_2026-04-05_22-44/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw1_ws1s_seed2025/latest.pth.tar"),
+    (1, 1, 64, 42,   f"{BASE}/dev_2026-04-05_22-44/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw1_ws1s_seed42/latest.pth.tar"),
+    (1, 1, 64, 7,    f"{BASE}/dev_2026-04-05_22-45/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw1_ws1s_seed7/latest.pth.tar"),
 
     # nw1_ws2
-    (1, 2, 64, 2025, ckpt(CKPT_APR5_2250, 1, 2, 64, 2025)),
-    (1, 2, 64, 42,   ckpt(CKPT_APR5_2250, 1, 2, 64, 42)),
-    (1, 2, 64, 7,    ckpt(CKPT_APR5_2250, 1, 2, 64, 7)),
+    (1, 2, 64, 2025, f"{BASE}/dev_2026-04-05_22-45/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw1_ws2s_seed2025/latest.pth.tar"),
+    (1, 2, 64, 42,   f"{BASE}/dev_2026-04-05_22-46/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw1_ws2s_seed42/latest.pth.tar"),
+    (1, 2, 64, 7,    f"{BASE}/dev_2026-04-05_22-46/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw1_ws2s_seed7/latest.pth.tar"),
 
-    # nw1_ws4 — seed42 from April 5, seeds 2025+7 from April 6 resume
-    (1, 4, 64, 42,   ckpt(CKPT_APR5_2250, 1, 4, 64, 42)),
-    (1, 4, 64, 2025, ckpt(CKPT_APR6_0657, 1, 4, 64, 2025)),
-    (1, 4, 64, 7,    ckpt(CKPT_APR6_0657, 1, 4, 64, 7)),
+    # nw1_ws4 — seed42 ep99, seeds 2025+7 at ep72-73 (best available)
+    (1, 4, 64, 42,   f"{BASE}/dev_2026-04-05_22-45/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw1_ws4s_seed42/latest.pth.tar"),
+    (1, 4, 64, 2025, f"{BASE}/dev_2026-04-07_07-55/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw1_ws4s_seed2025/latest.pth.tar"),
+    (1, 4, 64, 7,    f"{BASE}/dev_2026-04-07_07-55/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw1_ws4s_seed7/latest.pth.tar"),
 
     # nw2_ws1
-    (2, 1, 64, 2025, ckpt(CKPT_APR5_2250, 2, 1, 64, 2025)),
-    (2, 1, 64, 42,   ckpt(CKPT_APR5_2250, 2, 1, 64, 42)),
-    (2, 1, 64, 7,    ckpt(CKPT_APR5_2250, 2, 1, 64, 7)),
+    (2, 1, 64, 2025, f"{BASE}/dev_2026-04-05_22-46/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw2_ws1s_seed2025/latest.pth.tar"),
+    (2, 1, 64, 42,   f"{BASE}/dev_2026-04-05_22-46/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw2_ws1s_seed42/latest.pth.tar"),
+    (2, 1, 64, 7,    f"{BASE}/dev_2026-04-05_22-46/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw2_ws1s_seed7/latest.pth.tar"),
 
     # nw2_ws2
-    (2, 2, 64, 2025, ckpt(CKPT_APR5_2250, 2, 2, 64, 2025)),
-    (2, 2, 64, 42,   ckpt(CKPT_APR5_2250, 2, 2, 64, 42)),
-    (2, 2, 64, 7,    ckpt(CKPT_APR5_2250, 2, 2, 64, 7)),
+    (2, 2, 64, 2025, f"{BASE}/dev_2026-04-05_22-48/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw2_ws2s_seed2025/latest.pth.tar"),
+    (2, 2, 64, 42,   f"{BASE}/dev_2026-04-05_22-48/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw2_ws2s_seed42/latest.pth.tar"),
+    (2, 2, 64, 7,    f"{BASE}/dev_2026-04-05_22-49/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw2_ws2s_seed7/latest.pth.tar"),
 
     # nw2_ws4
-    (2, 4, 64, 2025, ckpt(CKPT_APR6_0701, 2, 4, 64, 2025)),
-    (2, 4, 64, 42,   ckpt(CKPT_APR6_0740, 2, 4, 64, 42)),
-    (2, 4, 64, 7,    ckpt(CKPT_APR6_0702, 2, 4, 64, 7)),
+    (2, 4, 64, 2025, f"{BASE}/dev_2026-04-05_22-49/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw2_ws4s_seed2025/latest.pth.tar"),
+    (2, 4, 64, 42,   f"{BASE}/dev_2026-04-06_09-04/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw2_ws4s_seed42/latest.pth.tar"),
+    (2, 4, 64, 7,    f"{BASE}/dev_2026-04-06_07-02/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw2_ws4s_seed7/latest.pth.tar"),
 
     # nw4_ws1
-    (4, 1, 64, 2025, ckpt(CKPT_APR5_2250, 4, 1, 64, 2025)),
-    (4, 1, 64, 42,   ckpt(CKPT_APR5_2250, 4, 1, 64, 42)),
-    (4, 1, 64, 7,    ckpt(CKPT_APR5_2250, 4, 1, 64, 7)),
+    (4, 1, 64, 2025, f"{BASE}/dev_2026-04-05_23-16/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw4_ws1s_seed2025/latest.pth.tar"),
+    (4, 1, 64, 42,   f"{BASE}/dev_2026-04-05_23-16/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw4_ws1s_seed42/latest.pth.tar"),
+    (4, 1, 64, 7,    f"{BASE}/dev_2026-04-06_06-58/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw4_ws1s_seed7/latest.pth.tar"),
 
     # nw4_ws2
-    (4, 2, 64, 2025, ckpt(CKPT_APR5_2250, 4, 2, 64, 2025)),
-    (4, 2, 64, 42,   ckpt(CKPT_APR6_0740, 4, 2, 64, 42)),
-    (4, 2, 64, 7,    ckpt(CKPT_APR5_2250, 4, 2, 64, 7)),
+    (4, 2, 64, 2025, f"{BASE}/dev_2026-04-05_23-16/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw4_ws2s_seed2025/latest.pth.tar"),
+    (4, 2, 64, 42,   f"{BASE}/dev_2026-04-06_07-40/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw4_ws2s_seed42/latest.pth.tar"),
+    (4, 2, 64, 7,    f"{BASE}/dev_2026-04-05_23-16/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw4_ws2s_seed7/latest.pth.tar"),
 
     # nw4_ws4
-    (4, 4, 32, 2025, ckpt(CKPT_APR6_0700, 4, 4, 32, 2025)),
-    (4, 4, 32, 42,   ckpt(CKPT_APR6_0811, 4, 4, 32, 42)),
-    (4, 4, 32, 7,    ckpt(CKPT_APR6_1506, 4, 4, 32, 7)),
+    (4, 4, 32, 2025, f"{BASE}/dev_2026-04-06_07-00/eeg_jepa_bs32_lr0.0005_std0.25_cov0.25_nw4_ws4s_seed2025/latest.pth.tar"),
+    (4, 4, 32, 42,   f"{BASE}/dev_2026-04-06_08-11/eeg_jepa_bs32_lr0.0005_std0.25_cov0.25_nw4_ws4s_seed42/latest.pth.tar"),
+    (4, 4, 32, 7,    f"{BASE}/dev_2026-04-06_15-06/eeg_jepa_bs32_lr0.0005_std0.25_cov0.25_nw4_ws4s_seed7/latest.pth.tar"),
 
     # nw8_ws1
-    (8, 1, 64, 2025, ckpt(CKPT_APR5_2316, 8, 1, 64, 2025)),
-    (8, 1, 64, 42,   ckpt(CKPT_APR6_0705, 8, 1, 64, 42)),
-    (8, 1, 64, 7,    ckpt(CKPT_APR6_0804, 8, 1, 64, 7)),
+    (8, 1, 64, 2025, f"{BASE}/dev_2026-04-05_23-16/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw8_ws1s_seed2025/latest.pth.tar"),
+    (8, 1, 64, 42,   f"{BASE}/dev_2026-04-06_07-05/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw8_ws1s_seed42/latest.pth.tar"),
+    (8, 1, 64, 7,    f"{BASE}/dev_2026-04-06_08-04/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw8_ws1s_seed7/latest.pth.tar"),
 
     # nw8_ws2
-    (8, 2, 32, 2025, ckpt(CKPT_APR6_0706, 8, 2, 32, 2025)),
-    (8, 2, 32, 42,   ckpt(CKPT_APR6_0811, 8, 2, 32, 42)),
-    (8, 2, 32, 7,    ckpt(CKPT_APR6_0706, 8, 2, 32, 7)),
+    (8, 2, 32, 2025, f"{BASE}/dev_2026-04-05_23-17/eeg_jepa_bs32_lr0.0005_std0.25_cov0.25_nw8_ws2s_seed2025/latest.pth.tar"),
+    (8, 2, 32, 42,   f"{BASE}/dev_2026-04-06_13-36/eeg_jepa_bs32_lr0.0005_std0.25_cov0.25_nw8_ws2s_seed42/latest.pth.tar"),
+    (8, 2, 32, 7,    f"{BASE}/dev_2026-04-05_23-17/eeg_jepa_bs32_lr0.0005_std0.25_cov0.25_nw8_ws2s_seed7/latest.pth.tar"),
 ]
 
 
