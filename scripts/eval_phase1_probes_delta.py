@@ -127,8 +127,9 @@ def build_jobs():
         job_name = f"pe1_{idx // 2:02d}"
 
         git_cmd = (
-            "sleep $((RANDOM % 15)) &&"
-            " git fetch origin && git checkout main && git pull --ff-only &&\n"
+            "sleep $((RANDOM % 60)) &&"
+            " (git fetch origin && git checkout main && git pull --ff-only"
+            " || (sleep $((RANDOM % 30 + 10)) && git fetch origin && git pull --ff-only)) &&\n"
         )
 
         job = Job(
