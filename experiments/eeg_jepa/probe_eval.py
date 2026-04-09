@@ -392,22 +392,25 @@ def run(
     # ------------------------------------------------------------------
     # Subject-trait probe (per-recording embeddings, pooled over all clips)
     # ------------------------------------------------------------------
-    logger.info("Embedding train recordings for subject-trait probe...")
-    train_embs, train_labels = _embed_all_clips(train_set, jepa, device, batch_size, num_workers)
-    n_valid_train = int((~np.isnan(train_labels)).sum())
-    logger.info(
-        "Train: %d recordings, %d with valid subject labels  (label: %s)",
-        len(train_embs), n_valid_train, train_set.probe_label_name,
-    )
-
+    # Check if subject labels are available before expensive embedding
+    n_valid_train_labels = sum(1 for v in train_set._probe_labels if not math.isnan(v))
     subject_probe = None
-    if n_valid_train >= 10:
+    if n_valid_train_labels >= 10:
+        logger.info("Embedding train recordings for subject-trait probe...")
+        train_embs, train_labels = _embed_all_clips(train_set, jepa, device, batch_size, num_workers)
+        logger.info(
+            "Train: %d recordings, %d with valid subject labels  (label: %s)",
+            len(train_embs), int((~np.isnan(train_labels)).sum()), train_set.probe_label_name,
+        )
         logger.info("Training subject-trait probe for %d epochs...", subject_probe_epochs)
         subject_probe = _train_subject_probe(
             train_embs, train_labels, device, subject_probe_epochs, subject_probe_lr
         )
     else:
-        logger.warning("Too few valid subject labels (%d) — skipping subject probe", n_valid_train)
+        logger.warning(
+            "Too few valid subject labels (%d) — skipping subject probe",
+            n_valid_train_labels,
+        )
 
     # ------------------------------------------------------------------
     # Evaluate on each split
