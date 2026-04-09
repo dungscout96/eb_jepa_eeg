@@ -122,9 +122,8 @@ def build_jobs(subject_only=False):
         combined_cmd = " &&\n".join(cmds)
 
         if subject_only:
-            # Subject-only: no movie probe training, just embed + linear probe
-            # ~15 min per eval (embed all recordings + 100 epoch probe)
-            # 2 per job × 15 min + git jitter → 45 min safe
+            # Subject-only: embed 4 clips per recording (not 32)
+            # ~5 min per eval + norm stats + git jitter
             max_nw_ws = max(c[0] * c[1] for c in chunk)
             time_limit = "01:30:00" if max_nw_ws > 8 else "01:00:00"
         else:

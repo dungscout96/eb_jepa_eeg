@@ -59,12 +59,13 @@ logger = get_logger(__name__)
 # Subject-trait probe helpers
 # ---------------------------------------------------------------------------
 
-def _embed_all_clips(dataset, jepa, device, batch_size, num_workers):
-    """Encode every clip of every recording, return per-recording mean embeddings.
+def _embed_all_clips(dataset, jepa, device, batch_size, num_workers,
+                     max_clips_per_rec=4):
+    """Encode a few clips per recording, return per-recording mean embeddings.
 
-    Iterates deterministically over all clips in each recording (no random
-    crop), encodes with the frozen encoder, and mean-pools over clips to get
-    one [D] vector per recording.
+    Sub-samples up to ``max_clips_per_rec`` evenly spaced clips per recording
+    to keep embedding cost manageable (~4 clips x 701 recordings = 2800 forward
+    passes vs ~22K with 32 clips).
 
     Returns
     -------
@@ -84,10 +85,12 @@ def _embed_all_clips(dataset, jepa, device, batch_size, num_workers):
         if n_clips <= 0:
             continue
 
-        # Build all valid start positions for this recording
+        # Evenly spaced sub-sample of clips
+        n_sample = min(max_clips_per_rec, n_clips)
+        starts = np.linspace(0, n_clips - 1, n_sample, dtype=int)
+
         clip_embs = []
-        for start in range(0, n_clips, max(1, n_clips // 32)):
-            # Sub-sample up to 32 clips per recording to keep cost reasonable
+        for start in starts:
             indices = list(range(start, start + required, dataset.temporal_stride))
             eeg_np = _read_raw_windows(dataset._fif_paths[rec_idx], crop_inds[indices])
             eeg = torch.from_numpy(eeg_np).unsqueeze(0)  # [1, n_windows, C, T]
