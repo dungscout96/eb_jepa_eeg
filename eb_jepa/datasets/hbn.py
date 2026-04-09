@@ -819,7 +819,7 @@ class JEPAMovieDataset(HBNMovieDataset):
             self._eeg_mean = eeg_norm_stats["mean"]
             self._eeg_std = eeg_norm_stats["std"]
         else:
-            self._compute_norm_stats()
+            self._compute_norm_stats(cache_dir=preprocessed_dir)
 
         logger.info(
             "JEPAMovieDataset: %d recordings with >= %d windows "
@@ -830,7 +830,7 @@ class JEPAMovieDataset(HBNMovieDataset):
             self.n_windows * self.temporal_stride * self.window_size_seconds,
         )
 
-    def _compute_norm_stats(self):
+    def _compute_norm_stats(self, cache_dir=None):
         """Compute per-channel mean/std by streaming through all preprocessed recordings.
 
         NOTE: The preprocessing pipeline saves a ``normalization_stats.npz`` next to
@@ -838,8 +838,23 @@ class JEPAMovieDataset(HBNMovieDataset):
         (pre-normalization) FIF files in raw EEG units (~1e-5 V).  The FIF files
         actually read at training time are the *already z-scored* outputs of pass 2,
         which have unit scale.  Loading the cached stats and dividing again by ~1e-5
-        would multiply embeddings by ~100,000.  Always compute from the actual data.
+        would multiply embeddings by ~100,000.
+
+        This method computes from the actual z-scored data and caches the result in
+        ``{cache_dir}/jepa_norm_stats_train.npz`` to avoid re-reading 700+ FIF files
+        on every run (~20 min on NFS without cache).
         """
+        # Try disk cache first (keyed to training split data, not pre-norm FIFs)
+        cache_file = None
+        if cache_dir is not None:
+            cache_file = Path(cache_dir) / "jepa_norm_stats_train.npz"
+            if cache_file.exists():
+                cached = np.load(cache_file)
+                self._eeg_mean = torch.from_numpy(cached["mean"])
+                self._eeg_std = torch.from_numpy(cached["std"])
+                logger.info("Loaded norm stats from cache: %s", cache_file)
+                return
+
         logger.info("Computing norm stats from %d recordings...", len(self._fif_paths))
         channel_sum = None
         channel_sum_sq = None
@@ -862,6 +877,10 @@ class JEPAMovieDataset(HBNMovieDataset):
         std = torch.sqrt(var.clamp(min=0)).clamp(min=1e-8)
         self._eeg_mean = mean[None, :, None]  # [1, C, 1]
         self._eeg_std = std[None, :, None]    # [1, C, 1]
+
+        if cache_file is not None:
+            np.savez(cache_file, mean=self._eeg_mean.numpy(), std=self._eeg_std.numpy())
+            logger.info("Saved norm stats cache: %s", cache_file)
 
     @property
     def n_chans(self):
