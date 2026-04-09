@@ -116,12 +116,12 @@ def build_jobs():
         # but running 2 in parallel risks memory pressure for large configs)
         combined_cmd = " &&\n".join(cmds)
 
-        # Time estimate: ~5-10 min per probe eval (20 epochs on frozen encoder)
-        # Largest configs (nw8_ws2) take longer due to data loading
-        # 2 per job × 15 min × 1.5 safety = ~45 min → 1h per job
-        # nw8_ws2 is slower: 2 × 30 min × 1.5 = 1.5h
+        # Time estimate: ~40 min for 1st eval (20 min norm stats + 20 min probe)
+        # + ~20 min for 2nd eval (norm stats cached) + ~1 min git jitter
+        # Small configs: 2 evals ≈ 60 min → 1.5h with safety
+        # Large configs (nw8_ws2): 2 evals ≈ 90 min → 2.5h with safety
         max_nw_ws = max(c[0] * c[1] for c in chunk)
-        time_limit = "01:30:00" if max_nw_ws > 8 else "01:00:00"
+        time_limit = "02:30:00" if max_nw_ws > 8 else "01:30:00"
 
         desc = " + ".join(f"nw{nw}_ws{ws}s_s{seed}" for nw, ws, bs, seed, _ in chunk)
         job_name = f"pe1_{idx // 2:02d}"
