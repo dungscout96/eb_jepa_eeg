@@ -90,8 +90,8 @@ CHECKPOINTS = [
 ]
 
 
-def _make_eval_cmd(nw, ws, bs, seed, ckpt_path):
-    return (
+def _make_eval_cmd(nw, ws, bs, seed, ckpt_path, subject_only=False):
+    cmd = (
         "PYTHONPATH=. uv run --group eeg"
         " python experiments/eeg_jepa/probe_eval.py"
         f" --checkpoint={ckpt_path}"
@@ -101,30 +101,41 @@ def _make_eval_cmd(nw, ws, bs, seed, ckpt_path):
         f" --num_workers=4"
         f" --probe_epochs=20"
         f" --splits=val,test"
-        f" --wandb_group=probe_eval_phase1"
         f" --seed={seed}"
     )
+    if subject_only:
+        cmd += " --subject_only"
+        cmd += " --wandb_group=probe_eval_phase1_subject"
+    else:
+        cmd += " --wandb_group=probe_eval_phase1"
+    return cmd
 
 
-def build_jobs():
+def build_jobs(subject_only=False):
     jobs = []
     for idx in range(0, len(CHECKPOINTS), 2):
         chunk = CHECKPOINTS[idx: idx + 2]
-        cmds = [_make_eval_cmd(*c) for c in chunk]
+        cmds = [_make_eval_cmd(*c, subject_only=subject_only) for c in chunk]
 
         # All probe evals are sequential (encoder frozen = low GPU use,
         # but running 2 in parallel risks memory pressure for large configs)
         combined_cmd = " &&\n".join(cmds)
 
-        # Time estimate: ~40 min for 1st eval (20 min norm stats + 20 min probe)
-        # + ~20 min for 2nd eval (norm stats cached) + ~1 min git jitter
-        # Small configs: 2 evals ≈ 60 min → 1.5h with safety
-        # Large configs (nw8_ws2): 2 evals ≈ 90 min → 2.5h with safety
-        max_nw_ws = max(c[0] * c[1] for c in chunk)
-        time_limit = "02:30:00" if max_nw_ws > 8 else "01:30:00"
+        if subject_only:
+            # Subject-only: no movie probe training, just embed + linear probe
+            # ~15 min per eval (embed all recordings + 100 epoch probe)
+            # 2 per job × 15 min + git jitter → 45 min safe
+            max_nw_ws = max(c[0] * c[1] for c in chunk)
+            time_limit = "01:30:00" if max_nw_ws > 8 else "01:00:00"
+        else:
+            # Full eval: ~40 min for 1st (20 min norm stats + 20 min probe)
+            # + ~20 min for 2nd (norm stats cached) + ~1 min git jitter
+            max_nw_ws = max(c[0] * c[1] for c in chunk)
+            time_limit = "02:30:00" if max_nw_ws > 8 else "01:30:00"
 
         desc = " + ".join(f"nw{nw}_ws{ws}s_s{seed}" for nw, ws, bs, seed, _ in chunk)
-        job_name = f"pe1_{idx // 2:02d}"
+        prefix = "ps1" if subject_only else "pe1"
+        job_name = f"{prefix}_{idx // 2:02d}"
 
         git_cmd = (
             "sleep $((RANDOM % 60)) &&"
@@ -156,10 +167,12 @@ def build_jobs():
 
 if __name__ == "__main__":
     submit = "--submit" in sys.argv
-    jobs = build_jobs()
+    subject_only = "--subject-only" in sys.argv
+    jobs = build_jobs(subject_only=subject_only)
 
+    mode = "subject-only" if subject_only else "full"
     print(
-        f"Phase 1 probe eval: {len(CHECKPOINTS)} checkpoints "
+        f"Phase 1 probe eval ({mode}): {len(CHECKPOINTS)} checkpoints "
         f"in {len(jobs)} SLURM jobs\n"
     )
 
