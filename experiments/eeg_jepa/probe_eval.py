@@ -182,6 +182,8 @@ def run(
     subject_probe_lr: float = 1e-3,
     # Eval splits: "val", "test", or "val,test"
     splits: str = "val,test",
+    # Run modes
+    subject_only: bool = False,
     # W&B
     wandb_run_id: str = "",
     wandb_project: str = "eb_jepa",
@@ -350,44 +352,46 @@ def run(
     # ------------------------------------------------------------------
     # Movie-feature probes (per-clip, same as online probes during training)
     # ------------------------------------------------------------------
-    reg_loss_fn = RegressionLoss(
-        feature_stats["mean"].to(device),
-        feature_stats["std"].to(device),
-    )
-    cls_loss_fn = ClassificationLoss(feature_median.to(device))
-
-    reg_head = MovieFeatureHead(embed_dim, cfg.model.hdec, n_features)
-    cls_head = MovieFeatureHead(embed_dim, cfg.model.hdec, n_features)
-    regression_probe = MaskedJEPAProbe(jepa, reg_head, reg_loss_fn).to(device)
-    classification_probe = MaskedJEPAProbe(jepa, cls_head, cls_loss_fn).to(device)
-
-    movie_probe_opt = Adam(
-        list(regression_probe.head.parameters())
-        + list(classification_probe.head.parameters()),
-        lr=probe_lr,
-    )
-
-    logger.info("Training movie-feature probes for %d epochs...", probe_epochs)
-    for epoch in range(probe_epochs):
-        regression_probe.train()
-        classification_probe.train()
-        reg_total = cls_total = 0.0
-        n = 0
-        for eeg, features, _ in tqdm(train_loader, desc=f"Movie probe {epoch+1}/{probe_epochs}", leave=False):
-            eeg = eeg.to(device)
-            features = features.to(device)
-            movie_probe_opt.zero_grad()
-            reg_loss = regression_probe(eeg, features)
-            cls_loss = classification_probe(eeg, features)
-            (reg_loss + cls_loss).backward()
-            movie_probe_opt.step()
-            reg_total += reg_loss.item()
-            cls_total += cls_loss.item()
-            n += 1
-        logger.info(
-            "Movie probe ep %d/%d  reg=%.4f  cls=%.4f",
-            epoch + 1, probe_epochs, reg_total / max(n, 1), cls_total / max(n, 1),
+    regression_probe = classification_probe = None
+    if not subject_only:
+        reg_loss_fn = RegressionLoss(
+            feature_stats["mean"].to(device),
+            feature_stats["std"].to(device),
         )
+        cls_loss_fn = ClassificationLoss(feature_median.to(device))
+
+        reg_head = MovieFeatureHead(embed_dim, cfg.model.hdec, n_features)
+        cls_head = MovieFeatureHead(embed_dim, cfg.model.hdec, n_features)
+        regression_probe = MaskedJEPAProbe(jepa, reg_head, reg_loss_fn).to(device)
+        classification_probe = MaskedJEPAProbe(jepa, cls_head, cls_loss_fn).to(device)
+
+        movie_probe_opt = Adam(
+            list(regression_probe.head.parameters())
+            + list(classification_probe.head.parameters()),
+            lr=probe_lr,
+        )
+
+        logger.info("Training movie-feature probes for %d epochs...", probe_epochs)
+        for epoch in range(probe_epochs):
+            regression_probe.train()
+            classification_probe.train()
+            reg_total = cls_total = 0.0
+            n = 0
+            for eeg, features, _ in tqdm(train_loader, desc=f"Movie probe {epoch+1}/{probe_epochs}", leave=False):
+                eeg = eeg.to(device)
+                features = features.to(device)
+                movie_probe_opt.zero_grad()
+                reg_loss = regression_probe(eeg, features)
+                cls_loss = classification_probe(eeg, features)
+                (reg_loss + cls_loss).backward()
+                movie_probe_opt.step()
+                reg_total += reg_loss.item()
+                cls_total += cls_loss.item()
+                n += 1
+            logger.info(
+                "Movie probe ep %d/%d  reg=%.4f  cls=%.4f",
+                epoch + 1, probe_epochs, reg_total / max(n, 1), cls_total / max(n, 1),
+            )
 
     # ------------------------------------------------------------------
     # Subject-trait probe (per-recording embeddings, pooled over all clips)
@@ -419,13 +423,14 @@ def run(
 
     for split, loader in eval_loaders.items():
         # Movie-feature metrics
-        logger.info("Evaluating movie-feature probes on %s...", split)
-        movie_metrics = validation_loop(
-            loader, jepa, regression_probe, classification_probe,
-            device, feature_stats, feature_median, feature_names,
-        )
-        for k, v in movie_metrics.items():
-            all_metrics[f"probe_eval/{split}/{k.split('/', 1)[-1]}"] = v
+        if regression_probe is not None:
+            logger.info("Evaluating movie-feature probes on %s...", split)
+            movie_metrics = validation_loop(
+                loader, jepa, regression_probe, classification_probe,
+                device, feature_stats, feature_median, feature_names,
+            )
+            for k, v in movie_metrics.items():
+                all_metrics[f"probe_eval/{split}/{k.split('/', 1)[-1]}"] = v
 
         # Subject-trait metrics
         if subject_probe is not None:
