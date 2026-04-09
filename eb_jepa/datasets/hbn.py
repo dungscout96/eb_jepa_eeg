@@ -184,6 +184,74 @@ def _release_to_dataset_id(release: str) -> str:
     )
 
 
+def _load_participants_metadata(
+    releases: dict[str, str],
+    cache_dir: Path | None = None,
+) -> dict[str, dict]:
+    """Fetch and cache participants.tsv from OpenNeuro, return subject → metadata dict.
+
+    Parameters
+    ----------
+    releases : dict
+        Mapping of release key → OpenNeuro dataset ID (e.g. {"R1": "ds005505"}).
+    cache_dir : Path or None
+        Directory to cache downloaded TSV files. Falls back to
+        ``~/.cache/eb_jepa_eeg/hbn_participants/``.
+
+    Returns
+    -------
+    dict mapping subject ID (without ``sub-`` prefix) → {"age": float, "sex": str, ...}
+    """
+    if cache_dir is None:
+        cache_dir = Path.home() / ".cache" / "eb_jepa_eeg" / "hbn_participants"
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    all_dataset_ids = set(releases.values())
+    subject_meta = {}
+
+    for dataset_id in sorted(all_dataset_ids):
+        tsv_path = cache_dir / f"{dataset_id}_participants.tsv"
+
+        if not tsv_path.exists():
+            url = f"https://openneuro.org/crn/datasets/{dataset_id}/files/participants.tsv"
+            logger.info("Downloading participants.tsv for %s ...", dataset_id)
+            try:
+                import urllib.request
+                urllib.request.urlretrieve(url, tsv_path)
+            except Exception as exc:
+                logger.warning("Failed to download %s: %s", url, exc)
+                continue
+
+        try:
+            df = pd.read_csv(tsv_path, sep="\t")
+        except Exception as exc:
+            logger.warning("Failed to read %s: %s", tsv_path, exc)
+            continue
+
+        for _, row in df.iterrows():
+            pid = str(row.get("participant_id", ""))
+            subj_id = pid.replace("sub-", "")
+            if not subj_id:
+                continue
+            meta = {}
+            if pd.notna(row.get("age")):
+                try:
+                    meta["age"] = float(row["age"])
+                except (ValueError, TypeError):
+                    pass
+            if pd.notna(row.get("sex")):
+                meta["sex"] = str(row["sex"])
+            if meta:
+                subject_meta[subj_id] = meta
+
+    logger.info(
+        "Loaded participant metadata for %d subjects from %d dataset(s)",
+        len(subject_meta), len(all_dataset_ids),
+    )
+    return subject_meta
+
+
 def load_or_download(release, task=DEFAULT_TASK):
     """Load an EEGDashDataset from cache, downloading if necessary.
 
@@ -286,7 +354,7 @@ def _extract_recording_metadata(window_ds_metadata: "pd.DataFrame") -> dict:
     Returns a dict of whatever subject-level columns are present; missing or
     null values are omitted.
     """
-    subject_cols = ("age", "sex", "gender", "participant_id", "site", "diagnosis")
+    subject_cols = ("subject", "age", "sex", "gender", "participant_id", "site", "diagnosis")
     row = window_ds_metadata.iloc[0]
     meta = {}
     for col in subject_cols:
@@ -692,6 +760,30 @@ class HBNMovieDataset(Dataset):
             del data, datasets, selected_recordings
 
         self.task = tasks[0]  # reset to primary task
+
+        # Enrich recording metadata with age/sex from OpenNeuro participants.tsv.
+        # The preprocessed description.json files only carry subject ID + task;
+        # age and sex must be fetched from the source BIDS dataset.
+        n_missing = sum(1 for m in self._recording_metadata if "age" not in m)
+        if n_missing > 0:
+            participants_cache = preprocessed_dir if preprocessed_dir else None
+            all_releases = {}
+            for r in releases:
+                all_releases[r] = _release_to_dataset_id(r)
+            participants = _load_participants_metadata(all_releases, cache_dir=participants_cache)
+            enriched = 0
+            for meta in self._recording_metadata:
+                subj_id = meta.get("subject", meta.get("participant_id", ""))
+                if subj_id and subj_id in participants:
+                    for k, v in participants[subj_id].items():
+                        if k not in meta:
+                            meta[k] = v
+                            enriched += 1
+            logger.info(
+                "Enriched %d metadata fields from participants.tsv (%d/%d had missing age)",
+                enriched, n_missing, len(self._recording_metadata),
+            )
+
         # Force cleanup of any remaining MNE/mmap objects before returning
         gc.collect()
         logger.info("Total: rejected %d/%d recordings across %d task(s)",
