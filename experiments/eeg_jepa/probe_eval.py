@@ -70,11 +70,11 @@ def _embed_all_clips(dataset, jepa, device, batch_size, num_workers,
     Returns
     -------
     embeddings : np.ndarray  [N_recordings, D]
-    labels     : np.ndarray  [N_recordings]  float, NaN where unavailable
+    metadata   : list[dict]  per-recording metadata (age, sex, ...)
     """
     jepa.eval()
     all_embs = []
-    all_labels = []
+    all_meta = []
 
     for rec_idx in range(len(dataset)):
         crop_inds = dataset._crop_inds[rec_idx]
@@ -105,20 +105,57 @@ def _embed_all_clips(dataset, jepa, device, batch_size, num_workers,
         if clip_embs:
             rec_emb = torch.stack(clip_embs).mean(dim=0)  # [D] — mean over clips
             all_embs.append(rec_emb.numpy())
-            all_labels.append(dataset._probe_labels[rec_idx])
+            all_meta.append(dataset._recording_metadata[rec_idx])
 
-    return np.stack(all_embs), np.array(all_labels, dtype=float)
+    return np.stack(all_embs), all_meta
 
 
-def _train_subject_probe(train_embs, train_labels, device, probe_epochs, probe_lr):
-    """Train a linear probe for subject-trait classification.
+def _extract_subject_labels(metadata_list):
+    """Extract age (float), sex (0/1), and age_binary (0/1) from metadata.
 
-    Args:
-        train_embs:   np.ndarray [N, D]
-        train_labels: np.ndarray [N]  (0/1 float; NaN entries excluded)
-
-    Returns the trained nn.Linear.
+    Returns dict of label_name → np.ndarray[N] (NaN where unavailable).
     """
+    n = len(metadata_list)
+    ages = np.full(n, np.nan)
+    sexes = np.full(n, np.nan)
+
+    for i, m in enumerate(metadata_list):
+        if "age" in m:
+            try:
+                ages[i] = float(m["age"])
+            except (ValueError, TypeError):
+                pass
+        sex_val = m.get("sex", m.get("gender", ""))
+        if isinstance(sex_val, str):
+            s = sex_val.strip().lower()
+            if s in ("m", "male"):
+                sexes[i] = 1.0
+            elif s in ("f", "female"):
+                sexes[i] = 0.0
+
+    labels = {}
+    # Age regression (raw float)
+    valid_ages = ages[~np.isnan(ages)]
+    if len(valid_ages) >= 10:
+        labels["age_reg"] = ages
+
+    # Age binary classification (> median)
+    if len(valid_ages) >= 10:
+        median_age = float(np.median(valid_ages))
+        age_bin = np.where(np.isnan(ages), np.nan,
+                           (ages > median_age).astype(float))
+        labels[f"age_gt_{median_age:.1f}"] = age_bin
+
+    # Sex classification
+    valid_sex = sexes[~np.isnan(sexes)]
+    if len(valid_sex) >= 10:
+        labels["sex"] = sexes
+
+    return labels
+
+
+def _train_cls_probe(train_embs, train_labels, device, probe_epochs, probe_lr):
+    """Train a linear probe for binary classification (age>median or sex)."""
     valid = ~np.isnan(train_labels)
     X = torch.from_numpy(train_embs[valid]).float().to(device)
     y = torch.from_numpy(train_labels[valid]).float().to(device)
@@ -139,14 +176,35 @@ def _train_subject_probe(train_embs, train_labels, device, probe_epochs, probe_l
     return probe
 
 
-def _eval_subject_probe(probe, embs, labels, device):
-    """Evaluate subject-trait probe on a set of per-recording embeddings.
+def _train_reg_probe(train_embs, train_labels, device, probe_epochs, probe_lr):
+    """Train a linear probe for regression (age prediction)."""
+    valid = ~np.isnan(train_labels)
+    X = torch.from_numpy(train_embs[valid]).float().to(device)
+    y = torch.from_numpy(train_labels[valid]).float().to(device)
 
-    Returns dict with bal_acc and auc (NaN-safe).
-    """
+    # Standardize targets for stable training
+    y_mean, y_std = y.mean(), y.std().clamp(min=1e-6)
+    y_norm = (y - y_mean) / y_std
+
+    D = X.shape[1]
+    probe = nn.Linear(D, 1).to(device)
+    opt = Adam(probe.parameters(), lr=probe_lr)
+
+    probe.train()
+    for epoch in range(probe_epochs):
+        opt.zero_grad()
+        loss = nn.functional.mse_loss(probe(X).squeeze(-1), y_norm)
+        loss.backward()
+        opt.step()
+
+    return probe, y_mean.item(), y_std.item()
+
+
+def _eval_cls_probe(probe, embs, labels, device):
+    """Evaluate binary classification probe. Returns bal_acc and auc."""
     valid = ~np.isnan(labels)
     if valid.sum() < 2:
-        return {"subject_trait/bal_acc": float("nan"), "subject_trait/auc": float("nan")}
+        return {"bal_acc": float("nan"), "auc": float("nan")}
 
     X = torch.from_numpy(embs[valid]).float().to(device)
     y_true = labels[valid]
@@ -163,7 +221,30 @@ def _eval_subject_probe(probe, embs, labels, device):
     except ValueError:
         auc = float("nan")
 
-    return {"subject_trait/bal_acc": bal_acc, "subject_trait/auc": auc}
+    return {"bal_acc": bal_acc, "auc": auc}
+
+
+def _eval_reg_probe(probe, embs, labels, device, y_mean, y_std):
+    """Evaluate regression probe. Returns MAE, correlation, and R²."""
+    valid = ~np.isnan(labels)
+    if valid.sum() < 2:
+        return {"mae": float("nan"), "corr": float("nan"), "r2": float("nan")}
+
+    X = torch.from_numpy(embs[valid]).float().to(device)
+    y_true = labels[valid]
+
+    probe.eval()
+    with torch.no_grad():
+        y_pred_norm = probe(X).squeeze(-1).cpu().numpy()
+    y_pred = y_pred_norm * y_std + y_mean
+
+    mae = float(np.mean(np.abs(y_pred - y_true)))
+    corr = float(np.corrcoef(y_true, y_pred)[0, 1]) if len(y_true) > 1 else float("nan")
+    ss_res = np.sum((y_true - y_pred) ** 2)
+    ss_tot = np.sum((y_true - y_true.mean()) ** 2)
+    r2 = float(1 - ss_res / ss_tot) if ss_tot > 0 else float("nan")
+
+    return {"mae": mae, "corr": corr, "r2": r2}
 
 
 # ---------------------------------------------------------------------------
@@ -397,27 +478,41 @@ def run(
             )
 
     # ------------------------------------------------------------------
-    # Subject-trait probe (per-recording embeddings, pooled over all clips)
+    # Subject-trait probes (per-recording embeddings, pooled over clips)
+    #   - age_binary: age > median classification
+    #   - sex: M/F classification
+    #   - age_reg: age regression (MAE, correlation, R²)
     # ------------------------------------------------------------------
-    # Check if subject labels are available before expensive embedding
-    n_valid_train_labels = sum(1 for v in train_set._probe_labels if not math.isnan(v))
-    subject_probe = None
-    if n_valid_train_labels >= 10:
-        logger.info("Embedding train recordings for subject-trait probe...")
-        train_embs, train_labels = _embed_all_clips(train_set, jepa, device, batch_size, num_workers)
+    # Check if any subject metadata is available before expensive embedding
+    has_metadata = any("age" in m or "sex" in m for m in train_set._recording_metadata)
+    subject_probes = {}  # label_name → (probe, extras)
+    train_embs = None
+
+    if has_metadata:
+        logger.info("Embedding train recordings for subject-trait probes...")
+        train_embs, train_meta = _embed_all_clips(train_set, jepa, device, batch_size, num_workers)
+        train_labels_dict = _extract_subject_labels(train_meta)
         logger.info(
-            "Train: %d recordings, %d with valid subject labels  (label: %s)",
-            len(train_embs), int((~np.isnan(train_labels)).sum()), train_set.probe_label_name,
+            "Train: %d recordings, labels available: %s",
+            len(train_embs), list(train_labels_dict.keys()),
         )
-        logger.info("Training subject-trait probe for %d epochs...", subject_probe_epochs)
-        subject_probe = _train_subject_probe(
-            train_embs, train_labels, device, subject_probe_epochs, subject_probe_lr
-        )
+
+        for label_name, labels in train_labels_dict.items():
+            n_valid = int((~np.isnan(labels)).sum())
+            if label_name == "age_reg":
+                logger.info("Training age regression probe (%d valid)...", n_valid)
+                probe, y_mean, y_std = _train_reg_probe(
+                    train_embs, labels, device, subject_probe_epochs, subject_probe_lr
+                )
+                subject_probes[label_name] = ("reg", probe, y_mean, y_std)
+            else:
+                logger.info("Training %s classification probe (%d valid)...", label_name, n_valid)
+                probe = _train_cls_probe(
+                    train_embs, labels, device, subject_probe_epochs, subject_probe_lr
+                )
+                subject_probes[label_name] = ("cls", probe)
     else:
-        logger.warning(
-            "Too few valid subject labels (%d) — skipping subject probe",
-            n_valid_train_labels,
-        )
+        logger.warning("No subject metadata available — skipping subject probes")
 
     # ------------------------------------------------------------------
     # Evaluate on each split
@@ -436,25 +531,36 @@ def run(
                 all_metrics[f"probe_eval/{split}/{k.split('/', 1)[-1]}"] = v
 
         # Subject-trait metrics
-        if subject_probe is not None:
-            logger.info("Embedding %s recordings for subject-trait probe...", split)
-            eval_embs, eval_labels = _embed_all_clips(
+        if subject_probes:
+            logger.info("Embedding %s recordings for subject-trait probes...", split)
+            eval_embs, eval_meta = _embed_all_clips(
                 eval_sets[split], jepa, device, batch_size, num_workers
             )
-            n_valid_eval = int((~np.isnan(eval_labels)).sum())
-            logger.info("  %d recordings, %d with valid labels", len(eval_embs), n_valid_eval)
-            subject_metrics = _eval_subject_probe(subject_probe, eval_embs, eval_labels, device)
-            for k, v in subject_metrics.items():
-                all_metrics[f"probe_eval/{split}/{k}"] = v
+            eval_labels_dict = _extract_subject_labels(eval_meta)
+            logger.info("  %d recordings", len(eval_embs))
+
+            for label_name, probe_info in subject_probes.items():
+                eval_labels = eval_labels_dict.get(label_name)
+                if eval_labels is None:
+                    continue
+                if probe_info[0] == "cls":
+                    metrics = _eval_cls_probe(probe_info[1], eval_embs, eval_labels, device)
+                    for k, v in metrics.items():
+                        all_metrics[f"probe_eval/{split}/subject/{label_name}/{k}"] = v
+                else:  # reg
+                    _, probe, y_mean, y_std = probe_info
+                    metrics = _eval_reg_probe(probe, eval_embs, eval_labels, device, y_mean, y_std)
+                    for k, v in metrics.items():
+                        all_metrics[f"probe_eval/{split}/subject/{label_name}/{k}"] = v
 
     # ------------------------------------------------------------------
     # Print summary
     # ------------------------------------------------------------------
     print(f"\n=== Probe Eval: {checkpoint_path.parent.name} ===")
-    print(f"Config: nw={n_windows}, ws={window_size_seconds}s  |  label: {train_set.probe_label_name}")
+    print(f"Config: nw={n_windows}, ws={window_size_seconds}s")
     print()
     for k, v in sorted(all_metrics.items()):
-        if any(x in k for x in ("bal_acc", "auc", "corr", "subject")):
+        if any(x in k for x in ("bal_acc", "auc", "corr", "subject", "mae", "r2")):
             vstr = f"{v:.4f}" if isinstance(v, float) and not math.isnan(v) else str(v)
             print(f"  {k}: {vstr}")
 
