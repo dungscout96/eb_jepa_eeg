@@ -1,3 +1,10 @@
+## 04/07/2026
+Subjects need longer timescale.
+Probe eval between subject traits and visual/stimulus driven features have different timescale
+TODO: Not sure how to fairly compare them yet, during training and during eval.
+How does that affect training objective?
+This is an emergent problem, not what we had originally
+
 ## 03/02/2026
 The numbers tell a clear story. Look at the key signal:
 

@@ -29,11 +29,11 @@ job = Job(
         " PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py"
         " --optim.epochs=100 --model.encoder_depth=2 --optim.lr=5e-4"
         " --optim.lr_min=1e-6 --optim.warmup_epochs=5"
-        " --data.num_workers=2"
+        " --data.num_workers=16"
         " --loss.std_coeff=0.25 --loss.cov_coeff=0.25"
         " --loss.pred_loss_type=smooth_l1"
         " --logging.wandb_group=delta_test"
-        # timing test: baseline (nw=4, ws=2s) with num_workers=2 on A40
+        # timing test 2: baseline with num_workers=16 (max CPUs) on A40
     ),
     venv="__none__",
     branch="",
