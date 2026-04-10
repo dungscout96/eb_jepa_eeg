@@ -248,6 +248,85 @@ def _eval_reg_probe(probe, embs, labels, device, y_mean, y_std):
 
 
 # ---------------------------------------------------------------------------
+# Movie identity probe helpers
+# ---------------------------------------------------------------------------
+
+def _embed_clips_with_position(loader, jepa, device, pos_feature_idx):
+    """Encode all clips in a DataLoader, return embeddings and positions.
+
+    Returns
+    -------
+    embs : np.ndarray [N_clips, D]
+    positions : np.ndarray [N_clips]  — position_in_movie value per clip
+    """
+    jepa.eval()
+    all_embs = []
+    all_pos = []
+    for eeg, features, _ in loader:
+        eeg = eeg.to(device)
+        with torch.no_grad():
+            tokens = jepa.context_encoder.encode_tokens(eeg, mask=None)
+            emb = tokens.mean(dim=1)  # [B, D]
+        all_embs.append(emb.cpu().numpy())
+        # position_in_movie: mean over n_windows dimension
+        pos = features[:, :, pos_feature_idx].mean(dim=1).numpy()  # [B]
+        all_pos.append(pos)
+    return np.concatenate(all_embs), np.concatenate(all_pos)
+
+
+def _train_movie_id_probe(embs, positions, device, n_bins, probe_epochs, probe_lr):
+    """Train a K-way linear probe to predict temporal bin from clip embeddings."""
+    # Discretize positions into n_bins equal-width bins
+    bin_edges = np.linspace(positions.min(), positions.max() + 1e-8, n_bins + 1)
+    bin_labels = np.digitize(positions, bin_edges) - 1
+    bin_labels = np.clip(bin_labels, 0, n_bins - 1)
+
+    X = torch.from_numpy(embs).float().to(device)
+    y = torch.from_numpy(bin_labels).long().to(device)
+
+    D = X.shape[1]
+    probe = nn.Linear(D, n_bins).to(device)
+    opt = Adam(probe.parameters(), lr=probe_lr)
+
+    probe.train()
+    for epoch in range(probe_epochs):
+        opt.zero_grad()
+        loss = nn.functional.cross_entropy(probe(X), y)
+        loss.backward()
+        opt.step()
+
+    return probe, bin_edges
+
+
+def _eval_movie_id_probe(probe, embs, positions, device, bin_edges):
+    """Evaluate movie identity probe. Returns top-1 acc and top-5 acc."""
+    n_bins = len(bin_edges) - 1
+    bin_labels = np.digitize(positions, bin_edges) - 1
+    bin_labels = np.clip(bin_labels, 0, n_bins - 1)
+
+    X = torch.from_numpy(embs).float().to(device)
+    y_true = torch.from_numpy(bin_labels).long()
+
+    probe.eval()
+    with torch.no_grad():
+        logits = probe(X).cpu()
+
+    # Top-1
+    preds = logits.argmax(dim=1)
+    top1 = float((preds == y_true).float().mean())
+
+    # Top-5
+    k = min(5, n_bins)
+    _, top_k = logits.topk(k, dim=1)
+    top5 = float((top_k == y_true.unsqueeze(1)).any(dim=1).float().mean())
+
+    # Chance level = 1/n_bins
+    chance = 1.0 / n_bins
+
+    return {"top1_acc": top1, "top5_acc": top5, "chance": chance, "n_bins": n_bins}
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -515,6 +594,33 @@ def run(
         logger.warning("No subject metadata available — skipping subject probes")
 
     # ------------------------------------------------------------------
+    # Movie identity probe (per-clip: predict temporal segment of movie)
+    # ------------------------------------------------------------------
+    n_bins = 20  # discretize 3:23 movie into 20 segments (~10s each)
+    pos_idx = feature_names.index("position_in_movie") if "position_in_movie" in feature_names else None
+    movie_id_probe = None
+    movie_id_bin_edges = None
+
+    if pos_idx is not None:
+        logger.info("Encoding train clips for movie identity probe (%d bins)...", n_bins)
+        train_clip_embs, train_positions = _embed_clips_with_position(
+            train_loader, jepa, device, pos_idx
+        )
+        logger.info("  %d clips, position range [%.1f, %.1f]",
+                     len(train_clip_embs), train_positions.min(), train_positions.max())
+        movie_id_probe, movie_id_bin_edges = _train_movie_id_probe(
+            train_clip_embs, train_positions, device, n_bins,
+            probe_epochs, probe_lr,
+        )
+        # Train-set accuracy for reference
+        train_movie_metrics = _eval_movie_id_probe(
+            movie_id_probe, train_clip_embs, train_positions, device, movie_id_bin_edges
+        )
+        logger.info("  Train movie-id: top1=%.4f  top5=%.4f  (chance=%.4f)",
+                     train_movie_metrics["top1_acc"], train_movie_metrics["top5_acc"],
+                     train_movie_metrics["chance"])
+
+    # ------------------------------------------------------------------
     # Evaluate on each split
     # ------------------------------------------------------------------
     all_metrics = {}
@@ -529,6 +635,18 @@ def run(
             )
             for k, v in movie_metrics.items():
                 all_metrics[f"probe_eval/{split}/{k.split('/', 1)[-1]}"] = v
+
+        # Movie identity metrics
+        if movie_id_probe is not None:
+            logger.info("Evaluating movie identity probe on %s...", split)
+            eval_clip_embs, eval_positions = _embed_clips_with_position(
+                loader, jepa, device, pos_idx
+            )
+            mid_metrics = _eval_movie_id_probe(
+                movie_id_probe, eval_clip_embs, eval_positions, device, movie_id_bin_edges
+            )
+            for k, v in mid_metrics.items():
+                all_metrics[f"probe_eval/{split}/movie_id/{k}"] = v
 
         # Subject-trait metrics
         if subject_probes:
@@ -560,7 +678,7 @@ def run(
     print(f"Config: nw={n_windows}, ws={window_size_seconds}s")
     print()
     for k, v in sorted(all_metrics.items()):
-        if any(x in k for x in ("bal_acc", "auc", "corr", "subject", "mae", "r2")):
+        if any(x in k for x in ("bal_acc", "auc", "corr", "subject", "mae", "r2", "movie_id", "top1", "top5")):
             vstr = f"{v:.4f}" if isinstance(v, float) and not math.isnan(v) else str(v)
             print(f"  {k}: {vstr}")
 
