@@ -142,10 +142,12 @@ def run(
             sweep_name = get_default_dev_name()
             stride_suffix = f"_stride{temporal_stride}" if temporal_stride > 1 else ""
             reg_type = cfg.loss.get("regularizer", "vc")
+            use_proj = cfg.loss.get("use_projector", True)
             if reg_type == "sigreg":
                 reg_suffix = f"_sigreg{cfg.loss.sigreg.get('coeff', 0.1)}"
             elif cfg.loss.std_coeff > 0 or cfg.loss.cov_coeff > 0:
-                reg_suffix = f"_std{cfg.loss.std_coeff}_cov{cfg.loss.cov_coeff}"
+                proj_suffix = "" if use_proj else "_noproj"
+                reg_suffix = f"_std{cfg.loss.std_coeff}_cov{cfg.loss.cov_coeff}{proj_suffix}"
             else:
                 reg_suffix = "_noreg"
             nw_suffix = f"_nw{cfg.data.n_windows}_ws{cfg.data.window_size_seconds}s"
@@ -290,6 +292,7 @@ def run(
     # Regularizer — VCLoss, SIGReg, or none
     regularizer = None
     reg_type = cfg.loss.get("regularizer", "vc")
+    use_proj = cfg.loss.get("use_projector", True)
     if reg_type == "sigreg":
         sigreg_cfg = cfg.loss.get("sigreg", {})
         regularizer = SIGRegLoss(
@@ -297,7 +300,7 @@ def run(
             coeff=sigreg_cfg.get("coeff", 0.1),
         )
     elif cfg.loss.std_coeff > 0 or cfg.loss.cov_coeff > 0:
-        projector = Projector(f"{embed_dim}-{embed_dim * 4}-{embed_dim * 4}")
+        projector = Projector(f"{embed_dim}-{embed_dim * 4}-{embed_dim * 4}") if use_proj else None
         regularizer = VCLoss(cfg.loss.std_coeff, cfg.loss.cov_coeff, proj=projector)
 
     # Prediction loss type: "mse" (default) or "smooth_l1" (Huber, used in V-JEPA)
@@ -343,11 +346,12 @@ def run(
     regression_probe.train()
     classification_probe.train()
 
-    # Context encoder + predictor only; target encoder is updated via EMA
-    optimizer = Adam(
-        list(jepa.context_encoder.parameters()) + list(jepa.predictor.parameters()),
-        lr=cfg.optim.lr,
-    )
+    # Context encoder + predictor + regularizer projector (if any);
+    # target encoder is updated via EMA
+    jepa_params = list(jepa.context_encoder.parameters()) + list(jepa.predictor.parameters())
+    if jepa.regularizer is not None:
+        jepa_params += [p for p in jepa.regularizer.parameters() if p.requires_grad]
+    optimizer = Adam(jepa_params, lr=cfg.optim.lr)
     probe_optimizer = Adam(
         list(regression_probe.head.parameters())
         + list(classification_probe.head.parameters()),

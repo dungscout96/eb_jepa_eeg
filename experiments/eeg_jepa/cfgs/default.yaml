@@ -58,6 +58,7 @@ masking:
 
 loss:
   regularizer: vc     # "vc" (VCLoss), "sigreg", or "none" (when std/cov both 0)
+  use_projector: true # whether to wrap VICReg with Projector MLP (ignored for sigreg)
   # VCLoss settings (only used when regularizer=vc)
   cov_coeff: 1.0    # Covariance loss weight (reduced from 100)
   std_coeff: 1.0    # Standard deviation loss weight (reduced from 10)
