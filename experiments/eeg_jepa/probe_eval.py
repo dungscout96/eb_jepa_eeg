@@ -110,8 +110,13 @@ def _embed_all_clips(dataset, jepa, device, batch_size, num_workers,
     return np.stack(all_embs), all_meta
 
 
-def _extract_subject_labels(metadata_list):
+def _extract_subject_labels(metadata_list, median_age=None):
     """Extract age (float), sex (0/1), and age_binary (0/1) from metadata.
+
+    Args:
+        metadata_list: list of per-recording metadata dicts.
+        median_age: if provided, use this threshold for age binary classification
+                    (ensures eval splits use the same threshold as train).
 
     Returns dict of label_name → np.ndarray[N] (NaN where unavailable).
     """
@@ -140,11 +145,13 @@ def _extract_subject_labels(metadata_list):
         labels["age_reg"] = ages
 
     # Age binary classification (> median)
+    # Use provided median_age if given (for eval splits to match train threshold)
     if len(valid_ages) >= 10:
-        median_age = float(np.median(valid_ages))
+        if median_age is None:
+            median_age = float(np.median(valid_ages))
         age_bin = np.where(np.isnan(ages), np.nan,
                            (ages > median_age).astype(float))
-        labels[f"age_gt_{median_age:.1f}"] = age_bin
+        labels["age_cls"] = age_bin
 
     # Sex classification
     valid_sex = sexes[~np.isnan(sexes)]
@@ -568,14 +575,19 @@ def run(
     has_metadata = any("age" in m or "sex" in m for m in train_set._recording_metadata)
     subject_probes = {}  # label_name → (probe, extras)
     train_embs = None
+    _train_median_age = None
 
     if has_metadata:
         logger.info("Embedding train recordings for subject-trait probes...")
         train_embs, train_meta = _embed_all_clips(train_set, jepa, device, batch_size, num_workers)
         train_labels_dict = _extract_subject_labels(train_meta)
+        # Capture train median age so eval splits use the same threshold
+        train_ages = np.array([float(m["age"]) for m in train_meta if "age" in m])
+        _train_median_age = float(np.median(train_ages)) if len(train_ages) >= 10 else None
         logger.info(
-            "Train: %d recordings, labels available: %s",
+            "Train: %d recordings, labels available: %s (age median=%.1f)",
             len(train_embs), list(train_labels_dict.keys()),
+            _train_median_age if _train_median_age else 0,
         )
 
         for label_name, labels in train_labels_dict.items():
@@ -656,7 +668,7 @@ def run(
             eval_embs, eval_meta = _embed_all_clips(
                 eval_sets[split], jepa, device, batch_size, num_workers
             )
-            eval_labels_dict = _extract_subject_labels(eval_meta)
+            eval_labels_dict = _extract_subject_labels(eval_meta, median_age=_train_median_age)
             logger.info("  %d recordings", len(eval_embs))
 
             for label_name, probe_info in subject_probes.items():
