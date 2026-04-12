@@ -496,8 +496,10 @@ def run(
         long_patch_scale=tuple(masking_cfg.get("long_patch_scale", [0.5, 1.0])),
         min_context_fraction=masking_cfg.get("min_context_fraction", 0.15),
     )
+    # Infer regularizer type from checkpoint state dict:
+    # VCLoss saves regularizer.proj.* keys; SIGRegLoss has no learnable params
     regularizer = None
-    if cfg.loss.std_coeff > 0 or cfg.loss.cov_coeff > 0:
+    if any(k.startswith("regularizer.") for k in _ckpt_sd):
         projector = Projector(f"{embed_dim}-{embed_dim * 4}-{embed_dim * 4}")
         regularizer = VCLoss(cfg.loss.std_coeff, cfg.loss.cov_coeff, proj=projector)
 
