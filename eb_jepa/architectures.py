@@ -922,22 +922,32 @@ class MaskedPredictor(nn.Module):
         self.embed_dim = embed_dim
         self.predictor_dim = predictor_dim or embed_dim
 
-        # Project encoder dim -> predictor dim (identity when equal)
+        # Project encoder dim -> predictor dim (identity when equal for ckpt compat)
         if self.predictor_dim != embed_dim:
             self.input_proj = nn.Linear(embed_dim, self.predictor_dim)
             self.pos_proj = nn.Linear(embed_dim, self.predictor_dim)
+            self.output_proj = nn.Linear(self.predictor_dim, embed_dim)
         else:
             self.input_proj = nn.Identity()
             self.pos_proj = nn.Identity()
+            self.output_proj = nn.Identity()
 
         self.mask_token = nn.Parameter(torch.randn(1, 1, self.predictor_dim) * 0.02)
+
+        inner_dim = heads * head_dim
+        if inner_dim > self.predictor_dim:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "MaskedPredictor: attention inner_dim (%d) > predictor_dim (%d). "
+                "Bottleneck only constrains the residual stream, not attention.",
+                inner_dim, self.predictor_dim,
+            )
 
         mlp_dim = int(self.predictor_dim * mlp_dim_ratio)
         self.transformer = REVETransformerBackbone(
             dim=self.predictor_dim, depth=depth, heads=heads,
             head_dim=head_dim, mlp_dim=mlp_dim, geglu=True,
         )
-        self.output_proj = nn.Linear(self.predictor_dim, embed_dim)
 
     def forward(
         self,
@@ -954,11 +964,13 @@ class MaskedPredictor(nn.Module):
         Returns:
             predictions: [B, n_pred, D]
         """
-        B, n_pred, D = target_pos.shape
+        B, n_pred, _ = target_pos.shape
         n_ctx = context_tokens.shape[1]
 
         # Project to predictor dimension
         ctx_proj = self.input_proj(context_tokens)  # [B, n_ctx, predictor_dim]
+        # pos_proj is shared: context and target positions come from the same
+        # FourierEmb4D space and must be projected consistently.
         ctx_pos_proj = self.pos_proj(context_pos)    # [B, n_ctx, predictor_dim]
         tgt_pos_proj = self.pos_proj(target_pos)     # [B, n_pred, predictor_dim]
 

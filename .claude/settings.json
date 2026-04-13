@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git fetch origin)",
+      "Bash(git rebase origin/main --dry-run)",
+      "Bash(git rebase origin/main)",
+      "Bash(git add eb_jepa/datasets/hbn.py)",
+      "Bash(git rebase --continue)",
+      "Bash(git push --force-with-lease origin preprocess-hbn-data)",
+      "Bash(gh pr view 4 --json number,title,body,baseRefName,headRefName)",
+      "Bash(gh pr diff 4 --repo dungscout96/eb_jepa_eeg)",
+      "Bash(gh pr view 4 --repo dungscout96/eb_jepa_eeg)",
+      "Bash(conda run -n eb_jepa python3 -c \":*)",
+      "Bash(git checkout main)",
+      "Bash(git fetch origin main)",
+      "Bash(git merge origin/main)",
+      "Bash(conda run -n eb_jepa uv run python movie_annotation/validate_annotations.py)",
+      "Bash(conda run -n eb_jepa python movie_annotation/validate_annotations.py)",
+      "Bash(conda run -n eb_jepa pip install opencv-python-headless pandas)",
+      "Bash(conda run -n eb_jepa python -c \":*)",
+      "Bash(git push -u origin validate-annotations)",
+      "Bash(git add movie_annotation/validate_annotations.py movie_annotation/validation_report.md movie_annotation/output/The_Present/validation_frames/)",
+      "Bash(git push origin validate-annotations)",
+      "Bash(conda run -n eb_jepa python -c \"import pandas as pd; df = pd.read_csv\\(''movie_annotation/output/The_Present/features.csv''\\); print\\(list\\(df.columns\\)\\)\")"
+    ],
+    "additionalDirectories": [
+      "/Users/kuntalkokate/neuroscience_work/eb_jepa_eeg/movie_annotation/output/The_Present/validation_frames"
+    ]
+  }
+}
