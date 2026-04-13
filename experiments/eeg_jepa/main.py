@@ -142,7 +142,8 @@ def run(
             sweep_name = get_default_dev_name()
             stride_suffix = f"_stride{temporal_stride}" if temporal_stride > 1 else ""
             reg_type = cfg.loss.get("regularizer", "vc")
-            use_proj = cfg.loss.get("use_projector", True)
+            _up = cfg.loss.get("use_projector", True)
+            use_proj = _up if isinstance(_up, bool) else str(_up).lower() not in ("false", "0", "no")
             if reg_type == "sigreg":
                 reg_suffix = f"_sigreg{cfg.loss.sigreg.get('coeff', 0.1)}"
             elif cfg.loss.std_coeff > 0 or cfg.loss.cov_coeff > 0:
@@ -292,7 +293,8 @@ def run(
     # Regularizer — VCLoss, SIGReg, or none
     regularizer = None
     reg_type = cfg.loss.get("regularizer", "vc")
-    use_proj = cfg.loss.get("use_projector", True)
+    _use_proj_raw = cfg.loss.get("use_projector", True)
+    use_proj = _use_proj_raw if isinstance(_use_proj_raw, bool) else str(_use_proj_raw).lower() not in ("false", "0", "no")
     if reg_type == "sigreg":
         sigreg_cfg = cfg.loss.get("sigreg", {})
         regularizer = SIGRegLoss(
