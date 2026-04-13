@@ -490,6 +490,7 @@ def run(
         heads=cfg.model.encoder_heads,
         head_dim=cfg.model.encoder_head_dim,
         mlp_dim_ratio=cfg.model.get("mlp_dim_ratio", 2.66),
+        predictor_dim=cfg.model.get("predictor_embed_dim", None),
     )
     mask_collator = MultiBlockMaskCollator(
         n_channels=n_chans,
