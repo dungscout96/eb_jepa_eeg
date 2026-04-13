@@ -387,13 +387,17 @@ def run(
     checkpoint_path = Path(checkpoint)
     assert checkpoint_path.exists(), f"Checkpoint not found: {checkpoint_path}"
 
-    # Infer encoder_depth from checkpoint state dict to avoid mismatch
+    # Infer encoder_depth and predictor_dim from checkpoint state dict
     _ckpt_sd = torch.load(checkpoint_path, map_location="cpu", weights_only=False).get("model_state_dict", {})
     _depth = max(
         int(k.split(".")[3]) + 1
         for k in _ckpt_sd
         if k.startswith("context_encoder.transformer.layers.")
     )
+    # Infer predictor_embed_dim: if predictor.input_proj.weight exists, it's a
+    # narrow predictor; otherwise predictor_dim == embed_dim
+    _pred_dim_key = "predictor.input_proj.weight"
+    _pred_dim = int(_ckpt_sd[_pred_dim_key].shape[0]) if _pred_dim_key in _ckpt_sd else None
 
     cfg = load_config(fname, {
         "data.n_windows": n_windows,
@@ -401,6 +405,7 @@ def run(
         "data.batch_size": batch_size,
         "data.num_workers": num_workers,
         "model.encoder_depth": _depth,
+        "model.predictor_embed_dim": _pred_dim,
     })
 
     preprocessed_dir = resolve_preprocessed_dir(cfg.data.get("preprocessed_dir", None))
