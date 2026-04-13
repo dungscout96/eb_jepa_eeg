@@ -895,10 +895,15 @@ class EEGEncoderTokens(nn.Module):
 
 
 class MaskedPredictor(nn.Module):
-    """V-JEPA transformer predictor.
+    """V-JEPA transformer predictor with optional narrow bottleneck.
 
     Takes context encoder output + positional info for masked positions,
     predicts representations at masked positions.
+
+    When ``predictor_dim`` < ``embed_dim``, the predictor operates in a
+    narrower latent space (as recommended by I-JEPA / V-JEPA) to act as
+    an information bottleneck that forces the encoder to learn richer
+    representations.
 
     Input:  context_tokens [B, n_ctx, D], context_pos [B, n_ctx, D], target_pos [B, n_pred, D]
     Output: predictions [B, n_pred, D]
@@ -911,17 +916,28 @@ class MaskedPredictor(nn.Module):
         heads: int = 4,
         head_dim: int = 16,
         mlp_dim_ratio: float = 2.66,
+        predictor_dim: int | None = None,
     ):
         super().__init__()
         self.embed_dim = embed_dim
-        self.mask_token = nn.Parameter(torch.randn(1, 1, embed_dim) * 0.02)
+        self.predictor_dim = predictor_dim or embed_dim
 
-        mlp_dim = int(embed_dim * mlp_dim_ratio)
+        # Project encoder dim -> predictor dim (identity when equal)
+        if self.predictor_dim != embed_dim:
+            self.input_proj = nn.Linear(embed_dim, self.predictor_dim)
+            self.pos_proj = nn.Linear(embed_dim, self.predictor_dim)
+        else:
+            self.input_proj = nn.Identity()
+            self.pos_proj = nn.Identity()
+
+        self.mask_token = nn.Parameter(torch.randn(1, 1, self.predictor_dim) * 0.02)
+
+        mlp_dim = int(self.predictor_dim * mlp_dim_ratio)
         self.transformer = REVETransformerBackbone(
-            dim=embed_dim, depth=depth, heads=heads,
+            dim=self.predictor_dim, depth=depth, heads=heads,
             head_dim=head_dim, mlp_dim=mlp_dim, geglu=True,
         )
-        self.output_proj = nn.Linear(embed_dim, embed_dim)
+        self.output_proj = nn.Linear(self.predictor_dim, embed_dim)
 
     def forward(
         self,
@@ -941,20 +957,25 @@ class MaskedPredictor(nn.Module):
         B, n_pred, D = target_pos.shape
         n_ctx = context_tokens.shape[1]
 
+        # Project to predictor dimension
+        ctx_proj = self.input_proj(context_tokens)  # [B, n_ctx, predictor_dim]
+        ctx_pos_proj = self.pos_proj(context_pos)    # [B, n_ctx, predictor_dim]
+        tgt_pos_proj = self.pos_proj(target_pos)     # [B, n_pred, predictor_dim]
+
         # Create mask tokens with target positions
-        mask_tokens = self.mask_token.expand(B, n_pred, -1) + target_pos
+        mask_tokens = self.mask_token.expand(B, n_pred, -1) + tgt_pos_proj
 
         # Add position to context tokens
-        context_with_pos = context_tokens + context_pos
+        context_with_pos = ctx_proj + ctx_pos_proj
 
         # Concatenate: [context; mask_tokens]
-        x = torch.cat([context_with_pos, mask_tokens], dim=1)  # [B, n_ctx + n_pred, D]
+        x = torch.cat([context_with_pos, mask_tokens], dim=1)  # [B, n_ctx + n_pred, predictor_dim]
 
         # Transformer
         x = self.transformer(x)
 
-        # Extract prediction tokens (last n_pred)
-        pred_tokens = x[:, n_ctx:]  # [B, n_pred, D]
+        # Extract prediction tokens (last n_pred) and project back to embed_dim
+        pred_tokens = x[:, n_ctx:]  # [B, n_pred, predictor_dim]
 
         return self.output_proj(pred_tokens)
 

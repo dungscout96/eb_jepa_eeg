@@ -54,10 +54,12 @@ export WANDB_PROJECT="${WANDB_PROJECT:-eb_jepa}"
 # Pull latest code
 git fetch origin && git checkout main && git pull --ff-only
 
-# Run training with defaults from config + overrides matching submit_job_delta.py
+# Run training with narrow predictor bottleneck (V-JEPA style)
+# Key change: predictor_embed_dim=24 forces encoder to learn richer representations
 PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py \
     --optim.epochs=100 \
     --model.encoder_depth=2 \
+    --model.predictor_embed_dim=24 \
     --optim.lr=5e-4 \
     --optim.lr_min=1e-6 \
     --optim.warmup_epochs=5 \
@@ -65,7 +67,7 @@ PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py \
     --loss.std_coeff=0.25 \
     --loss.cov_coeff=0.25 \
     --loss.pred_loss_type=smooth_l1 \
-    --logging.wandb_group=delta_train \
+    --logging.wandb_group=delta_narrow_predictor \
     ${EXTRA_ARGS:-}
 
 echo "Training complete!"

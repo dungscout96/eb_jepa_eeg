@@ -271,12 +271,14 @@ def run(
     use_ema = cfg.model.get("use_ema", True)
     if use_ema:
         target_encoder = copy.deepcopy(encoder)
+    predictor_dim = cfg.model.get("predictor_embed_dim", None)
     predictor = MaskedPredictor(
         embed_dim=embed_dim,
         depth=cfg.model.get("predictor_depth", 2),
         heads=cfg.model.encoder_heads,
         head_dim=cfg.model.encoder_head_dim,
         mlp_dim_ratio=cfg.model.get("mlp_dim_ratio", 2.66),
+        predictor_dim=predictor_dim,
     )
     mask_collator = MultiBlockMaskCollator(
         n_channels=n_chans,
