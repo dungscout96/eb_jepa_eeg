@@ -405,6 +405,11 @@ def run(
 
     log_config(cfg)
 
+    # Early stopping and best checkpoint tracking
+    patience = cfg.optim.get("early_stopping_patience", 0)  # 0 = disabled
+    best_val_reg = float("inf")
+    epochs_without_improvement = 0
+
     # Load checkpoint if requested
     start_epoch = 0
     global_step = 0
@@ -534,6 +539,31 @@ def run(
                 },
                 total_epochs=cfg.optim.epochs,
             )
+
+            # Track best val/reg_loss and save best checkpoint
+            current_val_reg = val_logs.get("val/reg_loss", float("inf"))
+            if current_val_reg < best_val_reg:
+                best_val_reg = current_val_reg
+                epochs_without_improvement = 0
+                save_checkpoint(
+                    exp_dir / "best.pth.tar",
+                    model=jepa,
+                    optimizer=optimizer,
+                    epoch=epoch,
+                    step=global_step,
+                )
+                logger.info("New best val/reg_loss=%.4f at epoch %d", best_val_reg, epoch)
+            else:
+                epochs_without_improvement += 1
+
+            # Early stopping
+            if patience > 0 and epochs_without_improvement >= patience:
+                logger.info(
+                    "Early stopping at epoch %d (no improvement for %d epochs, "
+                    "best val/reg_loss=%.4f)",
+                    epoch, patience, best_val_reg,
+                )
+                break
 
         # Checkpointing
         save_checkpoint(
