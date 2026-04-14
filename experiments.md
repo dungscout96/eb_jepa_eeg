@@ -123,6 +123,28 @@ EEG(s, c, t) = stimulus_response(c, τ) + subject_fingerprint(c) + noise(c, t)
 - **Stimulus probes still near chance** but trending in the right direction
 - **Early stopping worked** — saved 56 epochs of compute
 
+### Statistical Significance Assessment (single seed, no permutation test)
+
+| Metric | Test Value | Chance | Significant? |
+|--------|-----------|--------|-------------|
+| Age bal_acc | 0.587 | 0.50 | **Likely yes** (+8.7%, n=108) |
+| Age AUC | 0.575 | 0.50 | **Likely yes** (+7.5%) |
+| Contrast corr | 0.087 | 0.00 | **Borderline** (p≈0.05 at n≈1000) |
+| Narrative corr | 0.057 | 0.00 | Not significant |
+| All cls bal_acc | 0.50-0.52 | 0.50 | **At chance** |
+| Sex | 0.500 | 0.50 | **At chance** |
+| Movie ID | 4.6% | 5.0% | **Below chance** |
+
+**Bottom line:** Only age prediction is meaningfully above chance. The encoder learned age-related EEG features (skull development, alpha power) but NOT stimulus content. Per-recording norm improved generalization but didn't solve the fundamental problem: stimulus SNR is -24 dB per single trial.
+
+**What's needed:** Cross-subject aggregation (Experiment 1's contrastive loss) to leverage √660 subjects for SNR boost from -24 dB to +4 dB. Without this, single-trial stimulus decoding is at its theoretical ceiling.
+
+**Missing baselines (needed for publication):**
+1. Random encoder (untrained) + same probes — proves pretraining adds value
+2. Permutation test (shuffle labels, 1000 runs) — proves significance
+3. Handcrafted features (band power) + same probes — proves SSL beats feature engineering
+4. Multiple seeds (3-5 runs) — proves reproducibility
+
 ---
 
 ## Experiment 1: Cross-Subject Contrastive Loss (Running)
