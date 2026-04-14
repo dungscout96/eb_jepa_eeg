@@ -533,7 +533,7 @@ def run(
         encoder, target_encoder, predictor, mask_collator, regularizer,
     ).to(device)
 
-    ckpt_info = load_checkpoint(checkpoint_path, jepa, optimizer=None, device=device)
+    ckpt_info = load_checkpoint(checkpoint_path, jepa, optimizer=None, device=device, strict=False)
     logger.info("Loaded checkpoint at epoch %d", ckpt_info.get("epoch", "?"))
 
     for p in jepa.parameters():
