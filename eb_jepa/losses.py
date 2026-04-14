@@ -441,26 +441,26 @@ class SIGRegLoss(nn.Module):
 
 
 class CrossSubjectContrastiveLoss(nn.Module):
-    """InfoNCE loss pulling same-movie-time embeddings from different subjects together.
+    """Soft temporal contrastive loss for cross-subject stimulus alignment.
 
-    Discretizes position_in_movie into time bins. Samples in the same bin
-    are treated as positive pairs (same stimulus, different subject);
-    samples in different bins are negatives.
+    Uses soft temporal weights (SoftCLT, ICLR 2024) instead of hard time bins.
+    Samples close in movie time get high positive weight; distant samples get
+    low weight. This provides graded gradient signal even when SNR is low.
 
-    With B=64 and n_bins=20, expect ~3 samples/bin → ~50-100 positive
-    pairs per batch.
+    Reference: Lee et al. "Soft Contrastive Learning for Time Series" (ICLR 2024)
     """
 
-    def __init__(self, n_bins: int = 20, temperature: float = 0.1, coeff: float = 0.05):
+    def __init__(self, temperature: float = 0.5, coeff: float = 0.1,
+                 temporal_sigma: float = 0.05):
         super().__init__()
-        self.n_bins = n_bins
         self.temperature = temperature
         self.coeff = coeff
+        self.temporal_sigma = temporal_sigma  # ~10s for 203s movie (0.05 * 203)
 
     def forward(
         self, embeddings: torch.Tensor, positions: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, dict]:
-        """Compute cross-subject contrastive loss.
+        """Compute soft cross-subject contrastive loss.
 
         Args:
             embeddings: [B, D] encoder output (will be L2-normalized).
@@ -479,46 +479,80 @@ class CrossSubjectContrastiveLoss(nn.Module):
         # L2-normalize
         z = F.normalize(embeddings, dim=1)
 
-        # Discretize positions into bins
-        bins = (positions * self.n_bins).long().clamp(0, self.n_bins - 1)
+        # Soft temporal weights: Gaussian kernel on position difference
+        time_diff = (positions.unsqueeze(0) - positions.unsqueeze(1)).abs()  # [B, B]
+        soft_weights = torch.exp(-time_diff ** 2 / (2 * self.temporal_sigma ** 2))
+
+        # Exclude self-pairs
+        self_mask = ~torch.eye(B, dtype=torch.bool, device=device)
+        soft_weights = soft_weights * self_mask.float()
+
+        # Effective number of positive pairs (sum of weights)
+        n_pairs_eff = soft_weights.sum().item()
+        if n_pairs_eff < 0.1:
+            zero = torch.tensor(0.0, device=device, requires_grad=True)
+            return zero, zero, {"contrastive_loss": 0.0, "contrastive_n_pairs": 0}
 
         # Pairwise cosine similarity / temperature
         sim = z @ z.T / self.temperature  # [B, B]
 
-        # Masks
-        pos_mask = (bins.unsqueeze(0) == bins.unsqueeze(1))  # same bin
-        self_mask = ~torch.eye(B, dtype=torch.bool, device=device)
-        pos_mask = pos_mask & self_mask  # same bin, different sample
+        # Log-softmax: numerical stability without .detach()
+        sim_stable = sim - sim.max(dim=1, keepdim=True).values
 
-        n_pairs = pos_mask.sum().item()
-        if n_pairs == 0:
-            zero = torch.tensor(0.0, device=device, requires_grad=True)
-            return zero, zero, {"contrastive_loss": 0.0, "contrastive_n_pairs": 0}
+        # Denominator: sum over all non-self entries
+        exp_sim = torch.exp(sim_stable) * self_mask.float()
+        log_denom = torch.log(exp_sim.sum(dim=1, keepdim=True) + 1e-8)
 
-        # Numerical stability: subtract row max
-        sim = sim - sim.max(dim=1, keepdim=True).values.detach()
+        # Log probability matrix
+        log_prob = sim_stable - log_denom  # [B, B]
 
-        # Log-softmax over all non-self entries per anchor
-        exp_sim = torch.exp(sim) * self_mask.float()
-        log_denom = torch.log(exp_sim.sum(dim=1, keepdim=True) + 1e-8)  # [B, 1]
-
-        # Per-anchor loss: mean log-prob over positive pairs
-        log_prob = sim - log_denom  # [B, B]
-
-        # Only anchors with at least one positive
-        has_pos = pos_mask.any(dim=1)  # [B]
-        if not has_pos.any():
-            zero = torch.tensor(0.0, device=device, requires_grad=True)
-            return zero, zero, {"contrastive_loss": 0.0, "contrastive_n_pairs": 0}
-
-        # Mean of log-prob over positives, then mean over valid anchors
-        pos_log_prob = (log_prob * pos_mask.float()).sum(dim=1)  # [B]
-        n_pos_per_anchor = pos_mask.float().sum(dim=1).clamp(min=1)  # [B]
-        per_anchor_loss = -pos_log_prob / n_pos_per_anchor  # [B]
-        loss = per_anchor_loss[has_pos].mean()
+        # Weighted contrastive loss: soft weights determine positive contribution
+        loss = -(soft_weights * log_prob).sum() / (soft_weights.sum() + 1e-8)
 
         weighted = self.coeff * loss
         return weighted, loss, {
             "contrastive_loss": loss.item(),
-            "contrastive_n_pairs": n_pairs,
+            "contrastive_n_pairs": int(n_pairs_eff),
         }
+
+
+class GradientReversalFn(torch.autograd.Function):
+    """Gradient Reversal Layer (Ganin et al., JMLR 2016)."""
+
+    @staticmethod
+    def forward(ctx, x, alpha):
+        ctx.alpha = alpha
+        return x.view_as(x)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output.neg() * ctx.alpha, None
+
+
+class SubjectDiscriminator(nn.Module):
+    """Adversarial subject classifier with gradient reversal.
+
+    Forces the encoder to produce representations from which subject
+    identity cannot be decoded, removing the dominant subject fingerprint.
+    """
+
+    def __init__(self, embed_dim: int, n_subjects: int, hidden_dim: int = 128):
+        super().__init__()
+        self.classifier = nn.Sequential(
+            nn.Linear(embed_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, n_subjects),
+        )
+
+    def forward(self, embeddings: torch.Tensor, alpha: float = 1.0) -> torch.Tensor:
+        """Forward pass with gradient reversal.
+
+        Args:
+            embeddings: [B, D] encoder output.
+            alpha: reversal strength (ramp from 0 to 1 over training).
+
+        Returns:
+            [B, n_subjects] logits.
+        """
+        reversed_emb = GradientReversalFn.apply(embeddings, alpha)
+        return self.classifier(reversed_emb)

@@ -70,11 +70,14 @@ loss:
     num_slices: 256   # Number of random projection directions
     coeff: 0.1        # SIGReg loss weight (lambda)
   pred_loss_type: mse  # Prediction loss: "mse" or "smooth_l1" (Huber, used in V-JEPA)
-  # Cross-subject contrastive loss (pulls same-movie-time embeddings together)
-  contrastive_coeff: 0.0  # 0 = disabled; > 0 = enable (recommended: 0.01-0.1)
+  # Cross-subject contrastive loss (soft temporal, SoftCLT-style)
+  contrastive_coeff: 0.0  # 0 = disabled; > 0 = enable (recommended: 0.1-0.5)
   contrastive:
-    n_bins: 20            # Time bins for 203s movie (~10s each)
-    temperature: 0.1      # InfoNCE temperature
+    temperature: 0.5      # InfoNCE temperature (higher = softer with low SNR)
+    temporal_sigma: 0.05  # Gaussian kernel width (~10s for 203s movie)
+  # Adversarial subject removal (gradient reversal, Ganin et al.)
+  adversarial_coeff: 0.0  # 0 = disabled; > 0 = enable (recommended: 0.1-1.0)
+  adversarial_hidden: 128 # Hidden dim for subject discriminator
 
 optim:
   epochs: 100

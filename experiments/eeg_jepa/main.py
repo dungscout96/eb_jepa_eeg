@@ -33,7 +33,7 @@ from eb_jepa.architectures import (
 from eb_jepa.datasets.hbn import JEPAMovieDataset
 from eb_jepa.jepa import MaskedJEPA, MaskedJEPANoEMA, MaskedJEPAProbe
 from eb_jepa.logging import get_logger
-from eb_jepa.losses import VCLoss, SIGRegLoss, CrossSubjectContrastiveLoss
+from eb_jepa.losses import VCLoss, SIGRegLoss, CrossSubjectContrastiveLoss, SubjectDiscriminator
 from eb_jepa.masking import MultiBlockMaskCollator
 from eb_jepa.sanity_checks import SanityCheckHook
 from eb_jepa.training_utils import (
@@ -314,17 +314,33 @@ def run(
     contrastive_loss_fn = None
     contrastive_coeff = cfg.loss.get("contrastive_coeff", 0.0)
     pos_feature_idx = None
+    use_auxiliary = contrastive_coeff > 0 or cfg.loss.get("adversarial_coeff", 0.0) > 0
     if contrastive_coeff > 0:
         contrastive_cfg = cfg.loss.get("contrastive", {})
         contrastive_loss_fn = CrossSubjectContrastiveLoss(
-            n_bins=contrastive_cfg.get("n_bins", 20),
-            temperature=contrastive_cfg.get("temperature", 0.1),
+            temperature=contrastive_cfg.get("temperature", 0.5),
             coeff=contrastive_coeff,
+            temporal_sigma=contrastive_cfg.get("temporal_sigma", 0.05),
         )
         pos_feature_idx = NUMERIC_FEATURES.index("position_in_movie")
         logger.info(
-            "Cross-subject contrastive loss enabled: coeff=%.3f, n_bins=%d, temp=%.2f",
-            contrastive_coeff, contrastive_cfg.get("n_bins", 20), contrastive_cfg.get("temperature", 0.1),
+            "Soft contrastive loss enabled: coeff=%.3f, temp=%.2f, sigma=%.3f",
+            contrastive_coeff, contrastive_cfg.get("temperature", 0.5),
+            contrastive_cfg.get("temporal_sigma", 0.05),
+        )
+
+    # Adversarial subject discriminator (optional, gradient reversal)
+    subject_discriminator = None
+    adversarial_coeff = cfg.loss.get("adversarial_coeff", 0.0)
+    if adversarial_coeff > 0:
+        n_subjects = len(train_set)  # each recording = 1 subject
+        subject_discriminator = SubjectDiscriminator(
+            embed_dim, n_subjects,
+            hidden_dim=cfg.loss.get("adversarial_hidden", 128),
+        ).to(device)
+        logger.info(
+            "Adversarial subject discriminator enabled: coeff=%.3f, n_subjects=%d",
+            adversarial_coeff, n_subjects,
         )
 
     if use_ema:
@@ -367,11 +383,13 @@ def run(
     regression_probe.train()
     classification_probe.train()
 
-    # Context encoder + predictor + regularizer projector (if any);
-    # target encoder is updated via EMA
+    # Context encoder + predictor + regularizer projector + adversarial discriminator
+    # target encoder is updated via EMA only
     jepa_params = list(jepa.context_encoder.parameters()) + list(jepa.predictor.parameters())
     if jepa.regularizer is not None:
         jepa_params += [p for p in jepa.regularizer.parameters() if p.requires_grad]
+    if subject_discriminator is not None:
+        jepa_params += list(subject_discriminator.parameters())
     optimizer = Adam(jepa_params, lr=cfg.optim.lr)
     probe_optimizer = Adam(
         list(regression_probe.head.parameters())
@@ -458,25 +476,40 @@ def run(
 
             # --- Masked JEPA pretraining ---
             optimizer.zero_grad()
-            jepa_loss, loss_dict = jepa(eeg)
+            if use_auxiliary:
+                jepa_loss, loss_dict, all_tokens = jepa(eeg, return_all_tokens=True)
+                emb = all_tokens.mean(dim=1)  # [B, D] single forward pass
+            else:
+                jepa_loss, loss_dict = jepa(eeg)
 
-            # --- Cross-subject contrastive loss (auxiliary) ---
+            total_loss = jepa_loss
+
+            # --- Cross-subject contrastive loss ---
             if contrastive_loss_fn is not None:
-                all_tokens = jepa.context_encoder.encode_tokens(eeg, mask=None)
-                emb = all_tokens.mean(dim=1)  # [B, D]
                 positions = features[:, :, pos_feature_idx].mean(dim=1)  # [B]
                 c_loss_w, _, c_loss_dict = contrastive_loss_fn(emb, positions)
-                total_loss = jepa_loss + c_loss_w
+                total_loss = total_loss + c_loss_w
                 loss_dict.update(c_loss_dict)
-            else:
-                total_loss = jepa_loss
+
+            # --- Adversarial subject removal (gradient reversal) ---
+            if subject_discriminator is not None:
+                # Ramp alpha: 0 → 1 over training (Ganin schedule)
+                p = global_step / max(total_steps, 1)
+                adv_alpha = float(2.0 / (1.0 + math.exp(-10.0 * p)) - 1.0)
+                subject_logits = subject_discriminator(emb, alpha=adv_alpha)
+                # Use recording index as subject ID (each recording = unique subject)
+                batch_indices = torch.arange(eeg.shape[0], device=device)
+                # Map batch indices to dataset recording indices for subject labels
+                adv_loss = F.cross_entropy(subject_logits, batch_indices % subject_discriminator.classifier[-1].out_features)
+                total_loss = total_loss + adversarial_coeff * adv_loss
+                loss_dict["adv_loss"] = adv_loss.item()
+                loss_dict["adv_alpha"] = adv_alpha
 
             total_loss.backward()
-            torch.nn.utils.clip_grad_norm_(
-                list(jepa.context_encoder.parameters())
-                + list(jepa.predictor.parameters()),
-                max_norm=1.0,
-            )
+            clip_params = list(jepa.context_encoder.parameters()) + list(jepa.predictor.parameters())
+            if subject_discriminator is not None:
+                clip_params += list(subject_discriminator.parameters())
+            torch.nn.utils.clip_grad_norm_(clip_params, max_norm=1.0)
             sanity_metrics = sanity_hook.step(
                 global_step, eeg, features, jepa, loss_dict,
                 probe_labels=probe_labels,

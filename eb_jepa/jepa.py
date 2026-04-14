@@ -273,14 +273,17 @@ class MaskedJEPA(nn.Module):
         for p_ctx, p_tgt in zip(self.context_encoder.parameters(), self.target_encoder.parameters()):
             p_tgt.data.lerp_(p_ctx.data, 1.0 - momentum)
 
-    def forward(self, eeg: torch.Tensor) -> tuple[torch.Tensor, dict]:
+    def forward(self, eeg: torch.Tensor, return_all_tokens: bool = False):
         """Forward pass: mask, encode, predict, compute loss.
 
         Args:
             eeg: [B, T, C, W] raw EEG
+            return_all_tokens: if True, also return full unmasked encoder tokens
+                for auxiliary losses (contrastive, adversarial) without a second
+                forward pass.
 
         Returns:
-            (total_loss, loss_dict) where loss_dict contains individual loss components
+            (total_loss, loss_dict) or (total_loss, loss_dict, all_tokens)
         """
         B = eeg.shape[0]
         device = eeg.device
@@ -290,11 +293,12 @@ class MaskedJEPA(nn.Module):
         context_mask = mask_result.context_mask.to(device)
         pred_masks = [pm.to(device) for pm in mask_result.pred_masks]
 
-        # 2. Get positional embeddings (full, unmasked)
-        _, pos_embed = self.context_encoder.tokenize(eeg)  # [B, C*T*P, D]
+        # 2. Full unmasked forward pass (used for auxiliary losses and context)
+        all_tokens, pos_embed = self.context_encoder.tokenize(eeg)  # [B, C*T*P, D]
+        all_tokens = self.context_encoder.transformer(all_tokens)  # [B, C*T*P, D]
 
-        # 3. Context encoding: only unmasked tokens
-        ctx_tokens = self.context_encoder.encode_tokens(eeg, mask=context_mask)  # [B, n_ctx, D]
+        # 3. Context tokens: select unmasked positions from full pass
+        ctx_tokens = all_tokens[:, context_mask]  # [B, n_ctx, D]
 
         # 4. Target encoding: all tokens (no masking), no gradients
         with torch.no_grad():
@@ -305,9 +309,9 @@ class MaskedJEPA(nn.Module):
 
         # Concatenate all prediction mask indices and their targets
         if len(pred_masks) == 0:
-            # No prediction masks (edge case) — return zero loss
             zero = torch.tensor(0.0, device=device, requires_grad=True)
-            return zero, {"pred_loss": 0.0, "reg_loss": 0.0}
+            result = (zero, {"pred_loss": 0.0, "reg_loss": 0.0})
+            return (*result, all_tokens) if return_all_tokens else result
 
         all_pred_indices = torch.cat(pred_masks).unique()
         tgt_pos = pos_embed[:, all_pred_indices]  # [B, n_pred, D]
@@ -328,11 +332,9 @@ class MaskedJEPA(nn.Module):
         if self.regularizer is not None:
             from eb_jepa.losses import SIGRegLoss
             if isinstance(self.regularizer, SIGRegLoss):
-                # SIGReg on mean-pooled embeddings [B, D] to avoid OOM
-                ctx_pooled = ctx_tokens.mean(dim=1)  # [B, D]
+                ctx_pooled = ctx_tokens.mean(dim=1)
                 reg_loss, reg_loss_unweighted, reg_dict = self.regularizer(ctx_pooled)
             else:
-                # VCLoss expects [B, C, T, H, W] — reshape ctx_tokens
                 ctx_for_reg = ctx_tokens.permute(0, 2, 1).unsqueeze(-1).unsqueeze(-1)
                 reg_loss, reg_loss_unweighted, reg_dict = self.regularizer(ctx_for_reg)
             loss_dict["reg_loss"] = reg_loss.item()
@@ -341,6 +343,8 @@ class MaskedJEPA(nn.Module):
         total_loss = pred_loss + reg_loss
         loss_dict["total_loss"] = total_loss.item()
 
+        if return_all_tokens:
+            return total_loss, loss_dict, all_tokens
         return total_loss, loss_dict
 
     @torch.no_grad()
