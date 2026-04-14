@@ -33,7 +33,7 @@ from eb_jepa.architectures import (
 from eb_jepa.datasets.hbn import JEPAMovieDataset
 from eb_jepa.jepa import MaskedJEPA, MaskedJEPANoEMA, MaskedJEPAProbe
 from eb_jepa.logging import get_logger
-from eb_jepa.losses import VCLoss, SIGRegLoss
+from eb_jepa.losses import VCLoss, SIGRegLoss, CrossSubjectContrastiveLoss
 from eb_jepa.masking import MultiBlockMaskCollator
 from eb_jepa.sanity_checks import SanityCheckHook
 from eb_jepa.training_utils import (
@@ -310,6 +310,23 @@ def run(
     # Prediction loss type: "mse" (default) or "smooth_l1" (Huber, used in V-JEPA)
     pred_loss_type = cfg.loss.get("pred_loss_type", "mse")
 
+    # Cross-subject contrastive loss (optional, set contrastive_coeff > 0 to enable)
+    contrastive_loss_fn = None
+    contrastive_coeff = cfg.loss.get("contrastive_coeff", 0.0)
+    pos_feature_idx = None
+    if contrastive_coeff > 0:
+        contrastive_cfg = cfg.loss.get("contrastive", {})
+        contrastive_loss_fn = CrossSubjectContrastiveLoss(
+            n_bins=contrastive_cfg.get("n_bins", 20),
+            temperature=contrastive_cfg.get("temperature", 0.1),
+            coeff=contrastive_coeff,
+        )
+        pos_feature_idx = NUMERIC_FEATURES.index("position_in_movie")
+        logger.info(
+            "Cross-subject contrastive loss enabled: coeff=%.3f, n_bins=%d, temp=%.2f",
+            contrastive_coeff, contrastive_cfg.get("n_bins", 20), contrastive_cfg.get("temperature", 0.1),
+        )
+
     if use_ema:
         jepa = MaskedJEPA(
             encoder, target_encoder, predictor, mask_collator, regularizer,
@@ -442,7 +459,19 @@ def run(
             # --- Masked JEPA pretraining ---
             optimizer.zero_grad()
             jepa_loss, loss_dict = jepa(eeg)
-            jepa_loss.backward()
+
+            # --- Cross-subject contrastive loss (auxiliary) ---
+            if contrastive_loss_fn is not None:
+                all_tokens = jepa.context_encoder.encode_tokens(eeg, mask=None)
+                emb = all_tokens.mean(dim=1)  # [B, D]
+                positions = features[:, :, pos_feature_idx].mean(dim=1)  # [B]
+                c_loss_w, _, c_loss_dict = contrastive_loss_fn(emb, positions)
+                total_loss = jepa_loss + c_loss_w
+                loss_dict.update(c_loss_dict)
+            else:
+                total_loss = jepa_loss
+
+            total_loss.backward()
             torch.nn.utils.clip_grad_norm_(
                 list(jepa.context_encoder.parameters())
                 + list(jepa.predictor.parameters()),
@@ -474,13 +503,16 @@ def run(
             (reg_loss + cls_loss).backward()
             probe_optimizer.step()
 
-            pbar.set_postfix({
+            postfix = {
                 "loss": f"{jepa_loss.item():.4f}",
                 "vc":   f"{float(regl):.4f}",
                 "pred": f"{float(pl):.4f}",
                 "reg":  f"{reg_loss.item():.4f}",
                 "cls":  f"{cls_loss.item():.4f}",
-            })
+            }
+            if contrastive_loss_fn is not None:
+                postfix["ctr"] = f"{loss_dict.get('contrastive_loss', 0.0):.4f}"
+            pbar.set_postfix(postfix)
 
             if wandb_run:
                 import wandb
