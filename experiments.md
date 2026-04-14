@@ -147,14 +147,76 @@ EEG(s, c, t) = stimulus_response(c, τ) + subject_fingerprint(c) + noise(c, t)
 
 ---
 
-## Experiment 1: Cross-Subject Contrastive Loss (Running)
+## Experiment 1 (v1): Cross-Subject Contrastive Loss — BUGGY, DISCARDED
+
+**Delta Job:** 17597552 | **W&B:** https://wandb.ai/braindecode/eb_jepa/runs/nbmlnheb
+**Config:** Exp 2 + `loss.contrastive_coeff=0.05, n_bins=20, temperature=0.1`
+
+### Bugs Found (via code review)
+1. `.detach()` on log-sum-exp shift killed gradient to hardest negatives
+2. Double forward pass (masked + full) caused contradictory gradient signals
+3. VCLoss didn't protect the full-token representation used by contrastive loss
+
+### Result: Contrastive loss stuck at log(64)=4.16 for all 30 epochs. Encoder never learned cross-subject alignment. Early stopped at epoch ~30. Best val/reg_loss=0.795 (identical to Exp 2 without contrastive — the contrastive loss had zero effect).
+
+---
+
+## Experiment 3: Fixed Soft Contrastive + Adversarial Subject Removal
 
 **Date:** 2026-04-14
 **Branch:** `kkokate/exp1-cross-subject-contrastive`
-**Delta Job:** 17597552 | **W&B:** https://wandb.ai/braindecode/eb_jepa/runs/nbmlnheb
-**Config:** Same as Exp 2 + `loss.contrastive_coeff=0.05, n_bins=20, temperature=0.1`
+**Delta Job:** 17598100 | **W&B:** https://wandb.ai/braindecode/eb_jepa/runs/w6hcnusv
+**Config:** Exp 2 + soft contrastive (coeff=0.1, temp=0.5, sigma=0.05) + adversarial (coeff=0.5)
 
-### Key Change
-InfoNCE contrastive loss pulling embeddings from different subjects at the same movie time together. Discretizes position_in_movie into 20 bins (~10s each). Only stimulus-locked responses correlate across subjects, so this loss directly incentivizes stimulus encoding.
+### Key Changes (all bugs fixed)
+1. **Soft temporal contrastive** (SoftCLT, ICLR 2024) — Gaussian kernel instead of hard bins
+2. **Gradient reversal subject discriminator** (Ganin et al.) — forces encoder to remove subject identity
+3. **Single forward pass** — `MaskedJEPA.forward(return_all_tokens=True)` eliminates double pass
+4. **No `.detach()` on stability shift** — restores gradient flow
 
-### Status: Training (epoch ~2, contrastive_loss=4.09 ≈ log(64), at chance initially)
+### Results
+
+**Training:** Early stopped at epoch 43. Best val/reg_loss=0.826.
+
+**Probe eval (best.pth.tar):**
+
+| Probe | Val | Test | Exp 2 Val | Exp 2 Test |
+|-------|-----|------|-----------|------------|
+| Age AUC | **0.622** | 0.563 | 0.475 | 0.575 |
+| Age bal_acc | 0.549 | 0.505 | 0.520 | 0.587 |
+| Sex AUC | **0.542** | **0.549** | 0.468 | 0.500 |
+| Contrast corr | 0.010 | 0.076 | 0.037 | **0.087** |
+| Narrative corr | -0.013 | **0.063** | -0.031 | 0.057 |
+| Luminance AUC | **0.543** | **0.545** | 0.445 | 0.514 |
+| Position AUC | 0.496 | **0.544** | 0.469 | 0.491 |
+| Movie ID top-1 | **5.5%** | 4.6% | 3.4% | 4.6% |
+| Movie ID top-5 | **26.3%** | 21.3% | 23.2% | 22.2% |
+
+### Conclusions
+- **Val age AUC improved** over Exp 2 (0.622 vs 0.475) — adversarial didn't fully remove subject signal
+- **Sex AUC emerged** (0.549 test) — first time above chance, adversarial may have redistributed what the encoder captures
+- **Luminance AUC improved** (0.545 test vs 0.514) — stimulus signal slightly better
+- **Position AUC improved** (0.544 test vs 0.491) — temporal position captured
+- **Movie ID top-1 at 5.5% val** — first time above chance (5.0%)
+- **Contrast/narrative corr similar** to Exp 2 — no breakthrough in stimulus regression
+- **Contrastive loss likely still at chance** — the fundamental -24 dB SNR barrier remains
+
+### Overall Assessment
+The adversarial + soft contrastive approach shows **modest improvements** across multiple metrics but no breakthrough. The encoder is learning slightly more diverse features (sex, luminance, position emerge) but stimulus regression remains near theoretical single-trial ceiling.
+
+---
+
+## Cross-Experiment Comparison (Test Set)
+
+| Metric | Chance | Exp 1 (baseline) | Exp 2 (per-rec) | Exp 3 (ctr+adv) | Best |
+|--------|--------|-----------------|-----------------|-----------------|------|
+| Age bal_acc | 0.50 | 0.483 | **0.587** | 0.505 | Exp 2 |
+| Age AUC | 0.50 | 0.543 | **0.575** | 0.563 | Exp 2 |
+| Sex AUC | 0.50 | 0.490 | 0.500 | **0.549** | Exp 3 |
+| Contrast corr | 0.00 | 0.056 | **0.087** | 0.076 | Exp 2 |
+| Narrative corr | 0.00 | 0.049 | 0.057 | **0.063** | Exp 3 |
+| Luminance AUC | 0.50 | 0.523 | 0.514 | **0.545** | Exp 3 |
+| Position AUC | 0.50 | — | 0.491 | **0.544** | Exp 3 |
+| Movie ID top-5 | 25% | 20.4% | 22.2% | 21.3% | Exp 2 |
+
+**Bottom line:** Experiment 2 (per-recording normalization) gives best age/contrast results. Experiment 3 (adversarial) gives best sex/luminance/position/narrative results. No single experiment dominates. All stimulus metrics remain near the theoretical single-trial ceiling (-24 dB SNR).
