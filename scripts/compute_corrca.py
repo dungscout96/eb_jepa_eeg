@@ -198,7 +198,7 @@ def compute_corrca(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output", default="corrca_filters.npz")
+    parser.add_argument("--output_path", default="corrca_filters.npz")
     parser.add_argument("--n_components", type=int, default=5)
     parser.add_argument("--task", default="ThePresent")
     parser.add_argument("--n_time_bins", type=int, default=100)
