@@ -170,3 +170,81 @@ class MultiBlockMaskCollator:
             pred_masks=pred_masks,
             n_total_tokens=self.n_total_tokens,
         )
+
+
+class TemporalDominantMaskCollator:
+    """Temporal-dominant masking that defeats the spatial interpolation shortcut.
+
+    Primary axis: mask entire time windows across ALL channels (no spatial
+    neighbors at masked timepoints — forces temporal prediction).
+    Secondary axis: mask some channels in visible windows (mild spatial task).
+
+    Token grid: [C, T, P] flattened as token_idx = c * (T*P) + t*P + p.
+
+    References:
+        - EEG2Rep (KDD 2024): 50% temporal masking optimal for EEG SSL
+        - Laya (arXiv 2026): temporal-masked LeJEPA for EEG
+        - REVE (NeurIPS 2025): block masking needed against spatial redundancy
+    """
+
+    def __init__(
+        self,
+        n_channels: int,
+        n_windows: int,
+        n_patches_per_window: int,
+        temporal_mask_ratio: float = 0.5,
+        spatial_mask_ratio: float = 0.3,
+        min_visible_windows: int = 1,
+    ):
+        self.C = n_channels
+        self.T = n_windows
+        self.P = n_patches_per_window
+        self.n_total_tokens = n_channels * n_windows * n_patches_per_window
+        self.temporal_mask_ratio = temporal_mask_ratio
+        self.spatial_mask_ratio = spatial_mask_ratio
+        self.min_visible_windows = min_visible_windows
+
+    def __call__(self) -> MaskResult:
+        C, T, P = self.C, self.T, self.P
+
+        # Phase 1: Temporal masking — mask k entire time windows across ALL channels
+        n_temporal_mask = max(1, int(T * self.temporal_mask_ratio))
+        n_temporal_mask = min(n_temporal_mask, T - self.min_visible_windows)
+        masked_windows = sorted(random.sample(range(T), k=n_temporal_mask))
+        visible_windows = [t for t in range(T) if t not in masked_windows]
+
+        # All tokens at masked windows → prediction target
+        temporal_pred_indices = []
+        for t in masked_windows:
+            for c in range(C):
+                for p in range(P):
+                    temporal_pred_indices.append(c * (T * P) + t * P + p)
+
+        # Phase 2: Spatial masking in visible windows — mask some channels
+        n_chan_mask = max(1, int(C * self.spatial_mask_ratio))
+        masked_channels = sorted(random.sample(range(C), k=n_chan_mask))
+
+        spatial_pred_indices = []
+        for t in visible_windows:
+            for c in masked_channels:
+                for p in range(P):
+                    spatial_pred_indices.append(c * (T * P) + t * P + p)
+
+        # Build prediction masks (two blocks: temporal + spatial)
+        pred_masks = []
+        if temporal_pred_indices:
+            pred_masks.append(torch.tensor(temporal_pred_indices, dtype=torch.long))
+        if spatial_pred_indices:
+            pred_masks.append(torch.tensor(spatial_pred_indices, dtype=torch.long))
+
+        # Context mask: everything not in either prediction set
+        context_mask = torch.ones(self.n_total_tokens, dtype=torch.bool)
+        if pred_masks:
+            all_masked = torch.cat(pred_masks).unique()
+            context_mask[all_masked] = False
+
+        return MaskResult(
+            context_mask=context_mask,
+            pred_masks=pred_masks,
+            n_total_tokens=self.n_total_tokens,
+        )

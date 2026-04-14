@@ -15,6 +15,7 @@ data:
   preprocessed_dir: null  # Auto-detects known paths; set explicitly to override
   norm_mode: global       # "global" = dataset-wide mean/std; "per_recording" = removes subject fingerprint
   add_envelope: false     # Append 1-8 Hz analytic envelope as extra channels (doubles n_chans)
+  corrca_filters: null    # Path to CorrCA .npz file (projects 129 channels → k stimulus components)
   # Movie feature names used for probe evaluation (regression + classification heads)
   feature_names:
     - contrast_rms
@@ -51,6 +52,10 @@ model:
   ema_momentum_end: 1.0  # EMA momentum end (cosine schedule)
 
 masking:
+  strategy: spatial                   # "spatial" (default) or "temporal_dominant"
+  temporal_mask_ratio: 0.5            # Fraction of time windows to mask (temporal_dominant only)
+  spatial_mask_ratio: 0.3             # Fraction of channels to mask in visible windows (temporal_dominant)
+  min_visible_windows: 1              # Keep at least N windows fully visible (temporal_dominant)
   n_pred_masks_short: 2             # Number of short-range prediction masks
   n_pred_masks_long: 2              # Number of long-range prediction masks
   short_channel_scale: [0.08, 0.15] # Fraction of channels per short mask

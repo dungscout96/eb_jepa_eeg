@@ -220,3 +220,52 @@ The adversarial + soft contrastive approach shows **modest improvements** across
 | Movie ID top-5 | 25% | 20.4% | 22.2% | 21.3% | Exp 2 |
 
 **Bottom line:** Experiment 2 (per-recording normalization) gives best age/contrast results. Experiment 3 (adversarial) gives best sex/luminance/position/narrative results. No single experiment dominates. All stimulus metrics remain near the theoretical single-trial ceiling (-24 dB SNR).
+
+---
+
+## Experiment 4: Temporal-Dominant Masking
+
+**Goal:** Eliminate the spatial interpolation shortcut that makes the masked prediction objective trivial.
+
+### Problem
+Current masking operates on [C, P] grid replicated across all T windows — purely spatial. With 129-channel EEG at inter-channel correlation r>0.9, masked channels are trivially predicted from spatial neighbors (R²>0.53 from nearest neighbor alone). The encoder never needs to learn temporal/stimulus structure.
+
+### Solution
+Mask **entire time windows across ALL channels**. At masked timepoints, there are zero visible spatial neighbors — the encoder MUST predict from other time windows, requiring temporal dynamics modeling.
+
+- Primary axis: mask 2 of 4 time windows (50% temporal masking, all 129 channels masked)
+- Secondary axis: in visible windows, additionally mask 30% of channels
+- **Math:** Temporal autocorrelation at 2s lag is r<0.3 for stimulus-evoked components (vs r>0.9 spatial)
+
+### Literature
+- EEG2Rep (KDD 2024): 50% temporal masking optimal for EEG SSL
+- Laya (arXiv 2026): temporal-masked LeJEPA outperforms reconstruction methods
+- REVE (NeurIPS 2025): block masking needed to defeat spatial redundancy
+
+### Config
+Same as Exp 2 (per-rec norm + envelope + narrow predictor) + temporal-dominant masking
+
+---
+
+## Experiment 6: CorrCA Preprocessing + Cross-Subject Evaluation
+
+**Goal:** Boost stimulus SNR from -24 dB to detectable levels via spatial filtering and cross-subject aggregation.
+
+### Problem
+Single-trial stimulus SNR is -24 dB (0.4% of variance). Best correlation 0.087 matches theoretical ceiling. No model improvement can fix this without changing the input SNR.
+
+### Solution
+Two-stage SNR boost:
+1. **CorrCA spatial filters** (offline preprocessing): solve generalized eigenvalue `R_b w = λ R_w w` to find spatial projections maximizing inter-subject correlation. Projects 129 channels → 3-5 stimulus-driven components. Expected: **+15-20 dB**
+2. **Cross-subject averaging at eval**: average embeddings across subjects at same movie time. Expected: **+21 dB** (√136 val subjects)
+3. **Combined:** -24 + 18 + 21 = **+15 dB** — well above detection
+
+### Literature
+- Parra et al. (2019): CorrCA extracts 3-5 significant components with ISC=0.10-0.28
+- CL-SSTER (NeuroImage 2024): learned embeddings can exceed classical CorrCA ISC
+- Ki et al. (2016, J. Neuroscience): ISC tracks attention during movie watching
+
+### Implementation
+1. Offline: compute CorrCA on time-aligned training data (eigenvalue solve)
+2. Apply as fixed linear projection in `__getitem__`: 129 → 5 channels
+3. Eval: average embeddings across subjects per movie timepoint

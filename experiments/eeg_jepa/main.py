@@ -34,7 +34,7 @@ from eb_jepa.datasets.hbn import JEPAMovieDataset
 from eb_jepa.jepa import MaskedJEPA, MaskedJEPANoEMA, MaskedJEPAProbe
 from eb_jepa.logging import get_logger
 from eb_jepa.losses import VCLoss, SIGRegLoss, CrossSubjectContrastiveLoss, SubjectDiscriminator
-from eb_jepa.masking import MultiBlockMaskCollator
+from eb_jepa.masking import MultiBlockMaskCollator, TemporalDominantMaskCollator
 from eb_jepa.sanity_checks import SanityCheckHook
 from eb_jepa.training_utils import (
     get_default_dev_name,
@@ -280,18 +280,32 @@ def run(
         mlp_dim_ratio=cfg.model.get("mlp_dim_ratio", 2.66),
         predictor_dim=predictor_dim,
     )
-    mask_collator = MultiBlockMaskCollator(
-        n_channels=n_chans,
-        n_windows=cfg.data.n_windows,
-        n_patches_per_window=encoder.n_patches_per_window,
-        n_pred_masks_short=masking_cfg.get("n_pred_masks_short", 2),
-        n_pred_masks_long=masking_cfg.get("n_pred_masks_long", 2),
-        short_channel_scale=tuple(masking_cfg.get("short_channel_scale", [0.08, 0.15])),
-        short_patch_scale=tuple(masking_cfg.get("short_patch_scale", [0.3, 0.6])),
-        long_channel_scale=tuple(masking_cfg.get("long_channel_scale", [0.15, 0.35])),
-        long_patch_scale=tuple(masking_cfg.get("long_patch_scale", [0.5, 1.0])),
-        min_context_fraction=masking_cfg.get("min_context_fraction", 0.15),
-    )
+    masking_strategy = masking_cfg.get("strategy", "spatial")
+    if masking_strategy == "temporal_dominant":
+        mask_collator = TemporalDominantMaskCollator(
+            n_channels=n_chans,
+            n_windows=cfg.data.n_windows,
+            n_patches_per_window=encoder.n_patches_per_window,
+            temporal_mask_ratio=masking_cfg.get("temporal_mask_ratio", 0.5),
+            spatial_mask_ratio=masking_cfg.get("spatial_mask_ratio", 0.3),
+            min_visible_windows=masking_cfg.get("min_visible_windows", 1),
+        )
+        logger.info("Using temporal-dominant masking: temporal=%.0f%%, spatial=%.0f%%",
+                     masking_cfg.get("temporal_mask_ratio", 0.5) * 100,
+                     masking_cfg.get("spatial_mask_ratio", 0.3) * 100)
+    else:
+        mask_collator = MultiBlockMaskCollator(
+            n_channels=n_chans,
+            n_windows=cfg.data.n_windows,
+            n_patches_per_window=encoder.n_patches_per_window,
+            n_pred_masks_short=masking_cfg.get("n_pred_masks_short", 2),
+            n_pred_masks_long=masking_cfg.get("n_pred_masks_long", 2),
+            short_channel_scale=tuple(masking_cfg.get("short_channel_scale", [0.08, 0.15])),
+            short_patch_scale=tuple(masking_cfg.get("short_patch_scale", [0.3, 0.6])),
+            long_channel_scale=tuple(masking_cfg.get("long_channel_scale", [0.15, 0.35])),
+            long_patch_scale=tuple(masking_cfg.get("long_patch_scale", [0.5, 1.0])),
+            min_context_fraction=masking_cfg.get("min_context_fraction", 0.15),
+        )
     # Regularizer — VCLoss, SIGReg, or none
     regularizer = None
     reg_type = cfg.loss.get("regularizer", "vc")

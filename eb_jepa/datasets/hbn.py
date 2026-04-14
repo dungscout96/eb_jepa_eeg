@@ -847,6 +847,15 @@ class JEPAMovieDataset(HBNMovieDataset):
         self.feature_names = feature_names or self.DEFAULT_FEATURES
         self._norm_mode = cfg.get("norm_mode", "global") if not isinstance(cfg, dict) else cfg.get("norm_mode", "global")
         self._add_envelope = cfg.get("add_envelope", False) if not isinstance(cfg, dict) else cfg.get("add_envelope", False)
+        # CorrCA spatial filters: project 129 channels → k stimulus-driven components
+        corrca_path = cfg.get("corrca_filters", None) if not isinstance(cfg, dict) else cfg.get("corrca_filters", None)
+        self._corrca_W = None
+        if corrca_path is not None:
+            corrca = np.load(corrca_path)
+            self._corrca_W = torch.from_numpy(corrca["W"]).float()  # [n_chans, k]
+            logger.info("Loaded CorrCA filters from %s: %d → %d components (ISC: %s)",
+                        corrca_path, corrca["W"].shape[0], corrca["W"].shape[1],
+                        ", ".join(f"{v:.3f}" for v in corrca["isc_values"]))
 
         required_windows = (n_windows - 1) * temporal_stride + 1
 
@@ -978,6 +987,8 @@ class JEPAMovieDataset(HBNMovieDataset):
 
     @property
     def n_chans(self):
+        if self._corrca_W is not None:
+            return self._corrca_W.shape[1]
         if self._add_envelope:
             return self._n_chans * 2
         return self._n_chans
@@ -1037,6 +1048,11 @@ class JEPAMovieDataset(HBNMovieDataset):
         # Optional: append 1-8 Hz envelope channels (where ISC is highest)
         if self._add_envelope:
             eeg = self._append_lowfreq_envelope(eeg)
+
+        # CorrCA spatial projection: 129 channels → k stimulus-driven components
+        if self._corrca_W is not None:
+            # eeg: [n_windows, C, T] → [n_windows, k, T]
+            eeg = torch.einsum("wct,ck->wkt", eeg, self._corrca_W)
 
         # Binary subject label (age > median, sex, …) — scalar float tensor.
         # NaN means metadata was unavailable for this recording.
