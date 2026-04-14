@@ -19,7 +19,11 @@ BASE = "/u/dtyoung/eb_jepa_eeg/checkpoints/eeg_jepa"
 # label is for display only (coeff + proj/noproj)
 CHECKPOINTS = [
     # === PROJ (trained projector) ===
-    # nw1_ws1 — c=0.1 and c=0.25 corrupted, only c=1.0 valid
+    # nw1_ws1
+    (1, 1, 64, 2025, "vc0.1_proj",
+     f"{BASE}/dev_2026-04-14_08-28/eeg_jepa_bs64_lr0.0005_std0.1_cov0.1_nw1_ws1s_seed2025/latest.pth.tar"),
+    (1, 1, 64, 2025, "vc0.25_proj",
+     f"{BASE}/dev_2026-04-14_08-38/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_nw1_ws1s_seed2025/latest.pth.tar"),
     (1, 1, 64, 2025, "vc1.0_proj",
      f"{BASE}/dev_2026-04-12_12-41/eeg_jepa_bs64_lr0.0005_std1.0_cov1.0_nw1_ws1s_seed2025/latest.pth.tar"),
     # nw2_ws1
@@ -42,12 +46,12 @@ CHECKPOINTS = [
     (1, 1, 64, 2025, "vc0.1_noproj",
      f"{BASE}/dev_2026-04-13_14-57/eeg_jepa_bs64_lr0.0005_std0.1_cov0.1_noproj_nw1_ws1s_seed2025/latest.pth.tar"),
     (1, 1, 64, 2025, "vc0.25_noproj",
-     f"{BASE}/dev_2026-04-13_14-57/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_noproj_nw1_ws1s_seed2025/latest.pth.tar"),
+     f"{BASE}/dev_2026-04-14_10-04/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_noproj_nw1_ws1s_seed2025/latest.pth.tar"),
     (1, 1, 64, 2025, "vc1.0_noproj",
      f"{BASE}/dev_2026-04-13_14-58/eeg_jepa_bs64_lr0.0005_std1.0_cov1.0_noproj_nw1_ws1s_seed2025/latest.pth.tar"),
     # nw2_ws1
     (2, 1, 64, 2025, "vc0.1_noproj",
-     f"{BASE}/dev_2026-04-13_14-58/eeg_jepa_bs64_lr0.0005_std0.1_cov0.1_noproj_nw2_ws1s_seed2025/latest.pth.tar"),
+     f"{BASE}/dev_2026-04-14_10-03/eeg_jepa_bs64_lr0.0005_std0.1_cov0.1_noproj_nw2_ws1s_seed2025/latest.pth.tar"),
     (2, 1, 64, 2025, "vc0.25_noproj",
      f"{BASE}/dev_2026-04-13_14-58/eeg_jepa_bs64_lr0.0005_std0.25_cov0.25_noproj_nw2_ws1s_seed2025/latest.pth.tar"),
     (2, 1, 64, 2025, "vc1.0_noproj",
