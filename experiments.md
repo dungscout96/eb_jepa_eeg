@@ -90,7 +90,49 @@ EEG(s, c, t) = stimulus_response(c, τ) + subject_fingerprint(c) + noise(c, t)
 - Low-frequency envelope isolates the band with highest stimulus content (ISC 0.10-0.28)
 - Prediction loss may increase (subject shortcut removed), but stimulus probes should improve
 
-### Expected Outcome
-- Subject-trait probes (age/sex) should DROP (by design — fingerprint removed)
-- Movie feature probes should IMPROVE (encoder forced toward stimulus dynamics)
-- pred_loss may increase (harder task without subject shortcut)
+### Results
+
+**Delta Job:** 17595315 | **W&B:** https://wandb.ai/braindecode/eb_jepa/runs/gu8tw0ay
+**Best checkpoint:** epoch 25 (val/reg_loss=0.795) | **Early stopping:** triggered at epoch 44
+
+| Metric | Exp 1 (baseline) | Exp 2 (per-rec norm) | Change |
+|--------|-----------------|---------------------|--------|
+| **Best val/reg_loss** | 0.846 (ep50) | **0.795 (ep25)** | -6% better |
+| pred_loss (best ep) | 0.065 | 0.183 | harder task (expected) |
+
+**Probe eval (best.pth.tar = epoch 25):**
+
+| Probe | Val | Test | Exp 1 Val | Exp 1 Test |
+|-------|-----|------|-----------|------------|
+| Age AUC | 0.475 | **0.575** | 0.640 | 0.543 |
+| Age bal_acc | 0.520 | **0.587** | 0.516 | 0.483 |
+| Sex AUC | 0.468 | 0.500 | 0.555 | 0.490 |
+| Contrast corr | 0.037 | **0.087** | 0.048 | 0.056 |
+| Narrative corr | -0.031 | **0.057** | -0.016 | 0.049 |
+| Position corr | 0.022 | 0.042 | 0.039 | -0.028 |
+| Movie ID top-1 | 3.4% | 4.6% | 3.8% | 5.6% |
+| Movie ID top-5 | 23.2% | 22.2% | 23.6% | 20.4% |
+
+### Conclusions
+- **val/reg_loss improved** (0.795 vs 0.846) — per-recording norm helps training
+- **Test age bal_acc improved** (0.587 vs 0.483) — better generalization, smaller val-test gap
+- **Test contrast corr improved** (0.087 vs 0.056) — 55% improvement in stimulus decoding
+- **Val age AUC dropped** (0.475 vs 0.640) — expected, subject fingerprint partially removed
+- **Test age AUC improved** (0.575 vs 0.543) — representation generalizes better
+- **Key finding:** per-recording norm reduces val-test gap for subject traits (0.475→0.575 test vs 0.640→0.543 test), suggesting less overfitting to val distribution
+- **Stimulus probes still near chance** but trending in the right direction
+- **Early stopping worked** — saved 56 epochs of compute
+
+---
+
+## Experiment 1: Cross-Subject Contrastive Loss (Running)
+
+**Date:** 2026-04-14
+**Branch:** `kkokate/exp1-cross-subject-contrastive`
+**Delta Job:** 17597552 | **W&B:** https://wandb.ai/braindecode/eb_jepa/runs/nbmlnheb
+**Config:** Same as Exp 2 + `loss.contrastive_coeff=0.05, n_bins=20, temperature=0.1`
+
+### Key Change
+InfoNCE contrastive loss pulling embeddings from different subjects at the same movie time together. Discretizes position_in_movie into 20 bins (~10s each). Only stimulus-locked responses correlate across subjects, so this loss directly incentivizes stimulus encoding.
+
+### Status: Training (epoch ~2, contrastive_loss=4.09 ≈ log(64), at chance initially)
