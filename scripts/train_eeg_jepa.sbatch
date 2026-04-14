@@ -54,20 +54,23 @@ export WANDB_PROJECT="${WANDB_PROJECT:-eb_jepa}"
 # Pull latest code
 git fetch origin && git checkout main && git pull --ff-only
 
-# Run training with narrow predictor bottleneck (V-JEPA style)
-# Key change: predictor_embed_dim=24 forces encoder to learn richer representations
+# Experiment 2: per-recording normalization + low-frequency envelope
+# Removes subject fingerprint, isolates stimulus-driven delta/theta band
 PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py \
     --optim.epochs=100 \
+    --optim.early_stopping_patience=20 \
     --model.encoder_depth=2 \
     --model.predictor_embed_dim=24 \
     --optim.lr=5e-4 \
     --optim.lr_min=1e-6 \
     --optim.warmup_epochs=5 \
     --data.num_workers=2 \
+    --data.norm_mode=per_recording \
+    --data.add_envelope=true \
     --loss.std_coeff=0.25 \
     --loss.cov_coeff=0.25 \
     --loss.pred_loss_type=smooth_l1 \
-    --logging.wandb_group=delta_narrow_predictor \
+    --logging.wandb_group=exp2_per_rec_norm_envelope \
     ${EXTRA_ARGS:-}
 
 echo "Training complete!"

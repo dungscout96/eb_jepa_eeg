@@ -13,6 +13,8 @@ data:
   temporal_stride: 1      # Stride between sampled windows (1=contiguous, 4=8s apart)
   preprocessed: true     # Use preprocessed data (set true + preprocessed_dir to use)
   preprocessed_dir: null  # Auto-detects known paths; set explicitly to override
+  norm_mode: global       # "global" = dataset-wide mean/std; "per_recording" = removes subject fingerprint
+  add_envelope: false     # Append 1-8 Hz analytic envelope as extra channels (doubles n_chans)
   # Movie feature names used for probe evaluation (regression + classification heads)
   feature_names:
     - contrast_rms

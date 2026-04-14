@@ -845,6 +845,8 @@ class JEPAMovieDataset(HBNMovieDataset):
         self.n_windows = n_windows
         self.temporal_stride = temporal_stride
         self.feature_names = feature_names or self.DEFAULT_FEATURES
+        self._norm_mode = cfg.get("norm_mode", "global") if not isinstance(cfg, dict) else cfg.get("norm_mode", "global")
+        self._add_envelope = cfg.get("add_envelope", False) if not isinstance(cfg, dict) else cfg.get("add_envelope", False)
 
         required_windows = (n_windows - 1) * temporal_stride + 1
 
@@ -976,6 +978,8 @@ class JEPAMovieDataset(HBNMovieDataset):
 
     @property
     def n_chans(self):
+        if self._add_envelope:
+            return self._n_chans * 2
         return self._n_chans
 
     @property
@@ -988,7 +992,11 @@ class JEPAMovieDataset(HBNMovieDataset):
         info = mne.create_info(montage.ch_names, sfreq=self.sfreq, ch_types="eeg")
         raw = mne.io.RawArray(np.zeros((len(montage.ch_names), 1)), info, verbose=False)
         raw.set_montage(montage, verbose=False)
-        return raw.info["chs"]
+        chs = raw.info["chs"]
+        if self._add_envelope:
+            # Duplicate channel positions for envelope channels
+            chs = chs + chs
+        return chs
 
     def get_eeg_norm_stats(self):
         """Return EEG normalization stats dict with 'mean' and 'std' tensors."""
@@ -1017,13 +1025,55 @@ class JEPAMovieDataset(HBNMovieDataset):
         eeg = torch.from_numpy(
             _read_raw_windows(self._fif_paths[idx], crop_inds[indices])
         )
-        eeg = (eeg - self._eeg_mean) / self._eeg_std
+
+        # Normalization: per-recording removes subject fingerprint, global preserves it
+        if self._norm_mode == "per_recording":
+            rec_mean = eeg.mean(dim=(0, 2), keepdim=True)  # [1, C, 1]
+            rec_std = eeg.std(dim=(0, 2), keepdim=True).clamp(min=1e-8)
+            eeg = (eeg - rec_mean) / rec_std
+        else:
+            eeg = (eeg - self._eeg_mean) / self._eeg_std
+
+        # Optional: append 1-8 Hz envelope channels (where ISC is highest)
+        if self._add_envelope:
+            eeg = self._append_lowfreq_envelope(eeg)
 
         # Binary subject label (age > median, sex, …) — scalar float tensor.
         # NaN means metadata was unavailable for this recording.
         probe_label = torch.tensor(self._probe_labels[idx], dtype=torch.float32)
 
         return eeg, feats[indices], probe_label
+
+    @staticmethod
+    def _append_lowfreq_envelope(eeg: torch.Tensor) -> torch.Tensor:
+        """Append 1-8 Hz analytic amplitude envelope as extra channels.
+
+        The delta/theta band carries the highest inter-subject correlation
+        (ISC 0.10-0.28) for stimulus-driven responses during movie watching.
+
+        Args:
+            eeg: [n_windows, C, T] z-normalized EEG
+
+        Returns:
+            [n_windows, 2C, T] with original + envelope channels
+        """
+        from scipy.signal import butter, filtfilt, hilbert
+
+        x = eeg.numpy()
+        sfreq = x.shape[-1] / 2.0  # T samples / window_size_seconds(2s) = sfreq
+        # Bandpass 1-8 Hz (4th order Butterworth)
+        b, a = butter(4, [1, 8], btype="band", fs=sfreq)
+        # filtfilt needs sufficient length; skip if windows too short
+        if x.shape[-1] < 27:  # min padlen for order-4 butter
+            return eeg
+        filtered = filtfilt(b, a, x, axis=-1).astype("float32")
+        envelope = np.abs(hilbert(filtered, axis=-1)).astype("float32")
+        # Z-normalize envelope per-window to remove amplitude differences
+        env_mean = envelope.mean(axis=(0, 2), keepdims=True)
+        env_std = envelope.std(axis=(0, 2), keepdims=True)
+        env_std = np.clip(env_std, 1e-8, None)
+        envelope = (envelope - env_mean) / env_std
+        return torch.from_numpy(np.concatenate([x, envelope], axis=1))
 
 
 class HBNMovieProbeDataset(HBNMovieDataset):

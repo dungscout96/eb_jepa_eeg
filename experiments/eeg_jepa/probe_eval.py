@@ -93,9 +93,16 @@ def _embed_all_clips(dataset, jepa, device, batch_size, num_workers,
         for start in starts:
             indices = list(range(start, start + required, dataset.temporal_stride))
             eeg_np = _read_raw_windows(dataset._fif_paths[rec_idx], crop_inds[indices])
-            eeg = torch.from_numpy(eeg_np).unsqueeze(0)  # [1, n_windows, C, T]
-            eeg = (eeg - dataset._eeg_mean) / dataset._eeg_std
-            eeg = eeg.to(device)
+            eeg = torch.from_numpy(eeg_np)  # [n_windows, C, T]
+            if dataset._norm_mode == "per_recording":
+                rec_mean = eeg.mean(dim=(0, 2), keepdim=True)
+                rec_std = eeg.std(dim=(0, 2), keepdim=True).clamp(min=1e-8)
+                eeg = (eeg - rec_mean) / rec_std
+            else:
+                eeg = (eeg - dataset._eeg_mean) / dataset._eeg_std
+            if dataset._add_envelope:
+                eeg = dataset._append_lowfreq_envelope(eeg)
+            eeg = eeg.unsqueeze(0).to(device)  # [1, n_windows, C, T]
 
             with torch.no_grad():
                 tokens = jepa.context_encoder.encode_tokens(eeg, mask=None)
