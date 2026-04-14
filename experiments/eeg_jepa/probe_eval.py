@@ -401,10 +401,16 @@ def run(
         for k in _ckpt_sd
         if k.startswith("context_encoder.transformer.layers.")
     )
-    # Infer predictor_embed_dim: if predictor.input_proj.weight exists, it's a
-    # narrow predictor; otherwise predictor_dim == embed_dim
-    _pred_dim_key = "predictor.input_proj.weight"
-    _pred_dim = int(_ckpt_sd[_pred_dim_key].shape[0]) if _pred_dim_key in _ckpt_sd else None
+    # Infer predictor_embed_dim from checkpoint:
+    # - If predictor.input_proj exists → narrow predictor (predictor_dim < embed_dim)
+    # - If predictor.output_proj exists but no input_proj → predictor_dim == embed_dim
+    # - If neither exists → predictor_dim is None (no projection layers)
+    if "predictor.input_proj.weight" in _ckpt_sd:
+        _pred_dim = int(_ckpt_sd["predictor.input_proj.weight"].shape[0])
+    elif "predictor.output_proj.weight" in _ckpt_sd:
+        _pred_dim = int(_ckpt_sd["predictor.output_proj.weight"].shape[0])
+    else:
+        _pred_dim = None
 
     cfg = load_config(fname, {
         "data.n_windows": n_windows,
