@@ -98,7 +98,10 @@ def compute_corrca(
             # Extract movie-aligned data
             start_samp = int(video_start * sfreq)
             end_samp = int((video_start + video_duration) * sfreq)
-            data = raw.get_data(start=start_samp, stop=end_samp)  # [C, T]
+            try:
+                data = raw.get_data(start=start_samp, stop=min(end_samp, raw.n_times))
+            except (ValueError, IndexError):
+                continue
 
             if data.shape[1] < 100:
                 continue
