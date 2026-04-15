@@ -1004,6 +1004,15 @@ class JEPAMovieDataset(HBNMovieDataset):
         raw = mne.io.RawArray(np.zeros((len(montage.ch_names), 1)), info, verbose=False)
         raw.set_montage(montage, verbose=False)
         chs = raw.info["chs"]
+        if self._corrca_W is not None:
+            # For each CorrCA component, use the position of its peak-weight channel
+            W = self._corrca_W.numpy()
+            k = W.shape[1]
+            corrca_chs = []
+            for i in range(k):
+                peak_idx = int(np.argmax(np.abs(W[:, i])))
+                corrca_chs.append(chs[peak_idx])
+            return corrca_chs
         if self._add_envelope:
             # Duplicate channel positions for envelope channels
             chs = chs + chs
