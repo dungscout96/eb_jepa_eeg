@@ -83,21 +83,30 @@ def compute_corrca(
                 continue
 
             sfreq = raw.info["sfreq"]
-            n_chans = len(raw.ch_names)
 
-            # Find video_start annotation
-            video_start = None
-            for ann in raw.annotations:
-                if ann["description"] == "video_start":
-                    video_start = ann["onset"]
-                    video_duration = ann["duration"]
-                    break
-            if video_start is None:
+            # Use events_from_annotations (like the rest of the codebase)
+            # video_start annotation has duration=0, so we need video_stop to get the range
+            try:
+                events, event_id = mne.events_from_annotations(raw, verbose=False)
+            except Exception:
                 continue
 
-            # Extract movie-aligned data
-            start_samp = int(video_start * sfreq)
-            end_samp = int((video_start + video_duration) * sfreq)
+            if "video_start" not in event_id or "video_stop" not in event_id:
+                continue
+
+            try:
+                events_filtered = mne.pick_events(
+                    events, include=[event_id["video_start"], event_id["video_stop"]]
+                )
+            except Exception:
+                continue
+
+            if len(events_filtered) < 2:
+                continue
+
+            start_samp = int(events_filtered[0, 0])
+            end_samp = int(events_filtered[1, 0])
+
             try:
                 data = raw.get_data(start=start_samp, stop=min(end_samp, raw.n_times))
             except (ValueError, IndexError):
