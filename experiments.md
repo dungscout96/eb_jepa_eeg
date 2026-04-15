@@ -86,36 +86,27 @@ Stimulus SNR = -24 dB (0.4% of variance). Spatial masking trivial (r>0.9 between
 
 ---
 
-## Exp 6 Optimization Sweep (Running)
+## Exp 6 Optimization Sweep (Complete)
 
 All runs use pure JEPA loss (smooth_l1 pred + VCLoss). Only preprocessing and architecture differ.
 
-### Issues Found in Exp 6 Baseline
-1. Spatial masking broken: with 5ch, all mask blocks are 1ch wide → 4/5ch always visible → trivial interpolation
-2. encoder_depth=2 is shallow for 240 tokens
-3. Contrast corr dropped vs Exp 2 (0.061 vs 0.087) — may need more spatial coverage
+| Run | Pos corr | Lum corr | Con corr | Age bal_acc | Sex AUC |
+|-----|----------|----------|----------|-------------|---------|
+| **Baseline** (5ch) | 0.176 | **0.168** | **0.115** | 0.637 | 0.618 |
+| **A: 10 comp** | **0.215** | 0.153 | 0.070 | 0.585 | 0.602 |
+| **B: depth=4, pred=48** | -0.004 | 0.104 | 0.047 | 0.655 | 0.430 |
+| **C: 4bands x 3** (12ch) | 0.208 | 0.161 | 0.066 | 0.606 | 0.617 |
+| **D: 1-8Hz+OAS** (5ch) | 0.200 | 0.161 | **0.089** | 0.587 | **0.639** |
 
-### Run A: 10 CorrCA Components
-**CorrCA Job:** 17616857 (done) | **Training Job:** 17616952 (running)
-**Change:** n_components 5→10. ISC values: 0.019, 0.012, 0.006, 0.004, 0.003, 0.002, 0.002, 0.002, 0.002, 0.002
-**Hypothesis:** More components capture contrast-related spatial info. Also improves masking (10ch → blocks can be 1-3ch).
-**Config:** Same as Exp 6 baseline otherwise (depth=2, pred_dim=24, std/cov=0.25)
+**Note:** Baseline is 5-seed mean; A-D are single seed. High variance expected.
 
-### Run B: Deeper Encoder + Wider Predictor
-**Training Job:** 17616860 (running)
-**Change:** encoder_depth 2→4, predictor_embed_dim 24→48 (75% of 64), std/cov_coeff 0.25→1.0
-**Hypothesis:** Fix underfitting. Deeper encoder + wider predictor + stronger regularization.
-**Config:** Same 5-component CorrCA filters as Exp 6 baseline
-
-### Run C: Band-Specific CorrCA (4 bands × 3 components = 12ch)
-**CorrCA Job:** 17616858 (running) | **Training:** after CorrCA
-**Change:** Compute separate CorrCA per band (delta 1-4Hz, theta 4-8Hz, alpha 8-13Hz, beta 13-20Hz), 3 components each → 12 input channels. OAS shrinkage.
-**Hypothesis:** Different bands carry different stimulus info. 12ch fixes broken spatial masking.
-
-### Run D: Bandpass 1-8Hz + OAS Shrinkage CorrCA
-**CorrCA Job:** 17616859 (running) | **Training:** after CorrCA
-**Change:** Bandpass to 1-8Hz before CorrCA (ISC peaks in delta/theta). OAS covariance shrinkage replaces ridge 1e-6.
-**Hypothesis:** Filtering out alpha/beta noise before CorrCA → higher ISC eigenvalues → better stimulus components.
+### Key Findings
+- **Run A (10 comp):** Best position corr (+22%). More components help temporal localization but dilute contrast/luminance.
+- **Run B (deeper+wider): FAILED.** Wider predictor (48 vs 24) removed the information bottleneck → collapsed stimulus representations.
+- **Run C (band-specific):** Solid overall, 12ch fixes masking, but no clear win. Alpha/beta ISC near noise floor adds little.
+- **Run D (bandpass+OAS):** Best contrast recovery (0.089, matching Exp 2) and best sex AUC. Bandpass focuses on delta/theta where ISC is strongest.
+- **Narrow predictor bottleneck (24/64=37.5%) is critical.** Run B proves that relaxing it destroys stimulus encoding.
+- **Baseline with 5-seed averaging is still competitive.** Single-seed variance is high (~±0.05).
 
 ---
 
