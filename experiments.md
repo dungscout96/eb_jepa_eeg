@@ -31,15 +31,19 @@ Stimulus SNR = -24 dB (0.4% of variance). Spatial masking trivial (r>0.9 between
 
 ## Cross-Experiment Comparison (Test Set)
 
-| Metric | Chance | Exp 1 | Exp 2 | Exp 3 | Best |
-|--------|--------|-------|-------|-------|------|
-| Age bal_acc | 0.50 | 0.483 | **0.587** | 0.505 | Exp 2 |
-| Sex AUC | 0.50 | 0.490 | 0.500 | **0.549** | Exp 3 |
-| Contrast corr | 0.00 | 0.056 | **0.087** | 0.076 | Exp 2 |
-| Luminance AUC | 0.50 | 0.523 | 0.514 | **0.545** | Exp 3 |
-| Position AUC | 0.50 | — | 0.491 | **0.544** | Exp 3 |
+| Metric | Chance | Exp 1 | Exp 2 | Exp 3 | Exp 4 | Exp 6 | Best |
+|--------|--------|-------|-------|-------|-------|-------|------|
+| Age bal_acc | 0.50 | 0.483 | 0.587 | 0.505 | 0.573 | **0.597** | Exp 6 |
+| Age AUC | 0.50 | — | — | — | — | **0.655** | Exp 6 |
+| Sex AUC | 0.50 | 0.490 | 0.500 | 0.549 | — | **0.611** | Exp 6 |
+| Contrast corr | 0.00 | 0.056 | **0.087** | 0.076 | 0.066 | 0.061 | Exp 2 |
+| Luminance corr | 0.00 | — | — | — | — | **0.126** | Exp 6 |
+| Luminance AUC | 0.50 | 0.523 | 0.514 | 0.545 | — | **0.529** | Exp 3 |
+| Position corr | 0.00 | — | — | — | — | **0.191** | Exp 6 |
+| Position AUC | 0.50 | — | 0.491 | 0.544 | — | **0.572** | Exp 6 |
+| Narrative AUC | 0.50 | — | — | — | — | **0.553** | Exp 6 |
 
-**All stimulus metrics near theoretical single-trial ceiling (-24 dB).**
+**Exp 6 (CorrCA) is best overall — strongest position/luminance correlations and subject probes.**
 
 ---
 
@@ -56,20 +60,20 @@ Stimulus SNR = -24 dB (0.4% of variance). Spatial masking trivial (r>0.9 between
 
 ---
 
-## Exp 4: Temporal-Dominant Masking (Running)
-**Job:** 17605606 | **Branch:** kkokate/exp1-cross-subject-contrastive
+## Exp 4: Temporal-Dominant Masking
+**Job:** 17605606 | Early stopped ep ~44
 **Change:** Mask 2/4 time windows across ALL channels + 30% spatial in visible windows
-**Hypothesis:** Eliminates spatial interpolation shortcut. Temporal autocorrelation at 2s lag is r<0.3 (vs r>0.9 spatial).
+**Result:** No improvement over Exp 2. Age 0.573, Contrast 0.066, Narrative 0.062. Temporal masking didn't help — problem is input SNR, not masking strategy.
 
-## Exp 6: CorrCA Preprocessing (Running)
-**CorrCA Job:** 17605607 (computing filters) | **Training:** after CorrCA completes
-**Change:** Offline CorrCA eigenvalue solve → 129 channels projected to 5 stimulus-driven components
-**Hypothesis:** +15-20 dB SNR boost from projecting out non-stimulus dimensions.
+## Exp 6: CorrCA Preprocessing — BEST
+**CorrCA Job:** 17614210 | **Training Job:** 17614379 | **Eval Job:** 17614786 | Early stopped ep 44
+**Change:** Offline CorrCA eigenvalue solve (R_b w = λ R_w w) → 129ch projected to 5 ISC-maximizing components + per-recording norm
+**CorrCA ISC values:** 0.019, 0.012, 0.006, 0.004, 0.002 (701 subjects)
+**Result:** Best overall. Position corr **0.191** (new best), Luminance corr **0.126** (new best), Age bal_acc **0.597**, Sex AUC **0.611**, Narrative AUC **0.553**. All stimulus probes above chance. Contrast corr 0.061 (slightly below Exp 2's 0.087 — may need more components).
 
 ---
 
-## Missing Baselines
-1. Random encoder (untrained) + same probes
-2. Permutation test (shuffled labels)
-3. Handcrafted features (band power) + same probes
-4. Multiple seeds (3-5 runs)
+## Next Steps
+1. Try CorrCA with more components (10, 20) — contrast corr dropped, may need broader spatial coverage
+2. Missing baselines: random encoder, permutation test, band power features, multiple seeds
+3. Exp 5: Multi-task pretraining + resting-state baseline subtraction (planned)
