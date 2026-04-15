@@ -73,7 +73,54 @@ Stimulus SNR = -24 dB (0.4% of variance). Spatial masking trivial (r>0.9 between
 
 ---
 
-## Next Steps
-1. Try CorrCA with more components (10, 20) — contrast corr dropped, may need broader spatial coverage
-2. Missing baselines: random encoder, permutation test, band power features, multiple seeds
-3. Exp 5: Multi-task pretraining + resting-state baseline subtraction (planned)
+## Exp 6 Multi-Seed Validation (5 seeds: 2025, 42, 123, 456, 789)
+
+| Metric | Mean ± Std | Chance | Sig |
+|--------|-----------|--------|-----|
+| Position corr | **0.176 ± 0.048** | 0.0 | *** |
+| Luminance corr | **0.168 ± 0.059** | 0.0 | *** |
+| Contrast corr | **0.115 ± 0.054** | 0.0 | *** |
+| Position AUC | **0.580 ± 0.025** | 0.5 | *** |
+| Age bal_acc | **0.637 ± 0.024** | 0.5 | *** |
+| Sex AUC | **0.618 ± 0.007** | 0.5 | *** |
+
+---
+
+## Exp 6 Optimization Sweep (Running)
+
+All runs use pure JEPA loss (smooth_l1 pred + VCLoss). Only preprocessing and architecture differ.
+
+### Issues Found in Exp 6 Baseline
+1. Spatial masking broken: with 5ch, all mask blocks are 1ch wide → 4/5ch always visible → trivial interpolation
+2. encoder_depth=2 is shallow for 240 tokens
+3. Contrast corr dropped vs Exp 2 (0.061 vs 0.087) — may need more spatial coverage
+
+### Run A: 10 CorrCA Components
+**CorrCA Job:** 17616857 (done) | **Training Job:** 17616952 (running)
+**Change:** n_components 5→10. ISC values: 0.019, 0.012, 0.006, 0.004, 0.003, 0.002, 0.002, 0.002, 0.002, 0.002
+**Hypothesis:** More components capture contrast-related spatial info. Also improves masking (10ch → blocks can be 1-3ch).
+**Config:** Same as Exp 6 baseline otherwise (depth=2, pred_dim=24, std/cov=0.25)
+
+### Run B: Deeper Encoder + Wider Predictor
+**Training Job:** 17616860 (running)
+**Change:** encoder_depth 2→4, predictor_embed_dim 24→48 (75% of 64), std/cov_coeff 0.25→1.0
+**Hypothesis:** Fix underfitting. Deeper encoder + wider predictor + stronger regularization.
+**Config:** Same 5-component CorrCA filters as Exp 6 baseline
+
+### Run C: Band-Specific CorrCA (4 bands × 3 components = 12ch)
+**CorrCA Job:** 17616858 (running) | **Training:** after CorrCA
+**Change:** Compute separate CorrCA per band (delta 1-4Hz, theta 4-8Hz, alpha 8-13Hz, beta 13-20Hz), 3 components each → 12 input channels. OAS shrinkage.
+**Hypothesis:** Different bands carry different stimulus info. 12ch fixes broken spatial masking.
+
+### Run D: Bandpass 1-8Hz + OAS Shrinkage CorrCA
+**CorrCA Job:** 17616859 (running) | **Training:** after CorrCA
+**Change:** Bandpass to 1-8Hz before CorrCA (ISC peaks in delta/theta). OAS covariance shrinkage replaces ridge 1e-6.
+**Hypothesis:** Filtering out alpha/beta noise before CorrCA → higher ISC eigenvalues → better stimulus components.
+
+---
+
+## Missing Baselines
+1. Random encoder (untrained) + same probes
+2. Permutation test (shuffled labels)
+3. Handcrafted features (band power) + same probes
+4. Multiple seeds for training (not just eval)
