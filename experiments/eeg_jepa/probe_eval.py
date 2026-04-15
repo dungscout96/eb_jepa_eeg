@@ -361,6 +361,10 @@ def run(
     subject_probe_lr: float = 1e-3,
     # Eval splits: "val", "test", or "val,test"
     splits: str = "val,test",
+    # Data preprocessing overrides (must match training config)
+    norm_mode: str = "",
+    add_envelope: bool = False,
+    corrca_filters: str = "",
     # Run modes
     subject_only: bool = False,
     # W&B
@@ -408,14 +412,21 @@ def run(
     _pred_dim_key = "predictor.input_proj.weight"
     _pred_dim = int(_ckpt_sd[_pred_dim_key].shape[0]) if _pred_dim_key in _ckpt_sd else None
 
-    cfg = load_config(fname, {
+    _overrides = {
         "data.n_windows": n_windows,
         "data.window_size_seconds": window_size_seconds,
         "data.batch_size": batch_size,
         "data.num_workers": num_workers,
         "model.encoder_depth": _depth,
         "model.predictor_embed_dim": _pred_dim,
-    })
+    }
+    if norm_mode:
+        _overrides["data.norm_mode"] = norm_mode
+    if add_envelope:
+        _overrides["data.add_envelope"] = True
+    if corrca_filters:
+        _overrides["data.corrca_filters"] = corrca_filters
+    cfg = load_config(fname, _overrides)
 
     preprocessed_dir = resolve_preprocessed_dir(cfg.data.get("preprocessed_dir", None))
     preprocessed = cfg.data.get("preprocessed", False)
