@@ -6,10 +6,20 @@ stimulus-driven (subject-specific patterns cancel out across subjects).
 
 Usage (on Delta):
     export HBN_PREPROCESS_DIR=/projects/bbnv/kkokate/hbn_preprocessed
-    PYTHONPATH=. .venv/bin/python scripts/compute_corrca.py \
-        --output corrca_filters.npz \
-        --n_components 5 \
-        --task ThePresent
+
+    # Standard broadband CorrCA (5 components):
+    PYTHONPATH=. python scripts/compute_corrca.py --output_path corrca_5.npz --n_components 5
+
+    # 10 components:
+    PYTHONPATH=. python scripts/compute_corrca.py --output_path corrca_10.npz --n_components 10
+
+    # Bandpass 1-8Hz + OAS shrinkage:
+    PYTHONPATH=. python scripts/compute_corrca.py --output_path corrca_bp.npz \
+        --bandpass_low 1 --bandpass_high 8 --shrinkage oas
+
+    # Band-specific CorrCA (4 bands x 3 components = 12 channels):
+    PYTHONPATH=. python scripts/compute_corrca.py --output_path corrca_bands.npz \
+        --band_specific --n_components 3
 
 References:
     Parra et al. "Correlated Components Analysis" (NBDT, 2019)
@@ -24,6 +34,7 @@ import mne
 import numpy as np
 import torch
 from scipy.linalg import eigh
+from scipy.signal import butter, sosfiltfilt
 from tqdm import tqdm
 
 from eb_jepa.datasets.hbn import (
@@ -36,36 +47,64 @@ from eb_jepa.datasets.hbn import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+BANDS = {
+    "delta": (1, 4),
+    "theta": (4, 8),
+    "alpha": (8, 13),
+    "beta":  (13, 20),
+}
 
-def compute_corrca(
-    task: str = "ThePresent",
-    n_components: int = 5,
-    window_size_seconds: float = 2.0,
-    n_time_bins: int = 100,
-    output_path: str = "corrca_filters.npz",
-    preprocessed_dir: str | None = None,
-):
-    """Compute CorrCA spatial filters from training data.
 
-    Algorithm:
-        1. Load all training subjects' time-aligned EEG for the movie
-        2. Bin into n_time_bins temporal bins
-        3. Compute between-subject covariance R_b (shared stimulus response)
-        4. Compute within-subject covariance R_w (total variance)
-        5. Solve generalized eigenvalue problem: R_b w = λ R_w w
-        6. Save top-k spatial filter matrix W [n_chans, n_components]
-    """
-    if preprocessed_dir is None:
-        preprocessed_dir = PREPROCESSED_DIR
+def _bandpass(data, low, high, sfreq, order=4):
+    """Apply zero-phase Butterworth bandpass filter. data: [C, T]."""
+    sos = butter(order, [low, high], btype="band", fs=sfreq, output="sos")
+    return sosfiltfilt(sos, data, axis=-1).astype(np.float32)
 
-    # Load training split releases
+
+def _apply_shrinkage(R, method="oas"):
+    """Apply shrinkage to a covariance matrix."""
+    if method == "oas":
+        from sklearn.covariance import OAS
+        p = R.shape[0]
+        oas = OAS()
+        oas.fit(np.eye(p))  # dummy fit to initialize
+        # Manual OAS: shrink R toward scaled identity
+        n = max(p, 100)  # effective sample size
+        trace_R = np.trace(R)
+        trace_R2 = np.trace(R @ R)
+        rho_num = (1 - 2.0 / p) * trace_R2 + trace_R ** 2
+        rho_den = (n + 1 - 2.0 / p) * (trace_R2 - trace_R ** 2 / p)
+        rho = min(1.0, max(0.0, rho_num / max(rho_den, 1e-10)))
+        target = trace_R / p * np.eye(p)
+        R_shrunk = (1 - rho) * R + rho * target
+        logger.info("OAS shrinkage: rho=%.4f", rho)
+        return R_shrunk
+    elif method == "ledoit_wolf":
+        from sklearn.covariance import LedoitWolf
+        p = R.shape[0]
+        trace_R = np.trace(R)
+        trace_R2 = np.trace(R @ R)
+        n = max(p, 100)
+        rho = min(1.0, max(0.0, ((1 - 2.0 / p) * trace_R2 + trace_R ** 2)
+                  / ((n + 1 - 2.0 / p) * (trace_R2 - trace_R ** 2 / p) + 1e-10)))
+        target = trace_R / p * np.eye(p)
+        R_shrunk = (1 - rho) * R + rho * target
+        logger.info("Ledoit-Wolf shrinkage: rho=%.4f", rho)
+        return R_shrunk
+    else:
+        # Ridge fallback
+        R += np.eye(R.shape[0]) * 1e-6
+        return R
+
+
+def _load_movie_data(task, preprocessed_dir, n_time_bins, bandpass_low=None, bandpass_high=None):
+    """Load movie-aligned EEG from all training subjects, return binned data."""
     train_releases = SPLIT_RELEASES.get("train", {})
     logger.info("Loading training data for task '%s' from %d releases", task, len(train_releases))
 
-    # Collect per-subject time-binned EEG
-    # subject_data[bin_idx] = list of [C, T_samples] arrays from different subjects
     bin_data = {b: [] for b in range(n_time_bins)}
     n_subjects_loaded = 0
+    sfreq_detected = None
 
     for release in train_releases:
         logger.info("Loading release %s...", release)
@@ -83,9 +122,9 @@ def compute_corrca(
                 continue
 
             sfreq = raw.info["sfreq"]
+            if sfreq_detected is None:
+                sfreq_detected = sfreq
 
-            # Use events_from_annotations (like the rest of the codebase)
-            # video_start annotation has duration=0, so we need video_stop to get the range
             try:
                 events, event_id = mne.events_from_annotations(raw, verbose=False)
             except Exception:
@@ -115,6 +154,10 @@ def compute_corrca(
             if data.shape[1] < 100:
                 continue
 
+            # Optional bandpass filter
+            if bandpass_low is not None and bandpass_high is not None:
+                data = _bandpass(data, bandpass_low, bandpass_high, sfreq)
+
             # Bin into temporal bins
             samples_per_bin = data.shape[1] // n_time_bins
             for b in range(n_time_bins):
@@ -126,10 +169,11 @@ def compute_corrca(
             n_subjects_loaded += 1
 
     logger.info("Loaded %d subjects across %d releases", n_subjects_loaded, len(train_releases))
+    return bin_data, n_subjects_loaded, sfreq_detected
 
-    # Compute R_b (between-subject) and R_w (within-subject) covariance
-    # R_b = (1/K(K-1)) sum_{i!=j} cov(X_i, X_j)
-    # R_w = (1/K) sum_i cov(X_i, X_i)
+
+def _compute_covariance(bin_data, n_time_bins):
+    """Compute between-subject (R_b) and within-subject (R_w) covariance matrices."""
     logger.info("Computing covariance matrices...")
 
     n_chans_detected = None
@@ -144,13 +188,11 @@ def compute_corrca(
         if K < 2:
             continue
 
-        # Ensure all subjects have same n_chans
         if n_chans_detected is None:
             n_chans_detected = subjects_at_bin[0].shape[0]
             R_b = np.zeros((n_chans_detected, n_chans_detected), dtype=np.float64)
             R_w = np.zeros((n_chans_detected, n_chans_detected), dtype=np.float64)
 
-        # Stack subjects: [K, C, T]
         min_t = min(s.shape[1] for s in subjects_at_bin if s.shape[0] == n_chans_detected)
         valid = [s[:, :min_t] for s in subjects_at_bin if s.shape[0] == n_chans_detected]
         if len(valid) < 2:
@@ -160,13 +202,10 @@ def compute_corrca(
         K = X.shape[0]
         T = X.shape[2]
 
-        # Within-subject: average of X_i @ X_i^T
         for i in range(K):
             R_w += X[i] @ X[i].T / T
 
-        # Between-subject: average of X_i @ X_j^T
-        X_sum = X.sum(axis=0)  # [C, T]
-        # sum_{i!=j} X_i @ X_j^T = (sum_i X_i) @ (sum_j X_j)^T - sum_i X_i @ X_i^T
+        X_sum = X.sum(axis=0)
         R_b += (X_sum @ X_sum.T / T)
         for i in range(K):
             R_b -= X[i] @ X[i].T / T
@@ -174,29 +213,97 @@ def compute_corrca(
         n_pairs += K * (K - 1)
         n_samples_total += K
 
-    # Normalize
     R_b /= max(n_pairs, 1)
     R_w /= max(n_samples_total, 1)
 
-    # Regularize R_w for numerical stability
-    R_w += np.eye(n_chans_detected) * 1e-6
+    return R_b, R_w, n_chans_detected
+
+
+def _solve_corrca(R_b, R_w, n_components, shrinkage="ridge"):
+    """Solve generalized eigenvalue problem with optional shrinkage."""
+    R_w = _apply_shrinkage(R_w, shrinkage)
 
     logger.info("Solving generalized eigenvalue problem (R_b w = λ R_w w)...")
     eigenvalues, eigenvectors = eigh(R_b, R_w)
 
-    # Sort descending
     idx = np.argsort(eigenvalues)[::-1]
     eigenvalues = eigenvalues[idx]
     eigenvectors = eigenvectors[:, idx]
 
-    # Top-k components
-    W = eigenvectors[:, :n_components]  # [n_chans, n_components]
+    W = eigenvectors[:, :n_components]
     isc_values = eigenvalues[:n_components]
 
     logger.info("CorrCA ISC values (top %d): %s", n_components,
                 ", ".join(f"{v:.4f}" for v in isc_values))
 
-    # Save
+    return W, isc_values
+
+
+def compute_corrca(
+    task: str = "ThePresent",
+    n_components: int = 5,
+    n_time_bins: int = 100,
+    output_path: str = "corrca_filters.npz",
+    preprocessed_dir: str | None = None,
+    bandpass_low: float | None = None,
+    bandpass_high: float | None = None,
+    shrinkage: str = "ridge",
+    band_specific: bool = False,
+):
+    """Compute CorrCA spatial filters from training data.
+
+    Args:
+        bandpass_low/high: If set, bandpass filter before CorrCA (e.g., 1-8 Hz).
+        shrinkage: Covariance regularization: "ridge" (1e-6), "oas", or "ledoit_wolf".
+        band_specific: If True, compute separate CorrCA per frequency band
+            (delta/theta/alpha/beta), concatenate filters. Output has 4*n_components channels.
+    """
+    if preprocessed_dir is None:
+        preprocessed_dir = PREPROCESSED_DIR
+
+    if band_specific:
+        # Compute CorrCA separately for each frequency band, concatenate
+        all_W = []
+        all_isc = []
+        band_labels = []
+
+        for band_name, (low, high) in BANDS.items():
+            logger.info("=== Band: %s (%d-%d Hz) ===", band_name, low, high)
+            bin_data, n_subj, sfreq = _load_movie_data(
+                task, preprocessed_dir, n_time_bins, bandpass_low=low, bandpass_high=high)
+            R_b, R_w, n_chans = _compute_covariance(bin_data, n_time_bins)
+            W, isc = _solve_corrca(R_b, R_w, n_components, shrinkage)
+            all_W.append(W)
+            all_isc.extend(isc)
+            band_labels.extend([band_name] * n_components)
+            del bin_data  # free memory
+
+        W_concat = np.concatenate(all_W, axis=1)  # [129, 4*n_components]
+        isc_concat = np.array(all_isc, dtype=np.float32)
+
+        logger.info("Band-specific CorrCA: %d total components across %d bands",
+                     W_concat.shape[1], len(BANDS))
+        logger.info("All ISC values: %s", ", ".join(f"{v:.4f}" for v in isc_concat))
+
+        np.savez(
+            output_path,
+            W=W_concat.astype(np.float32),
+            isc_values=isc_concat,
+            n_subjects=n_subj,
+            n_chans=n_chans,
+            task=task,
+            band_labels=np.array(band_labels),
+        )
+        logger.info("Saved band-specific CorrCA filters to %s (shape: %s)",
+                     output_path, W_concat.shape)
+        return
+
+    # Standard single-band CorrCA
+    bin_data, n_subjects_loaded, sfreq = _load_movie_data(
+        task, preprocessed_dir, n_time_bins, bandpass_low, bandpass_high)
+    R_b, R_w, n_chans_detected = _compute_covariance(bin_data, n_time_bins)
+    W, isc_values = _solve_corrca(R_b, R_w, n_components, shrinkage)
+
     np.savez(
         output_path,
         W=W.astype(np.float32),
@@ -215,5 +322,9 @@ if __name__ == "__main__":
     parser.add_argument("--task", default="ThePresent")
     parser.add_argument("--n_time_bins", type=int, default=100)
     parser.add_argument("--preprocessed_dir", default=None)
+    parser.add_argument("--bandpass_low", type=float, default=None)
+    parser.add_argument("--bandpass_high", type=float, default=None)
+    parser.add_argument("--shrinkage", default="ridge", choices=["ridge", "oas", "ledoit_wolf"])
+    parser.add_argument("--band_specific", action="store_true")
     args = parser.parse_args()
     compute_corrca(**vars(args))
