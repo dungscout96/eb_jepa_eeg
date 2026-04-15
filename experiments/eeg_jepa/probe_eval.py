@@ -102,6 +102,8 @@ def _embed_all_clips(dataset, jepa, device, batch_size, num_workers,
                 eeg = (eeg - dataset._eeg_mean) / dataset._eeg_std
             if dataset._add_envelope:
                 eeg = dataset._append_lowfreq_envelope(eeg)
+            if dataset._corrca_W is not None:
+                eeg = torch.einsum("wct,ck->wkt", eeg, dataset._corrca_W)
             eeg = eeg.unsqueeze(0).to(device)  # [1, n_windows, C, T]
 
             with torch.no_grad():
