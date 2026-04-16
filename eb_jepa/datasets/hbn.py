@@ -847,6 +847,8 @@ class JEPAMovieDataset(HBNMovieDataset):
         self.feature_names = feature_names or self.DEFAULT_FEATURES
         self._norm_mode = cfg.get("norm_mode", "global") if not isinstance(cfg, dict) else cfg.get("norm_mode", "global")
         self._add_envelope = cfg.get("add_envelope", False) if not isinstance(cfg, dict) else cfg.get("add_envelope", False)
+        # Training augmentation: per-channel amplitude scaling
+        self._amp_scale_range = cfg.get("amp_scale_range", None) if not isinstance(cfg, dict) else cfg.get("amp_scale_range", None)
         # CorrCA spatial filters: project 129 channels → k stimulus-driven components
         corrca_path = cfg.get("corrca_filters", None) if not isinstance(cfg, dict) else cfg.get("corrca_filters", None)
         self._corrca_W = None
@@ -1062,6 +1064,12 @@ class JEPAMovieDataset(HBNMovieDataset):
         if self._corrca_W is not None:
             # eeg: [n_windows, C, T] → [n_windows, k, T]
             eeg = torch.einsum("wct,ck->wkt", eeg, self._corrca_W)
+
+        # Training augmentation: per-channel amplitude scaling
+        if self._amp_scale_range is not None:
+            lo, hi = self._amp_scale_range
+            gain = torch.empty(1, eeg.shape[1], 1).uniform_(lo, hi)  # [1, C, 1]
+            eeg = eeg * gain
 
         # Binary subject label (age > median, sex, …) — scalar float tensor.
         # NaN means metadata was unavailable for this recording.

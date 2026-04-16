@@ -16,6 +16,7 @@ data:
   norm_mode: global       # "global" = dataset-wide mean/std; "per_recording" = removes subject fingerprint
   add_envelope: false     # Append 1-8 Hz analytic envelope as extra channels (doubles n_chans)
   corrca_filters: null    # Path to CorrCA .npz file (projects 129 channels → k stimulus components)
+  amp_scale_range: null   # Per-channel amplitude scaling [lo, hi], e.g. [0.8, 1.2]. null = disabled.
   # Movie feature names used for probe evaluation (regression + classification heads)
   feature_names:
     - contrast_rms
