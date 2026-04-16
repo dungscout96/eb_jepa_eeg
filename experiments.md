@@ -110,6 +110,33 @@ All runs use pure JEPA loss (smooth_l1 pred + VCLoss). Only preprocessing and ar
 
 ---
 
+## Iterative Hyperparameter Search (10 iterations, single-seed)
+
+Base: Exp 6 baseline. All use pure JEPA loss (smooth_l1 + VCLoss). Only one variable changed per iteration.
+
+| Iter | Change | Pos corr | Lum corr | Con corr | Nar AUC | Age bal | Sex AUC |
+|------|--------|----------|----------|----------|---------|---------|---------|
+| **Base** | 5-seed mean | **0.176** | **0.168** | **0.115** | 0.527 | **0.637** | **0.618** |
+| 1 | Temporal masking | 0.209 | 0.142 | 0.057 | **0.555** | 0.598 | 0.609 |
+| 2 | 8 windows | 0.119 | 0.129 | 0.084 | 0.536 | 0.580 | 0.615 |
+| 3 | Overlap 20→5 | 0.191 | 0.122 | 0.057 | 0.555 | 0.604 | 0.610 |
+| 4 | VCLoss std=10 cov=1 | 0.061 | 0.061 | -0.008 | 0.523 | 0.617 | 0.622 |
+| 5 | EMA 0.99→0.999 | 0.195 | 0.136 | 0.065 | 0.553 | 0.607 | 0.609 |
+| 6 | batch_size=256 | 0.128 | 0.063 | 0.031 | 0.543 | 0.643 | 0.617 |
+| 7 | Amp augmentation | 0.060 | 0.036 | 0.049 | 0.535 | 0.541 | 0.617 |
+| 8 | 80ep no early stop | 0.189 | 0.136 | 0.062 | 0.550 | 0.597 | 0.615 |
+| 9 | lr=1e-4 | 0.125 | 0.083 | 0.018 | 0.535 | 0.624 | 0.621 |
+| **10** | **10comp + EMA 0.99** | **0.213** | 0.151 | 0.067 | **0.579** | 0.589 | 0.605 |
+
+### Conclusions
+1. **Baseline is remarkably robust.** No single-variable change consistently beat it across all metrics.
+2. **Input SNR is the bottleneck**, not model/training hyperparameters. Changes that perturb training dynamics (stronger VCLoss, larger batch, augmentation) destroy the fragile -24 dB stimulus signal.
+3. **Position vs luminance/contrast are different timescales.** Position (slow drift) is easy to improve; luminance/contrast (fast local features) are very sensitive.
+4. **Iter 10 (10 comp + slow EMA)** is best single-seed challenger: position 0.213, narrative AUC 0.579.
+5. **Multi-seed validation is essential.** Single-seed variance (~±0.05) exceeds most improvement margins.
+
+---
+
 ## Missing Baselines
 1. Random encoder (untrained) + same probes
 2. Permutation test (shuffled labels)
