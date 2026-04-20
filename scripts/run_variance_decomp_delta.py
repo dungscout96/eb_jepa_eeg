@@ -21,7 +21,7 @@ import sys
 from neurolab.jobs import Job
 
 BASE = "/u/dtyoung/eb_jepa_eeg/checkpoints/eeg_jepa"
-OUT = "/u/dtyoung/eb_jepa_eeg/outputs/variance_decomp"
+OUT = "/u/dtyoung/eb_jepa_eeg/outputs/variance_decomp_k32"
 
 # (nw, ws, bs, label, checkpoint_path)
 # Drawn from docs/best_subject_trait_checkpoints.md (seed=2025, 100 ep).
@@ -52,7 +52,7 @@ def _make_cmd(nw, ws, bs, ckpt_path):
         f" --window_size_seconds={ws}"
         f" --batch_size={bs}"
         f" --num_workers=4"
-        f" --n_clips_per_rec=4"
+        f" --n_clips_per_rec=32"
         f" --split=val"
         f" --output_dir={OUT}"
     )
@@ -85,7 +85,7 @@ def build_job():
         venv="__none__",
         branch="",
         partition="gpuA40x4",
-        time_limit="01:30:00",  # ~5 min/ckpt × 6 + aggregation; train-norm load dominates
+        time_limit="08:00:00",  # K=32: ~90 min/ckpt for nw4_ws4 × 3 + smaller configs
         mem_gb=64,
         gpus=1,
         env_vars={
