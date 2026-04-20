@@ -51,8 +51,9 @@ if [ -f "$HOME/.wandb_key" ]; then
 fi
 export WANDB_PROJECT="${WANDB_PROJECT:-eb_jepa}"
 
-# Pull latest code
-git fetch origin && git checkout main && git pull --ff-only
+# Pull latest code (branch can be overridden via GIT_BRANCH env var)
+GIT_BRANCH="${GIT_BRANCH:-main}"
+git fetch origin && git checkout "$GIT_BRANCH" && git pull --ff-only origin "$GIT_BRANCH"
 
 # Experiment 6: CorrCA spatial filters (129 → 5 ISC-maximizing components)
 # + per-recording normalization. Requires offline CorrCA computation:
