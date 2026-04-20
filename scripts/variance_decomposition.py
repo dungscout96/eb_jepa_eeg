@@ -410,6 +410,7 @@ def run(
         return
 
     assert checkpoint, "Pass --checkpoint=/path/to/latest.pth.tar (or --selftest / --aggregate_dir)"
+    from eb_jepa.training_utils import setup_device, setup_seed
     setup_seed(seed)
     device = setup_device("auto")
 
