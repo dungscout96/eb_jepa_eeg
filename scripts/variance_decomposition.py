@@ -268,10 +268,23 @@ class DecompStats:
     S: int
     K: int
     D: int
+    # Two-way (subject vs within) — what the script computed originally.
     var_total: float
     var_subject: float
     var_within: float
     eta_sq: float
+    # Three-way (subject × clip-position × residual). Valid only when clip
+    # index k is time-aligned across subjects (linspace sampling of the same
+    # stimulus, which is what _embed_per_clip does). Var_within decomposes
+    # further as var_within = var_stimulus + var_residual.
+    #   var_stimulus  = S * mean_k ||μ_k − grand||²  (between-clip, pooled over subj)
+    #   var_residual  = everything orthogonal to subject-marginal and clip-marginal
+    # Null for iid Gaussian: var_stimulus/var_total ≈ 1/S, so anything
+    # meaningfully above that is real stimulus-locked signal.
+    var_stimulus: float
+    var_residual: float
+    eta_sq_stimulus: float          # var_stimulus / var_total
+    stim_frac_of_within: float      # var_stimulus / var_within
     trace_identity_residual: float  # |trace(C_s)+trace(C_w)-trace(C_t)| / trace(C_t)
     eigvals_total: list  # top-min(D,40)
     eigvals_subject: list
@@ -310,6 +323,17 @@ def decompose(Z: np.ndarray) -> tuple[DecompStats, dict]:
     var_within = var_total - var_subject
     eta_sq = var_subject / var_total if var_total > 0 else float("nan")
 
+    # Three-way split: subject × clip-position × residual.
+    # Clips are sampled via np.linspace(0, n_clips-1, K) per recording, so
+    # clip index k corresponds to roughly the same movie position across
+    # subjects — the between-clip-position variance is stimulus-locked.
+    stim_mean = Z.mean(axis=0)  # [K, D]  mean over subjects at each clip-position
+    dev_stim = stim_mean - grand_mean
+    var_stimulus = float(S * (dev_stim ** 2).sum() / (S * K))
+    var_residual = var_within - var_stimulus
+    eta_sq_stimulus = var_stimulus / var_total if var_total > 0 else float("nan")
+    stim_frac_of_within = var_stimulus / var_within if var_within > 0 else float("nan")
+
     # Covariance (bessel-corrected; use same estimator for all three so trace
     # identity holds approximately).
     C_total = np.cov(Z_flat, rowvar=False)                  # (S*K - 1) divisor
@@ -345,6 +369,10 @@ def decompose(Z: np.ndarray) -> tuple[DecompStats, dict]:
         var_subject=var_subject,
         var_within=var_within,
         eta_sq=eta_sq,
+        var_stimulus=var_stimulus,
+        var_residual=var_residual,
+        eta_sq_stimulus=eta_sq_stimulus,
+        stim_frac_of_within=stim_frac_of_within,
         trace_identity_residual=float(trace_id_res),
         eigvals_total=eig_t[:top_n].tolist(),
         eigvals_subject=eig_s[:top_n].tolist(),
@@ -412,12 +440,19 @@ def run(
     corrca_filters: str = "",
     # Aggregation mode
     aggregate_dir: str = "",
+    # Reanalyze mode: recompute stats.json from saved embeddings.npz (no re-embedding).
+    reanalyze_dir: str = "",
     # Self-test
     selftest: bool = False,
 ):
     """Single-checkpoint variance decomposition, aggregation, or selftest."""
     if selftest:
         _selftest()
+        return
+
+    if reanalyze_dir:
+        _reanalyze(Path(reanalyze_dir))
+        _aggregate(Path(reanalyze_dir))
         return
 
     if aggregate_dir:
@@ -586,23 +621,80 @@ def _aggregate(agg_dir: Path):
     fig.savefig(figs / "principal_angles_k5.png", dpi=150)
     plt.close(fig)
 
+    # Stimulus fraction plot — only renders if the field is present (older
+    # stats.json files lack it; they'll show 0 until reanalyze is run).
+    stim_frac = [r.get("stim_frac_of_within", 0.0) for r in rows]
+    stim_null = 1.0 / rows[0]["S"] if rows else 0.0
+    fig, ax = plt.subplots(figsize=(max(6, 0.5 * len(rows)), 4))
+    ax.bar(range(len(rows)), stim_frac)
+    ax.set_xticks(range(len(rows)))
+    ax.set_xticklabels(labels, rotation=60, ha="right", fontsize=7)
+    ax.set_ylabel("Var_stimulus / Var_within")
+    ax.set_title("Stimulus-locked share of within-subject variance")
+    ax.axhline(stim_null, color="gray", linestyle="--",
+               label=f"null (iid, ≈1/S={stim_null:.4f})")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(figs / "stimulus_fraction.png", dpi=150)
+    plt.close(fig)
+
     # Summary markdown
     md_lines = [
         "# Variance Decomposition Summary",
         "",
-        "| run | regularizer | coeff | config | seed | S | K | D | η² | eff_rank(C_subj) | eff_rank(C_within) | angle@k=5 (mean deg) |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "| run | regularizer | coeff | config | seed | S | K | D "
+        "| η²_subj | η²_stim | stim/within | eff_rank(C_subj) | eff_rank(C_within) | angle@k=5 |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in rows:
         angle = np.mean(r["principal_angles_deg"].get(k_key, [np.nan]))
         md_lines.append(
             f"| {r['run_name']} | {r['regularizer']} | {r['coeff']} | "
             f"{r['config']} | {r['seed']} | {r['S']} | {r['K']} | {r['D']} | "
-            f"{r['eta_sq']:.3f} | {r['eff_rank_subject']:.2f} | "
-            f"{r['eff_rank_within']:.2f} | {angle:.1f} |"
+            f"{r['eta_sq']:.3f} | "
+            f"{r.get('eta_sq_stimulus', float('nan')):.4f} | "
+            f"{r.get('stim_frac_of_within', float('nan')):.4f} | "
+            f"{r['eff_rank_subject']:.2f} | {r['eff_rank_within']:.2f} | "
+            f"{angle:.1f} |"
         )
     (agg_dir / "summary.md").write_text("\n".join(md_lines) + "\n")
     logger.info("Wrote %s and figures/ under %s", agg_dir / "summary.md", agg_dir)
+
+
+# ---------------------------------------------------------------------------
+# Reanalyze: recompute stats.json from saved embeddings.npz files
+# ---------------------------------------------------------------------------
+
+
+def _reanalyze(dir_path: Path):
+    """Walk dir_path/*/embeddings.npz, recompute stats.json with latest fields."""
+    import json as _json
+    n = 0
+    for npz_path in sorted(dir_path.glob("*/embeddings.npz")):
+        run_dir = npz_path.parent
+        data = np.load(npz_path, allow_pickle=True)
+        Z = data["Z"]
+        stats, _raw = decompose(Z)
+
+        # Preserve external metadata from the old stats.json if present.
+        old = {}
+        stats_path = run_dir / "stats.json"
+        if stats_path.exists():
+            old = _json.load(open(stats_path))
+        new = asdict(stats)
+        for k in ("checkpoint", "run_name", "split", "n_windows",
+                  "window_size_seconds", "n_clips_per_rec", "embed_dim",
+                  "encoder_depth"):
+            if k in old:
+                new[k] = old[k]
+        new.setdefault("run_name", run_dir.name)
+        with open(stats_path, "w") as f:
+            _json.dump(new, f, indent=2)
+        n += 1
+        logger.info("  reanalyzed %s: η²_subj=%.3f  η²_stim=%.4f  stim/within=%.4f",
+                    run_dir.name, stats.eta_sq,
+                    stats.eta_sq_stimulus, stats.stim_frac_of_within)
+    logger.info("Reanalyzed %d runs under %s", n, dir_path)
 
 
 # ---------------------------------------------------------------------------
@@ -614,26 +706,37 @@ def _selftest():
     rng = np.random.default_rng(0)
     S, K, D = 50, 10, 16
 
-    # Case A: iid Gaussian — η² should be roughly 1/K for random data.
+    # Case A: iid Gaussian — η²_subj ≈ 1/K, η²_stim ≈ 1/S.
     Z = rng.standard_normal((S, K, D))
     stats, _ = decompose(Z)
-    print("[iid] η²=%.3f  (expected ≈ 1/K=%.3f)" % (stats.eta_sq, 1 / K))
+    print("[iid] η²_subj=%.3f (≈1/K=%.3f)  η²_stim=%.4f (≈1/S=%.4f)"
+          % (stats.eta_sq, 1 / K, stats.eta_sq_stimulus, 1 / S))
     print("[iid] trace identity residual: %.2e" % stats.trace_identity_residual)
-    print("[iid] var_total=%.4f  var_subject+var_within=%.4f  diff=%.2e"
+    print("[iid] var_total=%.4f  subj+within=%.4f  subj+stim+res=%.4f"
           % (stats.var_total,
              stats.var_subject + stats.var_within,
-             abs(stats.var_total - stats.var_subject - stats.var_within)))
+             stats.var_subject + stats.var_stimulus + stats.var_residual))
 
-    # Case B: strong subject structure — each subject has its own mean offset.
+    # Case B: strong subject structure.
     offsets = rng.standard_normal((S, 1, D)) * 5.0
     Z2 = rng.standard_normal((S, K, D)) + offsets
     stats2, _ = decompose(Z2)
-    print("[subj] η²=%.3f  (expected high)" % stats2.eta_sq)
-    print("[subj] angles k=5 (deg):", stats2.principal_angles_deg["k=5"])
+    print("[subj] η²_subj=%.3f (expected high)  η²_stim=%.4f (expected ≈1/S)"
+          % (stats2.eta_sq, stats2.eta_sq_stimulus))
+
+    # Case C: strong clip-position (stimulus) structure, shared across subjects.
+    stim = rng.standard_normal((1, K, D)) * 5.0
+    Z3 = rng.standard_normal((S, K, D)) + stim
+    stats3, _ = decompose(Z3)
+    print("[stim] η²_subj=%.3f (expected ≈1/K)  η²_stim=%.3f (expected high)"
+          % (stats3.eta_sq, stats3.eta_sq_stimulus))
+    print("[stim] stim/within=%.3f" % stats3.stim_frac_of_within)
 
     assert abs(stats.var_total - (stats.var_subject + stats.var_within)) < 1e-8
+    assert abs(stats.var_within - (stats.var_stimulus + stats.var_residual)) < 1e-8
     assert stats.trace_identity_residual < 1e-8
     assert stats2.eta_sq > 0.5
+    assert stats3.eta_sq_stimulus > 0.5
     print("selftest OK")
 
 
