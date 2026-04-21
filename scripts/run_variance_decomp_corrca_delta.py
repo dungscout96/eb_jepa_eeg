@@ -18,7 +18,6 @@ PYTHONPATH=~/Documents/Research/scalable-infra-for-EEG-research/neurolab \\
     python scripts/run_variance_decomp_corrca_delta.py --submit
 """
 
-import os
 import sys
 
 from neurolab.jobs import Job
@@ -63,7 +62,7 @@ def build_job():
         mem_gb=64,
         gpus=1,
         env_vars={
-            "WANDB_API_KEY": os.environ.get("WANDB_API_KEY", ""),
+            # wandb auto-reads ~/.netrc on Delta; no need to pipe the key.
             "HBN_PREPROCESS_DIR": "/projects/bbnv/kkokate/hbn_preprocessed",
         },
     )
