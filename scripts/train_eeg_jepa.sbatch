@@ -51,11 +51,13 @@ if [ -f "$HOME/.wandb_key" ]; then
 fi
 export WANDB_PROJECT="${WANDB_PROJECT:-eb_jepa}"
 
-# Pull latest code
-git fetch origin && git checkout main && git pull --ff-only
+# Pull latest code (branch can be overridden via GIT_BRANCH env var)
+GIT_BRANCH="${GIT_BRANCH:-main}"
+git fetch origin && git checkout "$GIT_BRANCH" && git pull --ff-only origin "$GIT_BRANCH"
 
-# Experiment 2: per-recording normalization + low-frequency envelope
-# Removes subject fingerprint, isolates stimulus-driven delta/theta band
+# Experiment 6: CorrCA spatial filters (129 → 5 ISC-maximizing components)
+# + per-recording normalization. Requires offline CorrCA computation:
+#   sbatch scripts/compute_corrca.sbatch
 PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py \
     --optim.epochs=100 \
     --optim.early_stopping_patience=20 \
@@ -66,11 +68,11 @@ PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py \
     --optim.warmup_epochs=5 \
     --data.num_workers=2 \
     --data.norm_mode=per_recording \
-    --data.add_envelope=true \
+    --data.corrca_filters=corrca_filters.npz \
     --loss.std_coeff=0.25 \
     --loss.cov_coeff=0.25 \
     --loss.pred_loss_type=smooth_l1 \
-    --logging.wandb_group=exp2_per_rec_norm_envelope \
+    --logging.wandb_group=exp6_corrca \
     ${EXTRA_ARGS:-}
 
 echo "Training complete!"
