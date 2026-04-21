@@ -1,5 +1,6 @@
 # EB-JEPA specific stuff
 /datasets/
+/outputs/
 __pycache__/**
 jepa_decoder.pth
 .vscode/**
