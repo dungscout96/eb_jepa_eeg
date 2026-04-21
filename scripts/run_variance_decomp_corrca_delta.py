@@ -32,11 +32,15 @@ OUT = "/u/dtyoung/eb_jepa_eeg/outputs/variance_decomp_corrca"
 
 
 def build_job():
+    # CorrCA encoder was trained with --data.norm_mode=per_recording; the
+    # variance decomposition must match or the geometry we measure reflects a
+    # distribution-shift artifact, not the trained encoder's actual behavior.
     cmd = (
         "PYTHONPATH=. uv run --group eeg"
         " python scripts/variance_decomposition.py"
         f" --checkpoint={CHECKPOINT}"
         f" --corrca_filters={CORRCA}"
+        " --norm_mode=per_recording"
         " --n_windows=4 --window_size_seconds=2"
         " --batch_size=64 --num_workers=4"
         " --n_clips_per_rec=32"

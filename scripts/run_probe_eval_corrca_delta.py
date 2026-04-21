@@ -26,11 +26,14 @@ CORRCA = "/projects/bbnv/kkokate/eb_jepa_eeg/corrca_filters.npz"
 
 
 def build_job():
+    # CorrCA encoder was trained with --data.norm_mode=per_recording; probe_eval
+    # must match or the encoder sees differently-normalized inputs at test time.
     cmd = (
         "PYTHONPATH=. uv run --group eeg"
         " python experiments/eeg_jepa/probe_eval.py"
         f" --checkpoint={CHECKPOINT}"
         f" --corrca_filters={CORRCA}"
+        " --norm_mode=per_recording"
         " --n_windows=4 --window_size_seconds=2"
         " --batch_size=64 --num_workers=4"
         " --probe_epochs=20"
