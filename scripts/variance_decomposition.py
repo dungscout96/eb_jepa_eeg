@@ -68,7 +68,9 @@ if not logger.handlers:
 
 def _build_and_load(checkpoint_path: Path, cfg_fname: str, n_windows: int,
                     window_size_seconds: int, split: str, device,
-                    batch_size: int, num_workers: int):
+                    batch_size: int, num_workers: int,
+                    norm_mode: str = "", add_envelope: bool = False,
+                    corrca_filters: str = ""):
     """Reconstruct MaskedJEPA and load weights. Returns (jepa, dataset, cfg)."""
     import torch
     from eb_jepa.architectures import EEGEncoderTokens, MaskedPredictor, Projector
@@ -95,14 +97,21 @@ def _build_and_load(checkpoint_path: Path, cfg_fname: str, n_windows: int,
     else:
         pred_dim = None
 
-    cfg = load_config(cfg_fname, {
+    overrides = {
         "data.n_windows": n_windows,
         "data.window_size_seconds": window_size_seconds,
         "data.batch_size": batch_size,
         "data.num_workers": num_workers,
         "model.encoder_depth": depth,
         "model.predictor_embed_dim": pred_dim,
-    })
+    }
+    if norm_mode:
+        overrides["data.norm_mode"] = norm_mode
+    if add_envelope:
+        overrides["data.add_envelope"] = True
+    if corrca_filters:
+        overrides["data.corrca_filters"] = corrca_filters
+    cfg = load_config(cfg_fname, overrides)
 
     preprocessed_dir = resolve_preprocessed_dir(cfg.data.get("preprocessed_dir", None))
     preprocessed = cfg.data.get("preprocessed", False)
@@ -231,6 +240,8 @@ def _embed_per_clip(dataset, jepa, device, n_clips_per_rec: int):
                     eeg = (eeg - dataset._eeg_mean) / dataset._eeg_std
                 if dataset._add_envelope:
                     eeg = dataset._append_lowfreq_envelope(eeg)
+                if getattr(dataset, "_corrca_W", None) is not None:
+                    eeg = torch.einsum("wct,ck->wkt", eeg, dataset._corrca_W)
 
                 eeg = eeg.unsqueeze(0).to(device)  # [1, n_windows, C, T]
                 tokens = jepa.context_encoder.encode_tokens(eeg, mask=None)
@@ -395,6 +406,10 @@ def run(
     output_dir: str = "outputs/variance_decomp",
     fname: str = "experiments/eeg_jepa/cfgs/default.yaml",
     seed: int = 2025,
+    # Data preprocessing overrides (must match training config)
+    norm_mode: str = "",
+    add_envelope: bool = False,
+    corrca_filters: str = "",
     # Aggregation mode
     aggregate_dir: str = "",
     # Self-test
@@ -420,6 +435,7 @@ def run(
     jepa, dataset, cfg = _build_and_load(
         ckpt_path, fname, n_windows, window_size_seconds, split,
         device, batch_size, num_workers,
+        norm_mode=norm_mode, add_envelope=add_envelope, corrca_filters=corrca_filters,
     )
 
     logger.info("Extracting per-clip embeddings (K=%d clips/rec)", n_clips_per_rec)
