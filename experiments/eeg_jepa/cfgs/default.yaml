@@ -74,7 +74,7 @@ loss:
 
 optim:
   epochs: 100
-  early_stopping_patience: 0  # 0 = disabled; N > 0 = stop after N epochs without val/reg_loss improvement
+  early_stopping_patience: 20  # 0 = disabled; N > 0 = stop after N epochs without val/reg_loss improvement
   lr: 3.0e-4
   lr_min: 1.0e-6       # Cosine LR schedule minimum (set to 0 to disable schedule)
   warmup_epochs: 5     # Linear warmup epochs before cosine decay
