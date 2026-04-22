@@ -273,15 +273,24 @@ class MaskedJEPA(nn.Module):
         for p_ctx, p_tgt in zip(self.context_encoder.parameters(), self.target_encoder.parameters()):
             p_tgt.data.lerp_(p_ctx.data, 1.0 - momentum)
 
-    def forward(self, eeg: torch.Tensor) -> tuple[torch.Tensor, dict]:
+    def forward(self, eeg: torch.Tensor,
+                tgt_eeg: torch.Tensor | None = None) -> tuple[torch.Tensor, dict]:
         """Forward pass: mask, encode, predict, compute loss.
 
         Args:
-            eeg: [B, T, C, W] raw EEG
+            eeg: [B, T, C, W] raw EEG used for the context encoder (and target
+                encoder when tgt_eeg is None — standard V-JEPA).
+            tgt_eeg: optional [B, T, C, W] EEG fed to the target encoder when
+                it should differ from eeg. Used for cross-subject paired JEPA,
+                where tgt_eeg is a permutation of eeg across the batch so the
+                target representation at window time t comes from a different
+                subject's EEG at the same movie time.
 
         Returns:
             (total_loss, loss_dict) where loss_dict contains individual loss components
         """
+        if tgt_eeg is None:
+            tgt_eeg = eeg
         B = eeg.shape[0]
         device = eeg.device
 
@@ -290,15 +299,20 @@ class MaskedJEPA(nn.Module):
         context_mask = mask_result.context_mask.to(device)
         pred_masks = [pm.to(device) for pm in mask_result.pred_masks]
 
-        # 2. Get positional embeddings (full, unmasked)
-        _, pos_embed = self.context_encoder.tokenize(eeg)  # [B, C*T*P, D]
+        # 2. Get positional embeddings (full, unmasked) — from tgt_eeg so the
+        # target position queries match the target encoder's input order (they
+        # only depend on channels + patches, so eeg/tgt_eeg are equivalent; use
+        # tgt_eeg for clarity).
+        _, pos_embed = self.context_encoder.tokenize(tgt_eeg)  # [B, C*T*P, D]
 
-        # 3. Context encoding: only unmasked tokens
+        # 3. Context encoding: only unmasked tokens from eeg (the "source" subject)
         ctx_tokens = self.context_encoder.encode_tokens(eeg, mask=context_mask)  # [B, n_ctx, D]
 
-        # 4. Target encoding: all tokens (no masking), no gradients
+        # 4. Target encoding: all tokens (no masking), no gradients — uses
+        #    tgt_eeg, which equals eeg in standard V-JEPA or a permuted batch
+        #    (different subject, same movie time) in cross-subject paired JEPA.
         with torch.no_grad():
-            tgt_tokens = self.target_encoder.encode_tokens(eeg, mask=None)  # [B, C*T*P, D]
+            tgt_tokens = self.target_encoder.encode_tokens(tgt_eeg, mask=None)  # [B, C*T*P, D]
 
         # 5. Gather positional embeddings for context and prediction targets
         ctx_pos = pos_embed[:, context_mask]  # [B, n_ctx, D]

@@ -847,6 +847,11 @@ class JEPAMovieDataset(HBNMovieDataset):
         self.feature_names = feature_names or self.DEFAULT_FEATURES
         self._norm_mode = cfg.get("norm_mode", "global") if not isinstance(cfg, dict) else cfg.get("norm_mode", "global")
         self._add_envelope = cfg.get("add_envelope", False) if not isinstance(cfg, dict) else cfg.get("add_envelope", False)
+        # Time-aligned batch sampling for cross-subject paired JEPA. 0 = disabled (random start
+        # per sample, standard behavior). N > 0 means __len__ reports n_rec * N and __getitem__
+        # decodes idx = rec * N + time_bin, yielding deterministic start positions within each bin.
+        # The paired TimeAlignedBatchSampler below yields B indices with the same time_bin.
+        self._time_aligned_bins = int(cfg.get("time_aligned_bins", 0)) if not isinstance(cfg, dict) else int(cfg.get("time_aligned_bins", 0))
         # CorrCA spatial filters: project 129 channels → k stimulus-driven components
         corrca_path = cfg.get("corrca_filters", None) if not isinstance(cfg, dict) else cfg.get("corrca_filters", None)
         self._corrca_W = None
@@ -1031,14 +1036,33 @@ class JEPAMovieDataset(HBNMovieDataset):
         return all_feats.median(0).values
 
     def __len__(self):
+        if self._time_aligned_bins > 0:
+            return len(self._fif_paths) * self._time_aligned_bins
         return len(self._fif_paths)
 
     def __getitem__(self, idx):
-        crop_inds = self._crop_inds[idx]
-        feats = self.feature_recordings[idx]
+        # Encoded-index path for time-aligned sampling: idx = rec * n_bins + time_bin.
+        # All samples in a batch that share the same time_bin start at (approximately)
+        # the same movie time across subjects — required for cross-subject paired JEPA.
+        if self._time_aligned_bins > 0:
+            rec_idx, time_bin = divmod(idx, self._time_aligned_bins)
+        else:
+            rec_idx, time_bin = idx, None
+        crop_inds = self._crop_inds[rec_idx]
+        feats = self.feature_recordings[rec_idx]
         n = len(crop_inds)
         required = (self.n_windows - 1) * self.temporal_stride + 1
-        start = torch.randint(0, n - required + 1, (1,)).item()
+        if time_bin is None:
+            start = torch.randint(0, n - required + 1, (1,)).item()
+        else:
+            # Deterministic start based on time_bin, clipped into the valid range.
+            # Use floor-rounded proportional mapping so the leftmost bin is 0 and
+            # the rightmost bin lands at the last valid start.
+            n_bins = self._time_aligned_bins
+            max_start = n - required
+            start = int(round(time_bin * max_start / max(n_bins - 1, 1))) if max_start > 0 else 0
+            start = max(0, min(start, max_start))
+        idx = rec_idx  # keep the rest of the function using idx as the recording index
         indices = list(range(start, start + required, self.temporal_stride))
 
         # Load only the needed windows from disk
@@ -1099,6 +1123,43 @@ class JEPAMovieDataset(HBNMovieDataset):
         env_std = np.clip(env_std, 1e-8, None)
         envelope = (envelope - env_mean) / env_std
         return torch.from_numpy(np.concatenate([x, envelope], axis=1))
+
+
+class TimeAlignedBatchSampler(torch.utils.data.Sampler):
+    """Yield batches of indices where all samples share the same movie time bin.
+
+    Used to enable cross-subject paired JEPA: within each batch of B samples,
+    every sample is drawn from a different recording but at the (approximately)
+    same movie time, so permuting the batch yields (subject_i, subject_j, t)
+    triples where only the stimulus signal is shared.
+
+    The paired JEPAMovieDataset must be constructed with ``time_aligned_bins
+    == n_time_bins`` (matching this sampler) so its ``__len__`` reports
+    ``n_recordings * n_time_bins`` and indexing is (rec * n_bins + time_bin).
+    """
+
+    def __init__(self, n_recordings: int, batch_size: int, n_time_bins: int,
+                 num_batches: int | None = None):
+        super().__init__(None)
+        if batch_size > n_recordings:
+            raise ValueError(
+                f"batch_size {batch_size} > n_recordings {n_recordings}; "
+                "cannot form a time-aligned batch without replacement."
+            )
+        self.n_recordings = n_recordings
+        self.batch_size = batch_size
+        self.n_time_bins = n_time_bins
+        # Match DataLoader's "one full epoch" size when not overridden.
+        self.num_batches = int(num_batches) if num_batches else (n_recordings // batch_size)
+
+    def __iter__(self):
+        for _ in range(self.num_batches):
+            time_bin = int(torch.randint(0, self.n_time_bins, (1,)).item())
+            recs = torch.randperm(self.n_recordings)[: self.batch_size].tolist()
+            yield [r * self.n_time_bins + time_bin for r in recs]
+
+    def __len__(self):
+        return self.num_batches
 
 
 class HBNMovieProbeDataset(HBNMovieDataset):

@@ -30,7 +30,7 @@ from eb_jepa.architectures import (
     Projector,
     TemporalMovieFeatureHead,
 )
-from eb_jepa.datasets.hbn import JEPAMovieDataset
+from eb_jepa.datasets.hbn import JEPAMovieDataset, TimeAlignedBatchSampler
 from eb_jepa.jepa import MaskedJEPA, MaskedJEPANoEMA, MaskedJEPAProbe
 from eb_jepa.logging import get_logger
 from eb_jepa.losses import VCLoss, SIGRegLoss
@@ -213,18 +213,52 @@ def run(
         preprocessed_dir=preprocessed_dir,
     )
 
+    # Val set should always use standard random-start sampling regardless of
+    # cfg.data.time_aligned_bins (which only applies to training batches for
+    # cross-subject paired JEPA). Otherwise val would report n_rec * n_bins
+    # samples per epoch and silently change the validation protocol.
+    val_set._time_aligned_bins = 0
+
     feature_stats = train_set.compute_feature_stats()
     feature_median = train_set.compute_feature_median()
 
     num_workers = cfg.data.num_workers
-    train_loader = DataLoader(
-        train_set,
-        batch_size=cfg.data.batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        pin_memory=True,
-        persistent_workers=num_workers > 0,
-    )
+
+    # Cross-subject paired JEPA requires time-aligned batches (all B samples at
+    # the same movie time bin). Activated when loss.cross_subject.probability > 0.
+    xsubj_cfg = cfg.loss.get("cross_subject", {})
+    xsubj_prob = float(xsubj_cfg.get("probability", 0.0))
+    xsubj_bins = int(xsubj_cfg.get("n_time_bins", 0))
+    use_time_aligned_sampler = xsubj_prob > 0.0 and xsubj_bins > 0
+    if use_time_aligned_sampler:
+        # Dataset was constructed with data.time_aligned_bins == xsubj_bins so
+        # __len__ = n_rec * xsubj_bins and __getitem__ decodes (rec, time_bin).
+        batch_sampler = TimeAlignedBatchSampler(
+            n_recordings=len(train_set) // xsubj_bins,
+            batch_size=cfg.data.batch_size,
+            n_time_bins=xsubj_bins,
+        )
+        train_loader = DataLoader(
+            train_set,
+            batch_sampler=batch_sampler,
+            num_workers=num_workers,
+            pin_memory=True,
+            persistent_workers=num_workers > 0,
+        )
+        logger.info(
+            "Cross-subject paired JEPA enabled: prob=%.2f, n_time_bins=%d, "
+            "%d recordings, %d batches/epoch.",
+            xsubj_prob, xsubj_bins, len(train_set) // xsubj_bins, len(batch_sampler),
+        )
+    else:
+        train_loader = DataLoader(
+            train_set,
+            batch_size=cfg.data.batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=True,
+            persistent_workers=num_workers > 0,
+        )
     val_loader = DataLoader(
         val_set,
         batch_size=cfg.data.batch_size,
@@ -441,7 +475,25 @@ def run(
 
             # --- Masked JEPA pretraining ---
             optimizer.zero_grad()
-            jepa_loss, loss_dict = jepa(eeg)
+            # Cross-subject paired JEPA: with probability xsubj_prob, permute the
+            # batch so the target encoder sees a different subject's EEG at the
+            # same movie time (batches are time-aligned by construction). The
+            # only signal shared between the permuted source/target pair is the
+            # stimulus — forces the JEPA predictor to learn stimulus-driven
+            # features inside the unchanged JEPA loss.
+            tgt_eeg = None
+            xsubj_active = use_time_aligned_sampler and torch.rand(1).item() < xsubj_prob
+            if xsubj_active:
+                B_cur = eeg.size(0)
+                if B_cur >= 2:
+                    perm = torch.randperm(B_cur, device=eeg.device)
+                    # Avoid self-pair (subject_i paired with themselves)
+                    self_hits = (perm == torch.arange(B_cur, device=eeg.device))
+                    if self_hits.any():
+                        perm = perm.roll(1)
+                    tgt_eeg = eeg[perm]
+            jepa_loss, loss_dict = jepa(eeg, tgt_eeg=tgt_eeg)
+            loss_dict["xsubj_active"] = 1.0 if xsubj_active else 0.0
             jepa_loss.backward()
             torch.nn.utils.clip_grad_norm_(
                 list(jepa.context_encoder.parameters())
