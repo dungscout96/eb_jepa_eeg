@@ -16,6 +16,7 @@ data:
   norm_mode: global       # "global" = dataset-wide mean/std; "per_recording" = removes subject fingerprint
   add_envelope: false     # Append 1-8 Hz analytic envelope as extra channels (doubles n_chans)
   corrca_filters: null    # Path to CorrCA .npz file (projects 129 channels → k stimulus components)
+  clip_embeddings: null   # Path to frame-level movie embeddings .npz (e.g. CLIP ViT-L/14) for cross-modal alignment
   # Movie feature names used for probe evaluation (regression + classification heads)
   feature_names:
     - contrast_rms
@@ -71,6 +72,14 @@ loss:
     num_slices: 256   # Number of random projection directions
     coeff: 0.1        # SIGReg loss weight (lambda)
   pred_loss_type: mse  # Prediction loss: "mse" or "smooth_l1" (Huber, used in V-JEPA)
+  # Cross-modal alignment (CLIP-style InfoNCE between EEG and movie-frame embeddings).
+  # Only active when loss.clip_align_coeff > 0 AND data.clip_embeddings is set.
+  clip_align_coeff: 0.0   # auxiliary loss weight (0 = disabled)
+  clip_align:
+    temperature: 0.1            # initial temperature (smaller = sharper logits)
+    learnable_temperature: true # let temperature be a learnable scalar (CLIP-style)
+    proj_hidden: 256            # hidden dim of EEG→CLIP projection MLP
+    per_window: false           # true: per-window InfoNCE with B*T negatives; false: sample-level with B
 
 optim:
   epochs: 100

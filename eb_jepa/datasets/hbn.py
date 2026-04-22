@@ -857,6 +857,36 @@ class JEPAMovieDataset(HBNMovieDataset):
                         corrca_path, corrca["W"].shape[0], corrca["W"].shape[1],
                         ", ".join(f"{v:.3f}" for v in corrca["isc_values"]))
 
+        # Frozen CLIP (or other vision model) frame embeddings for cross-modal alignment.
+        # Expected: npz with 'embeddings' [n_frames, D] and 'frame_indices' [n_frames].
+        clip_path = cfg.get("clip_embeddings", None) if not isinstance(cfg, dict) else cfg.get("clip_embeddings", None)
+        self._clip_embeddings = None
+        self._clip_dim = 0
+        if clip_path is not None:
+            clip_npz = np.load(clip_path)
+            # Build a [max_frame_index + 1, D] tensor so indexing by frame_idx is O(1).
+            # Missing frames (if any) are filled with the nearest preceding embedding.
+            emb = clip_npz["embeddings"].astype(np.float32)
+            frame_idx = clip_npz["frame_indices"].astype(np.int64)
+            order = np.argsort(frame_idx)
+            frame_idx = frame_idx[order]
+            emb = emb[order]
+            n_frames_total = MOVIE_METADATA[self.task].get("frame_count",
+                                                           int(frame_idx.max()) + 1)
+            full = np.zeros((int(n_frames_total), emb.shape[1]), dtype=np.float32)
+            last = emb[0]
+            cur = 0
+            for i in range(int(n_frames_total)):
+                while cur < len(frame_idx) and frame_idx[cur] < i:
+                    cur += 1
+                if cur < len(frame_idx) and frame_idx[cur] == i:
+                    last = emb[cur]
+                full[i] = last
+            self._clip_embeddings = torch.from_numpy(full)
+            self._clip_dim = self._clip_embeddings.shape[1]
+            logger.info("Loaded CLIP frame embeddings from %s: %d frames × %d dim",
+                        clip_path, self._clip_embeddings.shape[0], self._clip_dim)
+
         required_windows = (n_windows - 1) * temporal_stride + 1
 
         # Filter recordings with enough windows and pre-extract feature tensors.
@@ -865,6 +895,7 @@ class JEPAMovieDataset(HBNMovieDataset):
         filtered_crops = []
         filtered_metadata = []
         self.feature_recordings = []
+        self.clip_frame_idx = []   # int tensor [n_win] per recording (only populated if clip enabled)
         self._n_chans = None
         self._n_times = None
 
@@ -884,10 +915,30 @@ class JEPAMovieDataset(HBNMovieDataset):
             feats = torch.tensor(feats, dtype=torch.float32)
             feats = torch.nan_to_num(feats, nan=0.0)
 
+            # Cache per-window movie frame indices for CLIP alignment.
+            # Parent's create_windows_from_events uses trial_start_offset_samples =
+            # visual_processing_delay * sfreq, so crop_inds[0][1] is exactly
+            # video_start_sample + delay_samples. The movie timestamp at window i is
+            # therefore (crop_inds[i][1] - crop_inds[0][1]) / sfreq — delay cancels.
+            if self._clip_embeddings is not None:
+                fps = MOVIE_METADATA[self.task]["fps"]
+                first_start = int(crop_inds[0][1])
+                n_frames_total = self._clip_embeddings.shape[0]
+                fidx = []
+                for i in range(n_win):
+                    movie_ts = (int(crop_inds[i][1]) - first_start) / self.sfreq
+                    f = int(movie_ts * fps)
+                    f = max(0, min(f, n_frames_total - 1))
+                    fidx.append(f)
+                clip_fidx_tensor = torch.tensor(fidx, dtype=torch.long)
+            else:
+                clip_fidx_tensor = torch.zeros(n_win, dtype=torch.long)
+
             filtered_paths.append(self._fif_paths[rec_idx])
             filtered_crops.append(crop_inds)
             filtered_metadata.append(self._recording_metadata[rec_idx])
             self.feature_recordings.append(feats)
+            self.clip_frame_idx.append(clip_fidx_tensor)
 
             # Capture shape from first valid recording (one cheap read)
             if self._n_chans is None:
@@ -1067,7 +1118,15 @@ class JEPAMovieDataset(HBNMovieDataset):
         # NaN means metadata was unavailable for this recording.
         probe_label = torch.tensor(self._probe_labels[idx], dtype=torch.float32)
 
-        return eeg, feats[indices], probe_label
+        # CLIP embeddings at each selected window's movie frame. Empty [n_win, 0]
+        # when not configured — downstream consumers skip when last dim is 0.
+        if self._clip_embeddings is not None:
+            fidx = self.clip_frame_idx[idx][indices]
+            clip_emb = self._clip_embeddings.index_select(0, fidx)
+        else:
+            clip_emb = torch.zeros(len(indices), 0, dtype=torch.float32)
+
+        return eeg, feats[indices], probe_label, clip_emb
 
     @staticmethod
     def _append_lowfreq_envelope(eeg: torch.Tensor) -> torch.Tensor:
