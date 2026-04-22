@@ -278,7 +278,7 @@ def _embed_clips_with_position(loader, jepa, device, pos_feature_idx):
     jepa.eval()
     all_embs = []
     all_pos = []
-    for eeg, features, _ in loader:
+    for eeg, features, *_ in loader:
         eeg = eeg.to(device)
         with torch.no_grad():
             tokens = jepa.context_encoder.encode_tokens(eeg, mask=None)
@@ -581,7 +581,7 @@ def run(
             classification_probe.train()
             reg_total = cls_total = 0.0
             n = 0
-            for eeg, features, _ in tqdm(train_loader, desc=f"Movie probe {epoch+1}/{probe_epochs}", leave=False):
+            for eeg, features, *_ in tqdm(train_loader, desc=f"Movie probe {epoch+1}/{probe_epochs}", leave=False):
                 eeg = eeg.to(device)
                 features = features.to(device)
                 movie_probe_opt.zero_grad()

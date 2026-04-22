@@ -438,3 +438,57 @@ class SIGRegLoss(nn.Module):
         sigreg = epps_pulley(proj).mean()
         weighted = self.coeff * sigreg
         return weighted, sigreg, {"sigreg_loss": sigreg.item()}
+
+
+class CrossModalAlignLoss(nn.Module):
+    """Symmetric InfoNCE (CLIP-style) between EEG and frozen movie embeddings.
+
+    Given L2-normalized EEG and target embeddings at the same movie time, pull
+    matched pairs together and push non-matched pairs apart with a learnable
+    temperature. Identical in form to the CLIP/MindEye objectives.
+    """
+
+    def __init__(self, coeff: float = 0.5, temperature: float = 0.1,
+                 learnable_temp: bool = True):
+        super().__init__()
+        self.coeff = coeff
+        if learnable_temp:
+            # log_temp so temperature stays positive; init to log(1/temperature)
+            self.log_inv_temp = nn.Parameter(
+                torch.tensor(float(1.0 / max(temperature, 1e-4))).log()
+            )
+        else:
+            self.register_buffer("log_inv_temp",
+                                 torch.tensor(float(1.0 / max(temperature, 1e-4))).log())
+
+    def forward(self, eeg_emb: torch.Tensor, target_emb: torch.Tensor):
+        """Compute symmetric InfoNCE loss.
+
+        Args:
+            eeg_emb: [B, D] EEG embeddings (after projection head).
+            target_emb: [B, D] target embeddings (e.g. CLIP).
+
+        Returns:
+            (weighted_loss, unweighted_loss, loss_dict)
+        """
+        eeg = F.normalize(eeg_emb, dim=-1)
+        tgt = F.normalize(target_emb, dim=-1)
+        # Clamp inv-temp to avoid numerical blow-up
+        inv_temp = self.log_inv_temp.exp().clamp(max=100.0)
+        logits = eeg @ tgt.T * inv_temp  # [B, B]
+        labels = torch.arange(logits.size(0), device=logits.device)
+        loss_e = F.cross_entropy(logits, labels)
+        loss_t = F.cross_entropy(logits.T, labels)
+        loss = 0.5 * (loss_e + loss_t)
+
+        # Diagnostic: top-1 retrieval accuracy in each direction
+        with torch.no_grad():
+            acc_e = (logits.argmax(dim=1) == labels).float().mean()
+            acc_t = (logits.T.argmax(dim=1) == labels).float().mean()
+
+        weighted = self.coeff * loss
+        return weighted, loss, {
+            "clip_align_loss": loss.item(),
+            "clip_align_acc": 0.5 * (acc_e.item() + acc_t.item()),
+            "clip_align_inv_temp": inv_temp.item(),
+        }

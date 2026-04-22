@@ -33,7 +33,7 @@ from eb_jepa.architectures import (
 from eb_jepa.datasets.hbn import JEPAMovieDataset
 from eb_jepa.jepa import MaskedJEPA, MaskedJEPANoEMA, MaskedJEPAProbe
 from eb_jepa.logging import get_logger
-from eb_jepa.losses import VCLoss, SIGRegLoss
+from eb_jepa.losses import VCLoss, SIGRegLoss, CrossModalAlignLoss
 from eb_jepa.masking import MultiBlockMaskCollator
 from eb_jepa.sanity_checks import SanityCheckHook
 from eb_jepa.training_utils import (
@@ -355,6 +355,40 @@ def run(
     jepa_params = list(jepa.context_encoder.parameters()) + list(jepa.predictor.parameters())
     if jepa.regularizer is not None:
         jepa_params += [p for p in jepa.regularizer.parameters() if p.requires_grad]
+
+    # Optional cross-modal alignment: project EEG embeddings into the CLIP space
+    # and add a symmetric InfoNCE loss against precomputed movie frame embeddings.
+    clip_align_coeff = float(cfg.loss.get("clip_align_coeff", 0.0))
+    clip_head = None
+    clip_align_fn = None
+    clip_target_dim = 0
+    if clip_align_coeff > 0.0:
+        clip_target_dim = getattr(train_set, "_clip_dim", 0)
+        if clip_target_dim == 0:
+            raise ValueError(
+                "loss.clip_align_coeff > 0 but data.clip_embeddings is unset "
+                "(dataset returned no CLIP features)."
+            )
+        clip_cfg = cfg.loss.get("clip_align", {})
+        proj_hidden = int(clip_cfg.get("proj_hidden", 256))
+        clip_head = nn.Sequential(
+            nn.Linear(embed_dim, proj_hidden),
+            nn.GELU(),
+            nn.Linear(proj_hidden, clip_target_dim),
+        ).to(device)
+        clip_align_fn = CrossModalAlignLoss(
+            coeff=clip_align_coeff,
+            temperature=float(clip_cfg.get("temperature", 0.1)),
+            learnable_temp=bool(clip_cfg.get("learnable_temperature", True)),
+        ).to(device)
+        jepa_params += list(clip_head.parameters())
+        jepa_params += [p for p in clip_align_fn.parameters() if p.requires_grad]
+        logger.info(
+            "Cross-modal alignment enabled: proj %d→%d→%d, coeff=%.3f, temp=%.3f",
+            embed_dim, proj_hidden, clip_target_dim, clip_align_coeff,
+            float(clip_cfg.get("temperature", 0.1)),
+        )
+
     optimizer = Adam(jepa_params, lr=cfg.optim.lr)
     probe_optimizer = Adam(
         list(regression_probe.head.parameters())
@@ -434,20 +468,42 @@ def run(
             disable=cfg.logging.get("tqdm_silent", False),
         )
 
-        for eeg, features, probe_labels in pbar:
+        for batch in pbar:
+            # Dataset returns (eeg, features, probe_labels, clip_emb).
+            # clip_emb has last-dim 0 when cfg.data.clip_embeddings is unset.
+            eeg, features, probe_labels, clip_emb = batch
             eeg = eeg.to(device)
             features = features.to(device)  # [B, T, n_features]
+            if clip_align_fn is not None and clip_emb.shape[-1] > 0:
+                clip_emb = clip_emb.to(device)  # [B, T, D_clip]
             # probe_labels: [B] float (NaN where no subject metadata) — stays on CPU
 
             # --- Masked JEPA pretraining ---
             optimizer.zero_grad()
             jepa_loss, loss_dict = jepa(eeg)
-            jepa_loss.backward()
-            torch.nn.utils.clip_grad_norm_(
+
+            # --- Optional cross-modal alignment loss ---
+            if clip_align_fn is not None and clip_emb.shape[-1] > 0:
+                # Unmasked forward through context encoder, with gradients.
+                all_tokens = jepa.context_encoder.encode_tokens(eeg, mask=None)  # [B, C*T*P, D]
+                eeg_pooled = all_tokens.mean(dim=1)                               # [B, D]
+                eeg_proj = clip_head(eeg_pooled)                                   # [B, D_clip]
+                clip_target = clip_emb.mean(dim=1)                                 # [B, D_clip]
+                align_weighted, align_raw, align_dict = clip_align_fn(eeg_proj, clip_target)
+                total_step_loss = jepa_loss + align_weighted
+                loss_dict.update(align_dict)
+                loss_dict["clip_align_weighted"] = align_weighted.item()
+            else:
+                total_step_loss = jepa_loss
+
+            total_step_loss.backward()
+            grad_clip_params = (
                 list(jepa.context_encoder.parameters())
-                + list(jepa.predictor.parameters()),
-                max_norm=1.0,
+                + list(jepa.predictor.parameters())
             )
+            if clip_head is not None:
+                grad_clip_params += list(clip_head.parameters())
+            torch.nn.utils.clip_grad_norm_(grad_clip_params, max_norm=1.0)
             sanity_metrics = sanity_hook.step(
                 global_step, eeg, features, jepa, loss_dict,
                 probe_labels=probe_labels,
@@ -474,18 +530,23 @@ def run(
             (reg_loss + cls_loss).backward()
             probe_optimizer.step()
 
-            pbar.set_postfix({
+            postfix = {
                 "loss": f"{jepa_loss.item():.4f}",
                 "vc":   f"{float(regl):.4f}",
                 "pred": f"{float(pl):.4f}",
                 "reg":  f"{reg_loss.item():.4f}",
                 "cls":  f"{cls_loss.item():.4f}",
-            })
+            }
+            if "clip_align_loss" in loss_dict:
+                postfix["clip"] = f"{loss_dict['clip_align_loss']:.3f}"
+                postfix["clip_acc"] = f"{loss_dict.get('clip_align_acc', 0.0):.3f}"
+            pbar.set_postfix(postfix)
 
             if wandb_run:
                 import wandb
                 step_metrics = {
                     "train_step/jepa_loss": jepa_loss.item(),
+                    "train_step/total_loss": total_step_loss.item(),
                     "train_step/vc_loss":   float(regl),
                     "train_step/pred_loss": float(pl),
                     "train_step/reg_loss":  reg_loss.item(),
@@ -494,6 +555,10 @@ def run(
                 }
                 for k, v in regldict.items():
                     step_metrics[f"train_step/{k}"] = float(v)
+                for k in ("clip_align_loss", "clip_align_acc",
+                         "clip_align_inv_temp", "clip_align_weighted"):
+                    if k in loss_dict:
+                        step_metrics[f"train_step/{k}"] = float(loss_dict[k])
                 wandb.log(step_metrics, step=global_step)
 
             global_step += 1
