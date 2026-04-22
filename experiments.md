@@ -186,12 +186,12 @@ Base: Exp 6 baseline. All use pure JEPA loss (smooth_l1 + VCLoss). Only one vari
 |---|---:|---:|---:|---:|---|
 | position corr | 0.176 ± 0.048 | **0.236 ± 0.013** | +0.060 | **+1.25σ** | ✅ WIN |
 | luminance corr | 0.168 ± 0.059 | 0.174 ± 0.011 | +0.006 | +0.10σ | ≈ neutral |
-| contrast corr | **0.115 ± 0.054** | 0.065 ± 0.004 | −0.050 | −0.92σ | ❌ regress |
-| narrative corr | — | −0.022 ± 0.029 | — | — | ≈ zero |
+| contrast corr | **0.115 ± 0.053** | 0.065 ± 0.004 | −0.050 | −0.94σ | ❌ regress |
+| narrative corr | −0.003 ± 0.042 | −0.022 ± 0.029 | −0.019 | −0.45σ | ≈ zero both |
 | position AUC | 0.580 ± 0.025 | **0.602 ± 0.014** | +0.022 | +0.88σ | ≈ win |
-| luminance AUC | — | 0.550 ± 0.013 | — | — | — |
-| contrast AUC | — | 0.507 ± 0.012 | — | — | — |
-| narrative AUC | — | 0.534 ± 0.003 | — | — | — |
+| luminance AUC | **0.567 ± 0.021** | 0.550 ± 0.013 | −0.017 | −0.82σ | ≈ regress |
+| contrast AUC | **0.553 ± 0.032** | 0.507 ± 0.012 | −0.046 | **−1.44σ** | ❌ regress |
+| narrative AUC | 0.528 ± 0.025 | 0.534 ± 0.003 | +0.006 | +0.24σ | ≈ neutral |
 
 ### Subject-trait probes (mean ± population std, test set)
 
@@ -205,11 +205,12 @@ Base: Exp 6 baseline. All use pure JEPA loss (smooth_l1 + VCLoss). Only one vari
 
 ### Key observations
 
-- **Position gain is highly reproducible**: Exp 7b's position-corr std shrinks 4× vs Exp 6 (0.013 vs 0.048). The 0.236 mean is +1.25σ above Exp 6's 0.176.
-- **Contrast regresses ~1σ** — CLIP (single-frame semantic) down-weights fast local luminance-contrast.
-- **Strict 3-of-4 go rule fails** (only position clears +1σ), but the tight variance reduction is itself a robustness win.
-- **Subject-trait AUCs rise by 1–4σ while bal_acc drops**: on sex, 3/5 seeds give bal_acc = exactly 0.500 (probe collapses to constant class) despite AUC 0.649 — threshold calibration artifact, not feature loss. AUC is the informative metric here.
-- **Every AUC (stimulus and subject) goes up** — the CLIP alignment produces broadly richer representations. Not a subject-invariant foundation model; closer to a general-purpose EEG encoder.
+- **Position is the only clear win.** Both corr (+1.25σ) and AUC (+0.88σ) improve. Position-corr std shrinks 4× (0.048 → 0.013), so the gain is highly reproducible.
+- **Contrast regresses on both metrics.** corr −0.94σ and AUC −1.44σ. CLIP is a single-frame semantic target; it under-weights fast local luminance-contrast structure.
+- **Luminance and narrative are essentially unchanged.** Earlier single-seed (2025) comparisons suggested luminance wins of +0.049 corr / +0.034 AUC, but those were artifacts of Exp 6 seed 2025 being a low-AUC outlier (lum_auc 0.529 vs 5-seed mean 0.567). The 5-seed comparison is within noise.
+- **Strict 3-of-4 go rule fails** — only position clears +1σ, and contrast regresses >1σ on AUC.
+- **Subject-trait AUCs rise by 1–4σ while bal_acc drops**: on sex, 3/5 seeds give bal_acc = exactly 0.500 (probe collapses to constant class) despite AUC 0.649 — threshold-calibration artifact, not feature loss. AUC is the informative metric here.
+- **Net effect: Exp 7b is *not* uniformly richer** — it trades fast local feature sensitivity (contrast) for slow temporal drift (position), while slightly increasing subject-trait encoding. Good for paper framings that emphasize temporal/narrative decoding; potentially worse for low-level feature reconstruction.
 
 ### Next steps (priority order)
 
