@@ -441,17 +441,24 @@ class SIGRegLoss(nn.Module):
 
 
 class CrossModalAlignLoss(nn.Module):
-    """Symmetric InfoNCE (CLIP-style) between EEG and frozen movie embeddings.
+    """Cross-modal alignment loss between EEG and frozen movie embeddings.
 
-    Given L2-normalized EEG and target embeddings at the same movie time, pull
-    matched pairs together and push non-matched pairs apart with a learnable
-    temperature. Identical in form to the CLIP/MindEye objectives.
+    Two loss families supported via ``loss_type``:
+    - ``infonce`` (default): symmetric cross-entropy InfoNCE (CLIP / MindEye).
+    - ``sigmoid``: pairwise sigmoid loss (SigLIP — Zhai et al. ICCV 2023).
+      Each (i, j) pair is a binary decision with label +1 on the diagonal and
+      -1 off-diagonal. A learnable bias offsets the logits before the sigmoid
+      (initialized to a large negative value to counter the positive/negative
+      imbalance). Published to consistently outperform softmax InfoNCE at
+      moderate batch sizes (B < 4096) without requiring in-batch normalization.
     """
 
     def __init__(self, coeff: float = 0.5, temperature: float = 0.1,
-                 learnable_temp: bool = True):
+                 learnable_temp: bool = True, loss_type: str = "infonce",
+                 sigmoid_bias_init: float = -10.0):
         super().__init__()
         self.coeff = coeff
+        self.loss_type = loss_type
         if learnable_temp:
             # log_temp so temperature stays positive; init to log(1/temperature)
             self.log_inv_temp = nn.Parameter(
@@ -460,13 +467,18 @@ class CrossModalAlignLoss(nn.Module):
         else:
             self.register_buffer("log_inv_temp",
                                  torch.tensor(float(1.0 / max(temperature, 1e-4))).log())
+        if loss_type == "sigmoid":
+            # SigLIP learnable bias (init large-negative so early logits favor "negative")
+            self.sigmoid_bias = nn.Parameter(torch.tensor(float(sigmoid_bias_init)))
+        elif loss_type != "infonce":
+            raise ValueError(f"Unknown loss_type '{loss_type}' — use 'infonce' or 'sigmoid'.")
 
     def forward(self, eeg_emb: torch.Tensor, target_emb: torch.Tensor):
-        """Compute symmetric InfoNCE loss.
+        """Compute cross-modal alignment loss.
 
         Args:
             eeg_emb: [B, D] EEG embeddings (after projection head).
-            target_emb: [B, D] target embeddings (e.g. CLIP).
+            target_emb: [B, D] target embeddings (e.g. CLIP or V-JEPA 2).
 
         Returns:
             (weighted_loss, unweighted_loss, loss_dict)
@@ -475,20 +487,35 @@ class CrossModalAlignLoss(nn.Module):
         tgt = F.normalize(target_emb, dim=-1)
         # Clamp inv-temp to avoid numerical blow-up
         inv_temp = self.log_inv_temp.exp().clamp(max=100.0)
-        logits = eeg @ tgt.T * inv_temp  # [B, B]
-        labels = torch.arange(logits.size(0), device=logits.device)
-        loss_e = F.cross_entropy(logits, labels)
-        loss_t = F.cross_entropy(logits.T, labels)
-        loss = 0.5 * (loss_e + loss_t)
+        logits = eeg @ tgt.T * inv_temp  # [N, N]
+        N = logits.size(0)
+        device = logits.device
 
-        # Diagnostic: top-1 retrieval accuracy in each direction
+        if self.loss_type == "sigmoid":
+            # SigLIP: pairwise sigmoid, +1 on diagonal / -1 off-diagonal.
+            # Use F.softplus(-labels * logits) for numerically stable -log sigmoid.
+            labels_pm1 = 2.0 * torch.eye(N, device=device) - 1.0
+            logits_biased = logits + self.sigmoid_bias
+            loss = F.softplus(-labels_pm1 * logits_biased).mean()
+            diag_labels = torch.arange(N, device=device)
+            extra = {"clip_align_sigmoid_bias": self.sigmoid_bias.item()}
+        else:
+            # Symmetric InfoNCE (CLIP-style)
+            diag_labels = torch.arange(N, device=device)
+            loss_e = F.cross_entropy(logits, diag_labels)
+            loss_t = F.cross_entropy(logits.T, diag_labels)
+            loss = 0.5 * (loss_e + loss_t)
+            extra = {}
+
+        # Top-1 retrieval accuracy (same diagnostic for both modes)
         with torch.no_grad():
-            acc_e = (logits.argmax(dim=1) == labels).float().mean()
-            acc_t = (logits.T.argmax(dim=1) == labels).float().mean()
+            acc_e = (logits.argmax(dim=1) == diag_labels).float().mean()
+            acc_t = (logits.T.argmax(dim=1) == diag_labels).float().mean()
 
         weighted = self.coeff * loss
         return weighted, loss, {
             "clip_align_loss": loss.item(),
             "clip_align_acc": 0.5 * (acc_e.item() + acc_t.item()),
             "clip_align_inv_temp": inv_temp.item(),
+            **extra,
         }

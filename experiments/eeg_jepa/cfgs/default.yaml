@@ -80,6 +80,8 @@ loss:
     learnable_temperature: true # let temperature be a learnable scalar (CLIP-style)
     proj_hidden: 256            # hidden dim of EEG→CLIP projection MLP
     per_window: false           # true: per-window InfoNCE with B*T negatives; false: sample-level with B
+    loss_type: infonce          # "infonce" (CLIP-style softmax) or "sigmoid" (SigLIP — Zhai 2023)
+    sigmoid_bias_init: -10.0    # initial learnable bias for the sigmoid loss variant
 
 optim:
   epochs: 100

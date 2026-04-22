@@ -381,13 +381,16 @@ def run(
             coeff=clip_align_coeff,
             temperature=float(clip_cfg.get("temperature", 0.1)),
             learnable_temp=bool(clip_cfg.get("learnable_temperature", True)),
+            loss_type=str(clip_cfg.get("loss_type", "infonce")),
+            sigmoid_bias_init=float(clip_cfg.get("sigmoid_bias_init", -10.0)),
         ).to(device)
         jepa_params += list(clip_head.parameters())
         jepa_params += [p for p in clip_align_fn.parameters() if p.requires_grad]
         logger.info(
-            "Cross-modal alignment enabled: proj %d→%d→%d, coeff=%.3f, temp=%.3f, per_window=%s",
+            "Cross-modal alignment enabled: proj %d→%d→%d, coeff=%.3f, temp=%.3f, per_window=%s, loss_type=%s",
             embed_dim, proj_hidden, clip_target_dim, clip_align_coeff,
             float(clip_cfg.get("temperature", 0.1)), clip_per_window,
+            str(clip_cfg.get("loss_type", "infonce")),
         )
     else:
         clip_per_window = False
