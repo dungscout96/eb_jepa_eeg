@@ -871,8 +871,8 @@ class JEPAMovieDataset(HBNMovieDataset):
             order = np.argsort(frame_idx)
             frame_idx = frame_idx[order]
             emb = emb[order]
-            n_frames_total = MOVIE_METADATA[tasks[0]].get("frame_count",
-                                                          int(frame_idx.max()) + 1)
+            n_frames_total = MOVIE_METADATA[self.task].get("frame_count",
+                                                           int(frame_idx.max()) + 1)
             full = np.zeros((int(n_frames_total), emb.shape[1]), dtype=np.float32)
             last = emb[0]
             cur = 0
