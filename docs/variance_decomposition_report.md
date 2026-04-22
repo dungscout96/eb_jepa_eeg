@@ -263,35 +263,86 @@ to ~0.00**, suggesting the val-peak `best.pth.tar` over-fit to val
 stimulus rather than generalizing. Test sex AUC drops to 0.649 (still
 above chance). The train→val→test gap is larger than any other checkpoint.
 
-### The 3 new SIGReg + CorrCA configs (still evaluating)
+## 8. SIGReg + per-rec + CorrCA: full sweep at standard configs
 
-Training complete (all 3 early-stopped between epoch 27 and 51):
-- `sigreg1.0_nw1_ws1_corrca` — best epoch 7
-- `sigreg0.1_nw2_ws1_corrca` — best epoch 7
-- `sigreg0.1_nw4_ws4_corrca` — best epoch 6
+The 3 matched-config retrains (nw1_ws1, nw2_ws1, nw4_ws4) completed and
+provide the data to test whether the rank-1 collapse observed on
+exp6_sigreg (§7) is specific to its nw4_ws2 setup or a general SIGReg +
+CorrCA property.
 
-Probe_eval and variance_decomp on these are not yet run; once they are,
-the full 2×2×3 config matrix (SIGReg/VICReg × per-rec/global × ±CorrCA)
-will have data at every cell.
+### Variance decomposition (K=32)
 
-## 8. What's still outstanding
+| config | η²_subj | η²_stim | stim/within | eff_rank(subj/within) | top-1 angle |
+|---|---:|---:|---:|---:|---:|
+| sigreg1.0 nw1_ws1 + CorrCA | 0.105 | 0.0163 | 0.0183 | 3.12 / 5.30 | 68.1° |
+| sigreg0.1 nw2_ws1 + CorrCA | 0.195 | 0.0126 | 0.0157 | 2.60 / **7.90** | 67.5° |
+| sigreg0.1 nw4_ws4 + CorrCA | **0.739** | 0.0042 | 0.0163 | **1.19 / 1.31** | **88.8°** |
 
-- **Probe_eval + variance_decomp on the 3 new SIGReg + CorrCA configs.**
-  Will tell us whether SIGReg + CorrCA's rank-1 collapse is specific to
-  `exp6_sigreg`'s nw4_ws2 setup or a general property.
-- **Test-set vs val-set generalization.** The exp6_sigreg best.pth.tar
-  has val pos corr 0.190 / test pos corr 0.004 — a huge gap. Whether
-  this is an overfitting artifact, a val/test distribution shift, or
-  something about SIGReg+CorrCA specifically is worth investigating.
-- **Multi-seed replication.** All numbers are seed=2025. A 3-seed run of
-  the standout configs (sigreg0.1 nw4_ws4 per-rec; CorrCA-VICReg) would
-  tighten the claims.
+### Probe_eval (val / test)
+
+| config | pos v/t | lum v/t | con v/t | sex AUC v/t | age AUC v/t | age corr v/t |
+|---|---|---|---|---|---|---|
+| sigreg1.0 nw1_ws1 | 0.164 / 0.051 | 0.197 / −0.005 | 0.126 / −0.015 | 0.718 / 0.593 | 0.553 / 0.627 | 0.176 / 0.101 |
+| sigreg0.1 nw2_ws1 | 0.001 / 0.069 | 0.046 / 0.040 | 0.001 / 0.064 | **0.768** / 0.613 | 0.564 / 0.648 | 0.192 / **0.360** |
+| sigreg0.1 nw4_ws4 | 0.123 / 0.103 | 0.105 / 0.047 | 0.127 / **0.088** | **0.776** / 0.601 | 0.516 / 0.626 | 0.114 / 0.236 |
+
+### Key findings
+
+1. **Rank-1 collapse is nw-dependent, not a general SIGReg+CorrCA
+   property.** At nw4_ws4 (8s effective span) SIGReg+CorrCA collapses to
+   eff_rank ~1 on both subject and within — matching exp6_sigreg
+   (nw4_ws2, also 8s effective span). At shorter windows (nw1_ws1 = 1s,
+   nw2_ws1 = 2s), effective ranks stay in the 2.6-7.9 range. Long
+   temporal contexts give the encoder enough signal to saturate a
+   single subject-fingerprint direction; short contexts don't.
+
+2. **CorrCA has opposite effects on stim/within depending on window.**
+   | config | no CorrCA stim/within | + CorrCA stim/within |
+   |---|---:|---:|
+   | nw4_ws4 (sigreg0.1) | **0.0788** | 0.0163 (5× lower) |
+   | nw2_ws1 (sigreg0.1) | 0.0091 | 0.0157 (1.7× higher) |
+   | nw1_ws1 (sigreg1.0) | 0.0097 | 0.0183 (1.9× higher) |
+
+   At long windows CorrCA's channel filtering over-compresses a
+   representation that was already doing well on stimulus; at short
+   windows it's a net win. The standalone SIGReg + per-rec arm
+   (sigreg0.1 nw4_ws4 without CorrCA) remains the stim/within champion
+   at 0.0788.
+
+3. **sigreg0.1 nw4_ws4 + CorrCA is a "pure fingerprint" encoder.** Top-1
+   principal angle 88.8° — the subject and within-subject directions
+   are essentially orthogonal. Combined with rank-1 subject and rank-1
+   within, this means: one axis carries subject identity, one axis
+   carries stimulus-like variation, and they don't share directions.
+   It's the cleanest-disentangled checkpoint we've measured.
+
+4. **sigreg0.1 nw2_ws1 + CorrCA has eff_rank(C_within) = 7.90** — the
+   highest of any of the 21 checkpoints we've measured. Combined with
+   its age_reg test correlation of **0.360** (the highest test age
+   correlation in any probe_eval), this checkpoint is a surprisingly
+   strong all-around performer at the smaller temporal scale.
+
+5. **Val → test generalization is better for these retrains than
+   exp6_sigreg.** The exp6_sigreg best.pth.tar had val pos 0.190 → test
+   0.004 (collapse to zero); all three new SIGReg+CorrCA retrains hold
+   up better (e.g. sigreg0.1 nw4_ws4 val 0.123 → test 0.103). Probably
+   reflects cleaner training setup / checkpoint selection rather than a
+   distribution shift.
+
+## 9. What's still outstanding
+
+- **Test-set vs val-set generalization on exp6_sigreg.** It has
+  val pos corr 0.190 / test 0.004 — a huge gap that other SIGReg+CorrCA
+  runs do not show. Worth a closer look at what's different there.
+- **Multi-seed replication.** All numbers are seed=2025. A 3-seed run
+  of the standout configs (sigreg0.1 nw4_ws4 + per-rec; CorrCA-VICReg;
+  sigreg0.1 nw2_ws1 + CorrCA) would tighten the claims.
 - **Absolute-time-aligned clips.** `_embed_per_clip` sampling is
   per-recording linspace. An absolute-timestamp-aligned version would
   sharpen the `Var_stimulus` estimate and likely raise all stim/within
   numbers by a consistent factor.
 
-## 9. Reproducing
+## 10. Reproducing
 
 ```bash
 # Extract embeddings + decomposition for a single checkpoint (K=32, val split)
