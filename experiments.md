@@ -45,7 +45,7 @@ Stimulus SNR = -24 dB (0.4% of variance). Spatial masking trivial (r>0.9 between
 | Narrative corr | 0.00 | — | — | — | — | 0.009 | -0.010 | 0.008 | Exp 6 |
 | Narrative AUC | 0.50 | — | — | — | — | **0.553** | 0.559 | 0.537 | Exp 6 |
 
-**Exp 7b (CorrCA + CLIP per-window InfoNCE) is the new best on 8/11 metrics** — largest gains on position (+31% corr, +2.7pp AUC) and luminance (+39% corr, +3.4pp AUC) vs Exp 6. Narrative regresses slightly; sits near zero in Exp 6 so likely within noise.
+**Cross-experiment table above is single-seed (seed 2025)** — useful for historical comparison but misleading for Exp 7b, since seed 2025 is a low-AUC outlier for Exp 6. See the **Exp 7b Multi-Seed Validation** section below for the correct 5-seed comparison. Net 5-seed result: Exp 7b wins clearly on position only; contrast regresses; luminance/narrative within noise.
 
 ---
 
@@ -212,11 +212,26 @@ Base: Exp 6 baseline. All use pure JEPA loss (smooth_l1 + VCLoss). Only one vari
 - **Subject-trait AUCs rise by 1–4σ while bal_acc drops**: on sex, 3/5 seeds give bal_acc = exactly 0.500 (probe collapses to constant class) despite AUC 0.649 — threshold-calibration artifact, not feature loss. AUC is the informative metric here.
 - **Net effect: Exp 7b is *not* uniformly richer** — it trades fast local feature sensitivity (contrast) for slow temporal drift (position), while slightly increasing subject-trait encoding. Good for paper framings that emphasize temporal/narrative decoding; potentially worse for low-level feature reconstruction.
 
+### Interpretation: stimulus–subject entanglement
+
+CorrCA + per-recording norm was designed to strip subject fingerprint, so Exp 6 has low subject AUCs (age 0.667, sex 0.618). CLIP alignment is against a **subject-identical target** (same movie frame embedding for every viewer), yet Exp 7b's subject AUCs rise substantially (age 0.678, sex 0.649). The mechanism:
+
+1. The alignment loss rewards *strong stimulus tracking* in the EEG → CLIP space.
+2. The *quality* of stimulus tracking is itself subject-correlated (VEP maturation with age, alpha-band dynamics, hair/skull impedance affecting SNR, attention).
+3. So the encoder learns a mapping "how well does this EEG follow the movie" — and that proxy leaks age/sex even though the CLIP target carries no subject info.
+
+Evidence this is **information enrichment**, not subject leakage from input: position-corr std shrinks 4×, contrast-corr std shrinks 13× (signature of a well-regularized encoder, not extra noise). AUCs rise for *both* stimulus and subject; bal_acc drops are calibration artifacts (see sex 3/5 seeds at exactly 0.500).
+
+**Two paper framings for this result:**
+- **Subject-invariant stimulus foundation model** (`I(emb; subject) ≈ 0` required): Exp 6 is closer; Exp 7b violates it. Keeping 7b's gains under this framing requires either an adversarial subject discriminator (Exp 3 attempted, modest) or projecting subject-correlated directions out of CLIP targets before alignment.
+- **Best-overall EEG representation** (max `I(emb; any label)`): Exp 7b is the win. Every AUC rises. Subject info is a feature for clinical / trait decoding.
+
 ### Next steps (priority order)
 
-1. **Swap CLIP → V-JEPA 2** target (Proposal A): video-native, should rescue narrative and contrast. Embeddings already on Delta.
-2. **SigLIP loss** (Proposal B): published lift over InfoNCE at B<4096.
-3. **Hard-negative mining via temporal proximity** (Proposal C): specifically targets narrative/contrast weakness.
+1. **Swap CLIP → V-JEPA 2** target (Proposal A): video-native (2 Hz × 1408-d on Delta), directly addresses contrast + narrative weakness.
+2. **SigLIP loss** (Proposal B): published lift over InfoNCE at B<4096; one-line change.
+3. **Hard-negative mining via temporal proximity** (Proposal C): specifically targets fast-local-feature decoding.
+4. **Invariant alignment** (paper-framing-dependent): subtract each subject's mean CLIP embedding before alignment — forces target to subject-orthogonal temporal deviation.
 
 ---
 
