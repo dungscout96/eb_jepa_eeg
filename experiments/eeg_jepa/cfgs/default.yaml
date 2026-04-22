@@ -79,6 +79,7 @@ loss:
     temperature: 0.1            # initial temperature (smaller = sharper logits)
     learnable_temperature: true # let temperature be a learnable scalar (CLIP-style)
     proj_hidden: 256            # hidden dim of EEG→CLIP projection MLP
+    per_window: false           # true: per-window InfoNCE with B*T negatives; false: sample-level with B
 
 optim:
   epochs: 100

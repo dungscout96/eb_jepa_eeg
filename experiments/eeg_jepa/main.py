@@ -371,6 +371,7 @@ def run(
             )
         clip_cfg = cfg.loss.get("clip_align", {})
         proj_hidden = int(clip_cfg.get("proj_hidden", 256))
+        clip_per_window = bool(clip_cfg.get("per_window", False))
         clip_head = nn.Sequential(
             nn.Linear(embed_dim, proj_hidden),
             nn.GELU(),
@@ -384,10 +385,12 @@ def run(
         jepa_params += list(clip_head.parameters())
         jepa_params += [p for p in clip_align_fn.parameters() if p.requires_grad]
         logger.info(
-            "Cross-modal alignment enabled: proj %d→%d→%d, coeff=%.3f, temp=%.3f",
+            "Cross-modal alignment enabled: proj %d→%d→%d, coeff=%.3f, temp=%.3f, per_window=%s",
             embed_dim, proj_hidden, clip_target_dim, clip_align_coeff,
-            float(clip_cfg.get("temperature", 0.1)),
+            float(clip_cfg.get("temperature", 0.1)), clip_per_window,
         )
+    else:
+        clip_per_window = False
 
     optimizer = Adam(jepa_params, lr=cfg.optim.lr)
     probe_optimizer = Adam(
@@ -486,9 +489,16 @@ def run(
             if clip_align_fn is not None and clip_emb.shape[-1] > 0:
                 # Unmasked forward through context encoder, with gradients.
                 all_tokens = jepa.context_encoder.encode_tokens(eeg, mask=None)  # [B, C*T*P, D]
-                eeg_pooled = all_tokens.mean(dim=1)                               # [B, D]
-                eeg_proj = clip_head(eeg_pooled)                                   # [B, D_clip]
-                clip_target = clip_emb.mean(dim=1)                                 # [B, D_clip]
+                if clip_per_window:
+                    # Per-window pooling → B*T negatives per batch (e.g. 64*4=256).
+                    win = jepa.context_encoder.pool_to_windows(all_tokens)  # [B, D, T, 1, 1]
+                    win = win.squeeze(-1).squeeze(-1).permute(0, 2, 1)       # [B, T, D]
+                    eeg_pooled = win.reshape(-1, win.shape[-1])              # [B*T, D]
+                    clip_target = clip_emb.reshape(-1, clip_emb.shape[-1])   # [B*T, D_clip]
+                else:
+                    eeg_pooled = all_tokens.mean(dim=1)                     # [B, D]
+                    clip_target = clip_emb.mean(dim=1)                      # [B, D_clip]
+                eeg_proj = clip_head(eeg_pooled)                             # [N, D_clip]
                 align_weighted, align_raw, align_dict = clip_align_fn(eeg_proj, clip_target)
                 total_step_loss = jepa_loss + align_weighted
                 loss_dict.update(align_dict)
