@@ -329,7 +329,89 @@ CorrCA property.
    reflects cleaner training setup / checkpoint selection rather than a
    distribution shift.
 
-## 9. What's still outstanding
+## 9. Progression: global → per-rec → per-rec + CorrCA
+
+Walking the three arms on the SIGReg configs (where we have full
+coverage) reveals a two-stage story.
+
+### Decomposition
+
+| config | arm | η²_subj | η²_stim | stim/within | eff_rank(within) | top-1 angle | Var_total |
+|---|---|---:|---:|---:|---:|---:|---:|
+| sigreg1.0 nw1_ws1 | global | 0.188 | 0.0075 | 0.0092 | 4.15 | 79° | small |
+|  | per-rec | 0.036 | 0.0093 | 0.0097 | 3.24 | 73° | small |
+|  | per-rec + CorrCA | 0.105 | **0.0163** | **0.0183** | 5.30 | 68° | 37.8 |
+| sigreg0.1 nw2_ws1 | global | 0.061 | 0.0069 | 0.0073 | 2.47 | 80° | small |
+|  | per-rec | 0.056 | 0.0086 | 0.0091 | 3.98 | 81° | small |
+|  | per-rec + CorrCA | **0.195** | **0.0126** | **0.0157** | **7.90** | 68° | 8.4 |
+| sigreg0.1 nw4_ws4 | global | 0.452 | 0.0045 | 0.0082 | 4.56 | 78° | small |
+|  | per-rec | 0.526 | 0.0373 | **0.0788** | 2.25 | 62° | small |
+|  | per-rec + CorrCA | **0.739** | 0.0042 | 0.0163 | **1.31** | **89°** | 650.7 |
+
+### Probe (val position corr)
+
+| config | global | per-rec | per-rec + CorrCA |
+|---|---:|---:|---:|
+| sigreg1.0 nw1_ws1 | +0.023 | +0.156 | +0.164 |
+| sigreg0.1 nw2_ws1 | −0.122 | +0.125 | +0.001 |
+| sigreg0.1 nw4_ws4 | +0.046 | +0.149 | +0.123 |
+
+### Stage 1 (global → per-rec): the "unmask" step
+
+This is where stimulus decodability is born:
+
+- **Probes go from chance to clearly positive on all 3 configs**
+  (average jump: +0.16 in val pos corr). Under global norm the encoder's
+  representation is dominated by subject baseline amplitude; the linear
+  probe couldn't find the stimulus signal even when η²_subj looked
+  substantial.
+- `stim/within` rises modestly (1-10×), but more importantly the
+  stimulus signal becomes *linearly readable* — the bucket's contents
+  changed, not just its size.
+- `η²_subj` direction is inconsistent (sometimes down, sometimes up).
+  Per-rec strips input-level subject baseline; how much survives in the
+  representation depends on how hard the encoder has to work to
+  reconstruct it.
+
+### Stage 2 (per-rec → per-rec + CorrCA): the "concentrate" step
+
+CorrCA reshapes what's already there:
+
+- **`η²_subj` consistently rises** (0.036→0.105, 0.056→0.195,
+  0.526→0.739). CorrCA removes 129→k channels at the input, forcing the
+  encoder to pack subject identity into fewer dimensions — visible in
+  the effective-rank drop for nw4_ws4 (2.25→1.31) and the 88.8° top-1
+  angle (near-perfect orthogonality).
+- **`Var_total` blows up** (nw4_ws4: small → 650.7). Representation
+  scale increases by orders of magnitude.
+- **Stimulus decodability does not improve further.** Probes stay at
+  the per-rec level (nw1_ws1, nw4_ws4) or collapse (nw2_ws1: 0.125 →
+  0.001). The nw2_ws1 case is the sharpest anomaly: `stim/within`
+  actually *rose* to 0.0157 and `eff_rank(within)` to 7.90, but none of
+  those many within-subject dimensions align with the probe's
+  contrast/luminance targets.
+- At long windows (nw4_ws4) the rank-1 collapse *reduces* `stim/within`
+  (0.0788 → 0.0163) even though probes hold up — the residual stimulus
+  signal is concentrated enough to still be readable.
+
+### Takeaways
+
+- **Per-rec norm is where stimulus decodability actually happens.** It
+  is the intervention that turns "encoder has variance in the data"
+  into "linear probe can read it out." Every config in our set jumps by
+  ~0.15 on val pos corr at this stage.
+- **CorrCA is a subject-encoding amplifier, not a stimulus amplifier.**
+  It lifts `η²_subj`, compresses subject into fewer dimensions, and
+  pushes the subject subspace near-orthogonal to within-subject. But it
+  does not add stimulus decodability beyond what per-rec already
+  unlocked, and at long temporal windows it over-compresses.
+- **The practical sweet spots depend on what you want:**
+  - **Balanced subject + stimulus:** per-rec alone at SIGReg nw4_ws4
+    (stim/within = 0.079, highest ever measured; val pos corr = 0.15).
+  - **Cleanest subject fingerprint:** per-rec + CorrCA at SIGReg
+    nw4_ws4 (η²_subj = 0.74, top-1 angle = 89°, essentially rank-1).
+
+## 10. What's still outstanding
 
 - **Test-set vs val-set generalization on exp6_sigreg.** It has
   val pos corr 0.190 / test 0.004 — a huge gap that other SIGReg+CorrCA
@@ -342,7 +424,7 @@ CorrCA property.
   sharpen the `Var_stimulus` estimate and likely raise all stim/within
   numbers by a consistent factor.
 
-## 10. Reproducing
+## 11. Reproducing
 
 ```bash
 # Extract embeddings + decomposition for a single checkpoint (K=32, val split)
