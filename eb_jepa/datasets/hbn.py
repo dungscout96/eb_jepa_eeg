@@ -857,12 +857,38 @@ class JEPAMovieDataset(HBNMovieDataset):
                         corrca_path, corrca["W"].shape[0], corrca["W"].shape[1],
                         ", ".join(f"{v:.3f}" for v in corrca["isc_values"]))
 
-        # Frozen CLIP (or other vision model) frame embeddings for cross-modal alignment.
-        # Expected: npz with 'embeddings' [n_frames, D] and 'frame_indices' [n_frames].
+        # Frozen vision-model embeddings used as a cross-modal alignment target.
+        # Two supported sources:
+        #   data.clip_embeddings    — npz with 'embeddings' [n_frames, D] + 'frame_indices' (per-frame @ movie fps, e.g. CLIP ViT-L/14).
+        #   data.vjepa2_embeddings — npz with 'embeddings' [n_tok, D] + 'timestamps' (seconds) + 'frequency' (Hz, e.g. V-JEPA 2 @ 2Hz).
+        # If both are set, vjepa2_embeddings wins. Only one backing tensor is kept as `_clip_embeddings` (name preserved for downstream compat).
         clip_path = cfg.get("clip_embeddings", None) if not isinstance(cfg, dict) else cfg.get("clip_embeddings", None)
+        vjepa2_path = cfg.get("vjepa2_embeddings", None) if not isinstance(cfg, dict) else cfg.get("vjepa2_embeddings", None)
         self._clip_embeddings = None
         self._clip_dim = 0
-        if clip_path is not None:
+        self._target_mode = None       # "clip" | "vjepa2" | None
+        self._target_timestamps = None # torch tensor of seconds, vjepa2 mode only
+        self._target_frequency = None  # Hz, vjepa2 mode only
+
+        if vjepa2_path is not None:
+            if clip_path is not None:
+                logger.warning("Both clip_embeddings and vjepa2_embeddings set; using vjepa2_embeddings.")
+            vjepa = np.load(vjepa2_path)
+            emb = vjepa["embeddings"].astype(np.float32)       # [N_tok, D]
+            timestamps = vjepa["timestamps"].astype(np.float64)  # [N_tok] seconds
+            order = np.argsort(timestamps)
+            timestamps = timestamps[order]
+            emb = emb[order]
+            self._clip_embeddings = torch.from_numpy(emb)
+            self._target_timestamps = torch.from_numpy(timestamps).float()
+            self._clip_dim = emb.shape[1]
+            self._target_mode = "vjepa2"
+            self._target_frequency = float(vjepa["frequency"]) if "frequency" in vjepa.files else None
+            logger.info("Loaded V-JEPA 2 embeddings from %s: %d tokens × %d dim @ %s Hz (t∈[%.2f,%.2f]s)",
+                        vjepa2_path, emb.shape[0], emb.shape[1],
+                        f"{self._target_frequency:.1f}" if self._target_frequency else "?",
+                        float(timestamps.min()), float(timestamps.max()))
+        elif clip_path is not None:
             clip_npz = np.load(clip_path)
             # Build a [max_frame_index + 1, D] tensor so indexing by frame_idx is O(1).
             # Missing frames (if any) are filled with the nearest preceding embedding.
@@ -884,6 +910,7 @@ class JEPAMovieDataset(HBNMovieDataset):
                 full[i] = last
             self._clip_embeddings = torch.from_numpy(full)
             self._clip_dim = self._clip_embeddings.shape[1]
+            self._target_mode = "clip"
             logger.info("Loaded CLIP frame embeddings from %s: %d frames × %d dim",
                         clip_path, self._clip_embeddings.shape[0], self._clip_dim)
 
@@ -915,21 +942,35 @@ class JEPAMovieDataset(HBNMovieDataset):
             feats = torch.tensor(feats, dtype=torch.float32)
             feats = torch.nan_to_num(feats, nan=0.0)
 
-            # Cache per-window movie frame indices for CLIP alignment.
+            # Cache per-window target-embedding indices for alignment.
             # Parent's create_windows_from_events uses trial_start_offset_samples =
             # visual_processing_delay * sfreq, so crop_inds[0][1] is exactly
             # video_start_sample + delay_samples. The movie timestamp at window i is
             # therefore (crop_inds[i][1] - crop_inds[0][1]) / sfreq — delay cancels.
             if self._clip_embeddings is not None:
-                fps = MOVIE_METADATA[self.task]["fps"]
                 first_start = int(crop_inds[0][1])
-                n_frames_total = self._clip_embeddings.shape[0]
+                n_total = self._clip_embeddings.shape[0]
                 fidx = []
-                for i in range(n_win):
-                    movie_ts = (int(crop_inds[i][1]) - first_start) / self.sfreq
-                    f = int(movie_ts * fps)
-                    f = max(0, min(f, n_frames_total - 1))
-                    fidx.append(f)
+                if self._target_mode == "vjepa2":
+                    # Match each 2-s window to the closest V-JEPA 2 token (window-center time).
+                    ts = self._target_timestamps  # [N_tok] seconds, sorted
+                    for i in range(n_win):
+                        movie_ts_start = (int(crop_inds[i][1]) - first_start) / self.sfreq
+                        center = movie_ts_start + self.window_size_seconds / 2.0
+                        idx = int(torch.searchsorted(ts, torch.tensor(center)).item())
+                        # searchsorted returns insertion index; pick nearer of idx-1 / idx
+                        if idx > 0 and (idx == n_total or abs(center - ts[idx-1].item()) <= abs(ts[idx].item() - center)):
+                            idx -= 1
+                        idx = max(0, min(idx, n_total - 1))
+                        fidx.append(idx)
+                else:
+                    # CLIP: index by frame (fps * movie_ts at window start).
+                    fps = MOVIE_METADATA[self.task]["fps"]
+                    for i in range(n_win):
+                        movie_ts = (int(crop_inds[i][1]) - first_start) / self.sfreq
+                        f = int(movie_ts * fps)
+                        f = max(0, min(f, n_total - 1))
+                        fidx.append(f)
                 clip_fidx_tensor = torch.tensor(fidx, dtype=torch.long)
             else:
                 clip_fidx_tensor = torch.zeros(n_win, dtype=torch.long)

@@ -17,6 +17,7 @@ data:
   add_envelope: false     # Append 1-8 Hz analytic envelope as extra channels (doubles n_chans)
   corrca_filters: null    # Path to CorrCA .npz file (projects 129 channels → k stimulus components)
   clip_embeddings: null   # Path to frame-level movie embeddings .npz (e.g. CLIP ViT-L/14) for cross-modal alignment
+  vjepa2_embeddings: null # Path to timestamp-keyed video embeddings .npz (e.g. V-JEPA 2 @ 2Hz). Takes precedence over clip_embeddings.
   # Movie feature names used for probe evaluation (regression + classification heads)
   feature_names:
     - contrast_rms
