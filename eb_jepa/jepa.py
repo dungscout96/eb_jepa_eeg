@@ -441,6 +441,108 @@ class MaskedJEPANoEMA(nn.Module):
         pass
 
 
+class MaskedMAE(nn.Module):
+    """MAE on input-space EEG patches. Target = raw masked patch values.
+
+    Designed for Exp 9: when used with CorrCA-projected input, the target is
+    stimulus-driven by construction (CorrCA maximizes cross-subject ISC).
+    Drops the EMA target encoder entirely — the predictor output is passed
+    through a linear decoder head that projects back to raw patch space.
+
+    Args:
+        context_encoder: EEGEncoderTokens (trainable)
+        predictor: MaskedPredictor (trainable)
+        mask_collator: MultiBlockMaskCollator
+        patch_size: patch dim the decoder head should produce
+        patch_overlap: must match encoder's patch_overlap
+        regularizer: optional VCLoss / SIGReg on context tokens
+        pred_loss_type: "mse" or "smooth_l1"
+    """
+
+    def __init__(
+        self,
+        context_encoder,
+        predictor,
+        mask_collator,
+        patch_size: int,
+        patch_overlap: int,
+        regularizer=None,
+        pred_loss_type: str = "smooth_l1",
+    ):
+        super().__init__()
+        self.context_encoder = context_encoder
+        self.predictor = predictor
+        self.mask_collator = mask_collator
+        self.patch_size = patch_size
+        self.patch_overlap = patch_overlap
+        self.regularizer = regularizer
+        self.pred_loss_type = pred_loss_type
+        self.decoder_head = nn.Linear(context_encoder.embed_dim, patch_size)
+
+    def _extract_raw_patches(self, eeg: torch.Tensor) -> torch.Tensor:
+        """Return raw patches in the same [B, C*T*P, patch_size] ordering as tokenize."""
+        B, T, C, W = eeg.shape
+        step = self.patch_size - self.patch_overlap
+        patches = eeg.unfold(dimension=3, size=self.patch_size, step=step)  # [B, T, C, P, patch_size]
+        patches = patches.permute(0, 2, 1, 3, 4).contiguous()               # [B, C, T, P, patch_size]
+        P = patches.shape[-2]
+        return patches.reshape(B, C * T * P, self.patch_size)
+
+    def forward(self, eeg: torch.Tensor) -> tuple[torch.Tensor, dict]:
+        device = eeg.device
+
+        mask_result = self.mask_collator()
+        context_mask = mask_result.context_mask.to(device)
+        pred_masks = [pm.to(device) for pm in mask_result.pred_masks]
+
+        _, pos_embed = self.context_encoder.tokenize(eeg)
+        ctx_tokens = self.context_encoder.encode_tokens(eeg, mask=context_mask)
+        ctx_pos = pos_embed[:, context_mask]
+
+        if len(pred_masks) == 0:
+            zero = torch.tensor(0.0, device=device, requires_grad=True)
+            return zero, {"pred_loss": 0.0, "reg_loss": 0.0}
+
+        all_pred_indices = torch.cat(pred_masks).unique()
+        raw_patches = self._extract_raw_patches(eeg)           # [B, C*T*P, patch_size]
+        tgt_values = raw_patches[:, all_pred_indices]          # [B, n_pred, patch_size]
+        tgt_pos = pos_embed[:, all_pred_indices]
+
+        pred_tokens = self.predictor(ctx_tokens, ctx_pos, tgt_pos)  # [B, n_pred, D]
+        predictions = self.decoder_head(pred_tokens)                # [B, n_pred, patch_size]
+
+        if self.pred_loss_type == "smooth_l1":
+            pred_loss = F.smooth_l1_loss(predictions, tgt_values.detach())
+        else:
+            pred_loss = F.mse_loss(predictions, tgt_values.detach())
+
+        loss_dict = {"pred_loss": pred_loss.item()}
+        reg_loss = torch.tensor(0.0, device=device)
+        if self.regularizer is not None:
+            from eb_jepa.losses import SIGRegLoss
+            if isinstance(self.regularizer, SIGRegLoss):
+                ctx_pooled = ctx_tokens.mean(dim=1)
+                reg_loss, _, reg_dict = self.regularizer(ctx_pooled)
+            else:
+                ctx_for_reg = ctx_tokens.permute(0, 2, 1).unsqueeze(-1).unsqueeze(-1)
+                reg_loss, _, reg_dict = self.regularizer(ctx_for_reg)
+            loss_dict["reg_loss"] = reg_loss.item()
+            loss_dict.update(reg_dict)
+
+        total_loss = pred_loss + reg_loss
+        loss_dict["total_loss"] = total_loss.item()
+        return total_loss, loss_dict
+
+    @torch.no_grad()
+    def encode(self, eeg: torch.Tensor) -> torch.Tensor:
+        tokens = self.context_encoder.encode_tokens(eeg, mask=None)
+        return self.context_encoder.pool_to_windows(tokens)
+
+    def update_target_encoder(self, momentum: float):
+        """No-op — no EMA target encoder."""
+        pass
+
+
 class MaskedJEPAProbe(nn.Module):
     """Probe for MaskedJEPA: trains a head on frozen encoder representations.
 

@@ -31,7 +31,7 @@ from eb_jepa.architectures import (
     TemporalMovieFeatureHead,
 )
 from eb_jepa.datasets.hbn import JEPAMovieDataset
-from eb_jepa.jepa import MaskedJEPA, MaskedJEPANoEMA, MaskedJEPAProbe
+from eb_jepa.jepa import MaskedJEPA, MaskedJEPANoEMA, MaskedMAE, MaskedJEPAProbe
 from eb_jepa.logging import get_logger
 from eb_jepa.losses import VCLoss, SIGRegLoss
 from eb_jepa.masking import MultiBlockMaskCollator
@@ -310,7 +310,16 @@ def run(
     # Prediction loss type: "mse" (default) or "smooth_l1" (Huber, used in V-JEPA)
     pred_loss_type = cfg.loss.get("pred_loss_type", "mse")
 
-    if use_ema:
+    target_type = cfg.model.get("target_type", "encoded")
+    if target_type == "raw":
+        jepa = MaskedMAE(
+            encoder, predictor, mask_collator,
+            patch_size=cfg.model.get("patch_size", 200),
+            patch_overlap=cfg.model.get("patch_overlap", 20),
+            regularizer=regularizer,
+            pred_loss_type=pred_loss_type,
+        ).to(device)
+    elif use_ema:
         jepa = MaskedJEPA(
             encoder, target_encoder, predictor, mask_collator, regularizer,
             pred_loss_type=pred_loss_type,
@@ -353,6 +362,8 @@ def run(
     # Context encoder + predictor + regularizer projector (if any);
     # target encoder is updated via EMA
     jepa_params = list(jepa.context_encoder.parameters()) + list(jepa.predictor.parameters())
+    if hasattr(jepa, "decoder_head"):
+        jepa_params += list(jepa.decoder_head.parameters())
     if jepa.regularizer is not None:
         jepa_params += [p for p in jepa.regularizer.parameters() if p.requires_grad]
     optimizer = Adam(jepa_params, lr=cfg.optim.lr)
@@ -443,11 +454,10 @@ def run(
             optimizer.zero_grad()
             jepa_loss, loss_dict = jepa(eeg)
             jepa_loss.backward()
-            torch.nn.utils.clip_grad_norm_(
-                list(jepa.context_encoder.parameters())
-                + list(jepa.predictor.parameters()),
-                max_norm=1.0,
-            )
+            _clip_params = list(jepa.context_encoder.parameters()) + list(jepa.predictor.parameters())
+            if hasattr(jepa, "decoder_head"):
+                _clip_params += list(jepa.decoder_head.parameters())
+            torch.nn.utils.clip_grad_norm_(_clip_params, max_norm=1.0)
             sanity_metrics = sanity_hook.step(
                 global_step, eeg, features, jepa, loss_dict,
                 probe_labels=probe_labels,

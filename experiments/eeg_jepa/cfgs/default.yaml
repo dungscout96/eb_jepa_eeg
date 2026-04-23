@@ -50,6 +50,7 @@ model:
   use_ema: true           # Use EMA target encoder (V-JEPA style). Set false for LeWM style.
   ema_momentum: 0.996    # EMA momentum start (ignored when use_ema=false)
   ema_momentum_end: 1.0  # EMA momentum end (cosine schedule)
+  target_type: encoded    # "encoded" = EMA/LeWM target (standard JEPA), "raw" = MAE-style raw patch target
 
 masking:
   n_pred_masks_short: 2             # Number of short-range prediction masks
