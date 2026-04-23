@@ -90,8 +90,8 @@ def extract_aligned_clips(dataset, n_time_bins=20, max_recordings=None):
         for start in starts:
             window_idx = list(range(start, start + required, dataset.temporal_stride))
             eeg_np = _read_raw_windows(dataset._fif_paths[rec_idx], crop_inds[window_idx])
-            # eeg_np: [n_windows, C, T]
-            eeg_np = eeg_np.reshape(-1, eeg_np.shape[-1])  # concat windows → [C, n_win*T]
+            # eeg_np: [n_windows, C, T] → concat along time axis → [C, n_win*T]
+            eeg_np = np.concatenate(eeg_np, axis=-1)
             # per-rec z-normalization (same as training)
             eeg = torch.from_numpy(eeg_np.copy())
             m = eeg.mean(dim=-1, keepdim=True)
