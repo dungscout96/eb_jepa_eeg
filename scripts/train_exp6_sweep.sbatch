@@ -43,8 +43,9 @@ if [ -f "$HOME/.wandb_key" ]; then
 fi
 export WANDB_PROJECT="${WANDB_PROJECT:-eb_jepa}"
 
-GIT_BRANCH="${GIT_BRANCH:-kkokate/exp6-sweep}"
-git checkout "$GIT_BRANCH"
+# NOTE: do NOT run `git checkout` here — concurrent jobs race on
+# .git/index.lock. The submitter is expected to have the correct
+# branch checked out in the working tree before invoking sbatch.
 
 # Unique per-cell output dir. Jobs with same (STD, SEED) but different
 # PRED_DIM would otherwise collide since pred_dim is not in the run name.
