@@ -5,7 +5,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --gpus-per-task=0
+#SBATCH --gpus-per-task=1
 #SBATCH --mem=32G
 #SBATCH --time=00:40:00
 #SBATCH --output=logs/consensus_%j.out
