@@ -558,7 +558,11 @@ def run(
     )
 
     eval_sets, eval_loaders = {}, {}
-    splits_list = [s.strip() for s in splits.split(",")]
+    # fire parses "val,test" as a tuple ('val', 'test'); accept str too.
+    if isinstance(splits, str):
+        splits_list = [s.strip() for s in splits.split(",")]
+    else:
+        splits_list = [str(s).strip() for s in splits]
     for split in splits_list:
         ds = JEPAMovieDataset(
             split=split,
