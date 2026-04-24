@@ -39,7 +39,7 @@ def _parse_config(cfg_line: str):
     return float(m.group(1)), int(m.group(2)), int(m.group(3))
 
 
-def _extract_metric(text: str, key: str) -> float | None:
+def _extract_metric(text: str, key: str) -> "float | None":
     # Match the key as a full path prefix (subject ones have '/')
     for line in text.splitlines():
         if f"probe_eval/test/{key}:" in line:
