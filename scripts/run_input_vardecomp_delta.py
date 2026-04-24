@@ -16,7 +16,17 @@ import sys
 from neurolab.jobs import Job
 
 CORRCA = "/projects/bbnv/kkokate/eb_jepa_eeg/corrca_filters.npz"
-OUT = "/u/dtyoung/eb_jepa_eeg/outputs/input_variance_decomp"
+# Keep separate output dirs per feature so results don't overwrite.
+OUT_RMS = "/u/dtyoung/eb_jepa_eeg/outputs/input_variance_decomp"
+OUT_BP = "/u/dtyoung/eb_jepa_eeg/outputs/input_variance_decomp_bp"
+
+# Flip to "bandpower" + OUT_BP for the richer feature (spectral band
+# powers per channel, 5 bands × C channels). Under per-recording norm,
+# RMS saturates to ~1 per channel → static decomposition becomes
+# degenerate; bandpowers capture spectral shape which the norm doesn't
+# flatten, giving a non-degenerate test.
+FEATURE = "bandpower"
+OUT = OUT_BP if FEATURE == "bandpower" else OUT_RMS
 
 
 def build_job():
@@ -26,7 +36,7 @@ def build_job():
         " --n_windows=4 --window_size_seconds=4"
         " --n_clips_per_rec=32"
         " --split=val"
-        " --feature=rms"
+        f" --feature={FEATURE}"
         " --conditions=all"
         f" --corrca_filters={CORRCA}"
         f" --output_dir={OUT}"

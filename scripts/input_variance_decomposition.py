@@ -82,20 +82,68 @@ def _full_ctx_tgt_rms(eeg):
     """Return (rms_full, rms_ctx, rms_tgt) per channel for one clip.
 
     eeg: torch.Tensor [n_windows, C, T]
-    returns: (np.ndarray [C], np.ndarray [C], np.ndarray [C])
-    - rms_full: RMS across the entire clip (used for static variance decomp)
-    - rms_ctx:  RMS across the first half (context)
-    - rms_tgt:  RMS across the second half (target)
+    returns: three np.ndarray of shape [C]
     """
     import torch
     nw, C, T = eeg.shape
-    # Flatten time across windows so the split is contiguous, not per-window.
-    flat = eeg.permute(1, 0, 2).reshape(C, nw * T)   # [C, nw*T]
+    flat = eeg.permute(1, 0, 2).reshape(C, nw * T)
     mid = (nw * T) // 2
     full_rms = torch.sqrt(torch.mean(flat ** 2, dim=1))
     ctx_rms = torch.sqrt(torch.mean(flat[:, :mid] ** 2, dim=1))
     tgt_rms = torch.sqrt(torch.mean(flat[:, mid:] ** 2, dim=1))
     return full_rms.cpu().numpy(), ctx_rms.cpu().numpy(), tgt_rms.cpu().numpy()
+
+
+# Standard EEG bands (Hz). Alpha peaks are subject-characteristic AND survive
+# per-recording z-normalization (which only controls overall amplitude, not
+# spectral shape), so band-power features give a cleaner Littwin test than
+# RMS under per-rec conditions.
+EEG_BANDS = [
+    ("delta", 1,  4),
+    ("theta", 4,  8),
+    ("alpha", 8,  13),
+    ("beta",  13, 30),
+    ("gamma", 30, 45),
+]
+
+
+def _welch_bandpowers(signal, fs):
+    """signal: np.ndarray [C, T]. Returns log band-powers [C * n_bands]."""
+    from scipy.signal import welch
+    nperseg = min(256, signal.shape[1])
+    freqs, psd = welch(signal, fs=fs, nperseg=nperseg, axis=-1)
+    parts = []
+    for _, lo, hi in EEG_BANDS:
+        mask = (freqs >= lo) & (freqs < hi)
+        if not mask.any():
+            # Fallback: nearest bin
+            mask = np.isclose(freqs, (lo + hi) / 2.0,
+                              atol=(freqs[1] - freqs[0]) / 2)
+        bp = psd[:, mask].sum(axis=1)  # [C]
+        parts.append(np.log(bp + 1e-12))
+    return np.concatenate(parts)  # [C * n_bands]
+
+
+def _full_ctx_tgt_bandpower(eeg, fs=200):
+    """Band-power feature per clip/half. Returns (full, ctx, tgt) each [C*5].
+
+    Per-recording normalization controls amplitude but not spectral shape,
+    so each subject's characteristic alpha/beta peaks remain — giving a
+    non-degenerate static variance decomposition even under per-rec norm.
+    """
+    nw, C, T = eeg.shape
+    flat = eeg.permute(1, 0, 2).reshape(C, nw * T).cpu().numpy()
+    mid = (nw * T) // 2
+    full = _welch_bandpowers(flat, fs)
+    ctx = _welch_bandpowers(flat[:, :mid], fs)
+    tgt = _welch_bandpowers(flat[:, mid:], fs)
+    return full, ctx, tgt
+
+
+FEATURES = {
+    "rms": _full_ctx_tgt_rms,
+    "bandpower": _full_ctx_tgt_bandpower,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -153,8 +201,11 @@ def _build_dataset(n_windows, window_size_seconds, split, norm_mode, corrca_path
 # ---------------------------------------------------------------------------
 
 
-def _ctx_tgt_per_clip(dataset, n_clips_per_rec):
-    """Return X_full, X_ctx, X_tgt of shape [S, K, C] and per-recording metadata."""
+def _ctx_tgt_per_clip(dataset, n_clips_per_rec, feature_fn, fs):
+    """Return X_full, X_ctx, X_tgt of shape [S, K, D] and per-recording metadata.
+
+    D depends on the feature: C for RMS, C*n_bands for bandpower.
+    """
     import torch
     from eb_jepa.datasets.hbn import _read_raw_windows
 
@@ -186,7 +237,10 @@ def _ctx_tgt_per_clip(dataset, n_clips_per_rec):
             if getattr(dataset, "_corrca_W", None) is not None:
                 eeg = torch.einsum("wct,ck->wkt", eeg, dataset._corrca_W)
 
-            full, ctx, tgt = _full_ctx_tgt_rms(eeg)
+            if feature_fn is _full_ctx_tgt_bandpower:
+                full, ctx, tgt = feature_fn(eeg, fs=fs)
+            else:
+                full, ctx, tgt = feature_fn(eeg)
             full_feats.append(full); ctx_feats.append(ctx); tgt_feats.append(tgt)
 
         all_full.append(np.stack(full_feats))  # [K, C]
@@ -274,7 +328,8 @@ def predictability_decompose(X_ctx, X_tgt):
 
 def _run_condition(condition_name, cond_cfg, output_dir, n_windows,
                    window_size_seconds, n_clips_per_rec, split,
-                   corrca_path, cfg_fname, batch_size, num_workers):
+                   corrca_path, cfg_fname, batch_size, num_workers,
+                   feature, fs):
     corrca_arg = corrca_path if cond_cfg["corrca"] else ""
     if cond_cfg["corrca"] and not corrca_path:
         raise ValueError(
@@ -287,9 +342,11 @@ def _run_condition(condition_name, cond_cfg, output_dir, n_windows,
         cfg_fname=cfg_fname, batch_size=batch_size, num_workers=num_workers,
     )
 
-    logger.info("[%s] extracting full/context/target features (K=%d)",
-                condition_name, n_clips_per_rec)
-    X_full, X_ctx, X_tgt, meta_list = _ctx_tgt_per_clip(dataset, n_clips_per_rec)
+    logger.info("[%s] extracting full/context/target features (K=%d, feature=%s)",
+                condition_name, n_clips_per_rec, feature)
+    X_full, X_ctx, X_tgt, meta_list = _ctx_tgt_per_clip(
+        dataset, n_clips_per_rec, FEATURES[feature], fs,
+    )
     logger.info("[%s] X_full/ctx/tgt shapes all %s", condition_name, X_full.shape)
 
     # (1) Static variance decomposition on the full-clip features.
@@ -335,7 +392,7 @@ def _run_condition(condition_name, cond_cfg, output_dir, n_windows,
         "n_windows":        n_windows,
         "window_size_seconds": window_size_seconds,
         "n_clips_per_rec":  n_clips_per_rec,
-        "feature":          "channel_rms",
+        "feature":          feature,
         "norm_mode":        cond_cfg["norm_mode"],
         "corrca":           cond_cfg["corrca"],
         "embed_dim":        X_full.shape[-1],
@@ -471,6 +528,8 @@ def run(
     split: str = "val",
     conditions: str = "all",
     corrca_filters: str = "",
+    feature: str = "rms",           # "rms" or "bandpower"
+    fs: float = 200.0,              # sample rate (Hz) for bandpower PSD
     batch_size: int = 64,
     num_workers: int = 4,
     fname: str = "experiments/eeg_jepa/cfgs/default.yaml",
@@ -503,6 +562,8 @@ def run(
     needs_corrca = any(CONDITIONS[c]["corrca"] for c in wanted)
     if needs_corrca and not corrca_filters:
         raise ValueError("At least one condition needs --corrca_filters=<path>")
+    if feature not in FEATURES:
+        raise ValueError(f"Unknown feature {feature!r}; valid: {list(FEATURES)}")
 
     from eb_jepa.training_utils import setup_seed
     setup_seed(seed)
@@ -513,6 +574,7 @@ def run(
             cond, CONDITIONS[cond], output_dir,
             n_windows, window_size_seconds, n_clips_per_rec, split,
             corrca_filters, fname, batch_size, num_workers,
+            feature, fs,
         )
     logger.info("All done.")
 
