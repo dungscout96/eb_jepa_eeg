@@ -79,33 +79,51 @@ def _extract_metric(text: str, key: str) -> "float | None":
     return None
 
 
+def _split_segments(text: str):
+    """Split a log file into one segment per (cfg header, metrics) pair.
+
+    Handles single-cell training sbatches and multi-cell eval-only sbatches
+    uniformly: a new segment begins at each "cfg: knob=..." header line.
+    """
+    segments = []
+    cur = []
+    for line in text.splitlines():
+        if _CFG_RE.search(line) and cur:
+            segments.append("\n".join(cur))
+            cur = [line]
+        else:
+            cur.append(line)
+    if cur:
+        segments.append("\n".join(cur))
+    return segments
+
+
 def aggregate(logs_dir: Path, prefix: str):
     cells = defaultdict(list)
+    KNOB_TO_CFGKEY = {
+        "patch_size": "patch_size",
+        "patch_overlap": "patch_overlap",
+        "n_masks_long": "n_masks_long",
+        "long_patch": "long_patch",
+        "pred_depth": "pred_depth",
+        "enc_depth": "enc_depth",
+        "lr": "lr",
+        "ema_end": "ema_end",
+        "corrca": "corrca",
+    }
     for out_file in sorted(logs_dir.glob(f"{prefix}*.out")):
         text = out_file.read_text(errors="ignore")
-        cfg = _parse_cfg_header(text)
-        if cfg is None:
-            continue
-        metrics = {k: _extract_metric(text, k) for k in METRICS}
-        if metrics.get("reg_position_in_movie_corr") is None:
-            continue  # job didn't reach eval
-        # The value tag per cell is the varying knob's value.
-        knob = cfg["knob"]
-        # Map short knob id → the actual cfg key it changes.
-        KNOB_TO_CFGKEY = {
-            "patch_size": "patch_size",
-            "patch_overlap": "patch_overlap",
-            "n_masks_long": "n_masks_long",
-            "long_patch": "long_patch",
-            "pred_depth": "pred_depth",
-            "enc_depth": "enc_depth",
-            "lr": "lr",
-            "ema_end": "ema_end",
-            "corrca": "corrca",
-        }
-        value = cfg.get(KNOB_TO_CFGKEY.get(knob, knob), "?")
-        cell_key = (knob, value)
-        cells[cell_key].append({"seed": cfg["seed"], "file": out_file.name, **metrics})
+        for seg in _split_segments(text):
+            cfg = _parse_cfg_header(seg)
+            if cfg is None:
+                continue
+            metrics = {k: _extract_metric(seg, k) for k in METRICS}
+            if metrics.get("reg_position_in_movie_corr") is None:
+                continue  # segment didn't reach eval
+            knob = cfg["knob"]
+            value = cfg.get(KNOB_TO_CFGKEY.get(knob, knob), "?")
+            cell_key = (knob, value)
+            cells[cell_key].append({"seed": cfg["seed"], "file": out_file.name, **metrics})
     return cells
 
 
