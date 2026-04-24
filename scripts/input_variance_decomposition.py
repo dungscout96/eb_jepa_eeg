@@ -140,9 +140,49 @@ def _full_ctx_tgt_bandpower(eeg, fs=200):
     return full, ctx, tgt
 
 
+def _hilbert_phase(signal, fs, band=(8.0, 13.0)):
+    """Bandpass-filter → Hilbert transform → instantaneous phase.
+
+    signal: [C, T]. Returns phase [C, T] in radians.
+    """
+    from scipy.signal import butter, sosfiltfilt, hilbert
+    sos = butter(4, band, btype="band", fs=fs, output="sos")
+    filtered = sosfiltfilt(sos, signal, axis=-1)
+    analytic = hilbert(filtered, axis=-1)
+    return np.angle(analytic)
+
+
+def _full_ctx_tgt_alpha_phase(eeg, fs=200):
+    """Alpha-band phase feature per clip/half.
+
+    Takes the Hilbert phase of the 8-13 Hz bandpassed signal at the
+    midpoint of each segment (clip, ctx-half, tgt-half), then returns
+    (cos φ, sin φ) per channel. Phase wanders pseudo-randomly across
+    time gaps of order seconds in real EEG, so the context→target R²
+    should be near zero — providing a feature where static variance
+    and predictability genuinely diverge.
+
+    eeg: torch.Tensor [n_windows, C, T]
+    returns: three np.ndarray of shape [2*C] (cos+sin concatenated per channel)
+    """
+    nw, C, T = eeg.shape
+    flat = eeg.permute(1, 0, 2).reshape(C, nw * T).cpu().numpy()
+    mid = (nw * T) // 2
+    phase = _hilbert_phase(flat, fs)   # [C, nw*T]
+
+    def circ_at(t):
+        return np.concatenate([np.cos(phase[:, t]), np.sin(phase[:, t])])
+
+    full = circ_at((nw * T) // 2)            # middle of whole clip
+    ctx = circ_at(mid // 2)                  # middle of first half
+    tgt = circ_at(mid + (nw * T - mid) // 2) # middle of second half
+    return full, ctx, tgt
+
+
 FEATURES = {
     "rms": _full_ctx_tgt_rms,
     "bandpower": _full_ctx_tgt_bandpower,
+    "alpha_phase": _full_ctx_tgt_alpha_phase,
 }
 
 
@@ -237,7 +277,7 @@ def _ctx_tgt_per_clip(dataset, n_clips_per_rec, feature_fn, fs):
             if getattr(dataset, "_corrca_W", None) is not None:
                 eeg = torch.einsum("wct,ck->wkt", eeg, dataset._corrca_W)
 
-            if feature_fn is _full_ctx_tgt_bandpower:
+            if feature_fn in (_full_ctx_tgt_bandpower, _full_ctx_tgt_alpha_phase):
                 full, ctx, tgt = feature_fn(eeg, fs=fs)
             else:
                 full, ctx, tgt = feature_fn(eeg)

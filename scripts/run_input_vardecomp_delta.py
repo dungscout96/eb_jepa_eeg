@@ -17,16 +17,18 @@ from neurolab.jobs import Job
 
 CORRCA = "/projects/bbnv/kkokate/eb_jepa_eeg/corrca_filters.npz"
 # Keep separate output dirs per feature so results don't overwrite.
-OUT_RMS = "/u/dtyoung/eb_jepa_eeg/outputs/input_variance_decomp"
-OUT_BP = "/u/dtyoung/eb_jepa_eeg/outputs/input_variance_decomp_bp"
-
-# Flip to "bandpower" + OUT_BP for the richer feature (spectral band
-# powers per channel, 5 bands × C channels). Under per-recording norm,
-# RMS saturates to ~1 per channel → static decomposition becomes
-# degenerate; bandpowers capture spectral shape which the norm doesn't
-# flatten, giving a non-degenerate test.
-FEATURE = "bandpower"
-OUT = OUT_BP if FEATURE == "bandpower" else OUT_RMS
+OUT_BY_FEATURE = {
+    "rms":         "/u/dtyoung/eb_jepa_eeg/outputs/input_variance_decomp",
+    "bandpower":   "/u/dtyoung/eb_jepa_eeg/outputs/input_variance_decomp_bp",
+    "alpha_phase": "/u/dtyoung/eb_jepa_eeg/outputs/input_variance_decomp_phase",
+}
+# Cleanest Littwin discrimination: alpha_phase has moderate static variance
+# (phase distributes on the unit circle) but near-zero context→target
+# predictability over multi-second gaps (phase wanders). If representation
+# variance tracks predictability (not static), we expect representation to
+# encode almost no alpha phase despite its non-trivial input variance.
+FEATURE = "alpha_phase"
+OUT = OUT_BY_FEATURE[FEATURE]
 
 
 def build_job():
