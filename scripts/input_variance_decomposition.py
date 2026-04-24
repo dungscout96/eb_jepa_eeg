@@ -207,46 +207,64 @@ def _ctx_tgt_per_clip(dataset, n_clips_per_rec):
 
 
 def predictability_decompose(X_ctx, X_tgt):
-    """Fit OLS target = W·context + b, then decompose ε by variance source.
+    """Fit OLS target = W·context + b, then decompose target, prediction,
+    and residual by variance source (subject × stimulus × residual).
 
-    Inputs: X_ctx, X_tgt shape [S, K, C].
-    Returns dict with:
-      - stats_tgt:    static decomposition of X_tgt (DecompStats)
-      - stats_eps:    static decomposition of residual ε
-      - r2_total, r2_subject, r2_stimulus, r2_residual
-      - weight_frobenius, bias_norm
+    Two predictability measures are reported per source k:
+
+    1. predictability_k = Var_k(ŷ) / Var_k(X_tgt)   ← primary (Littwin)
+       "Fraction of source-k variance captured by the prediction ŷ."
+
+    2. r2_k = 1 − Var_k(ε) / Var_k(X_tgt)           ← sanity check
+       "Fraction of source-k variance not left in the residual ε."
+
+    The two coincide iff OLS orthogonality extends to the source-decomposed
+    level (i.e. Cov_k(ŷ, ε) = 0). Reporting both exposes where it doesn't.
+
+    Inputs: X_ctx, X_tgt shape [S, K, C]. Returns dict with:
+      - stats_tgt:   decomposition of X_tgt   (DecompStats)
+      - stats_pred:  decomposition of ŷ       (DecompStats)
+      - stats_eps:   decomposition of ε       (DecompStats)
+      - predictability_{total, subject, stimulus, residual}
+      - r2_{total, subject, stimulus, residual}
+      - weight_fro, bias_norm
     """
     S, K, C = X_tgt.shape
     N = S * K
     X_ctx_flat = X_ctx.reshape(N, C)
     X_tgt_flat = X_tgt.reshape(N, C)
-    # OLS with intercept: pad context with a column of ones.
     X_aug = np.hstack([X_ctx_flat, np.ones((N, 1), dtype=X_ctx_flat.dtype)])
     coef, _, _, _ = np.linalg.lstsq(X_aug, X_tgt_flat, rcond=None)
-    W = coef[:-1]          # [C, C]
-    b = coef[-1]           # [C]
+    W, b = coef[:-1], coef[-1]
 
-    Y_pred = X_ctx_flat @ W + b   # [N, C]
-    eps = X_tgt_flat - Y_pred     # [N, C]
-    eps = eps.reshape(S, K, C)
+    Y_pred_flat = X_ctx_flat @ W + b      # [N, C]
+    eps_flat = X_tgt_flat - Y_pred_flat   # [N, C]
+    Y_pred = Y_pred_flat.reshape(S, K, C)
+    eps = eps_flat.reshape(S, K, C)
 
-    stats_tgt, _ = decompose(X_tgt)
-    stats_eps, _ = decompose(eps)
+    stats_tgt,  _ = decompose(X_tgt)
+    stats_pred, _ = decompose(Y_pred)
+    stats_eps,  _ = decompose(eps)
 
-    def r2(var_tgt, var_eps):
-        if var_tgt <= 0:
-            return float("nan")
-        return 1.0 - var_eps / var_tgt
+    def _safe(num, denom):
+        return float(num / denom) if denom > 0 else float("nan")
 
     return {
-        "stats_tgt":     stats_tgt,
-        "stats_eps":     stats_eps,
-        "r2_total":      r2(stats_tgt.var_total,     stats_eps.var_total),
-        "r2_subject":    r2(stats_tgt.var_subject,   stats_eps.var_subject),
-        "r2_stimulus":   r2(stats_tgt.var_stimulus,  stats_eps.var_stimulus),
-        "r2_residual":   r2(stats_tgt.var_residual,  stats_eps.var_residual),
-        "weight_fro":    float(np.linalg.norm(W, "fro")),
-        "bias_norm":     float(np.linalg.norm(b)),
+        "stats_tgt":  stats_tgt,
+        "stats_pred": stats_pred,
+        "stats_eps":  stats_eps,
+        # Primary — Var_k(ŷ) / Var_k(X_tgt).
+        "predictability_total":     _safe(stats_pred.var_total,     stats_tgt.var_total),
+        "predictability_subject":   _safe(stats_pred.var_subject,   stats_tgt.var_subject),
+        "predictability_stimulus":  _safe(stats_pred.var_stimulus,  stats_tgt.var_stimulus),
+        "predictability_residual":  _safe(stats_pred.var_residual,  stats_tgt.var_residual),
+        # Sanity check — 1 − Var_k(ε) / Var_k(X_tgt).
+        "r2_total":     1.0 - _safe(stats_eps.var_total,     stats_tgt.var_total),
+        "r2_subject":   1.0 - _safe(stats_eps.var_subject,   stats_tgt.var_subject),
+        "r2_stimulus":  1.0 - _safe(stats_eps.var_stimulus,  stats_tgt.var_stimulus),
+        "r2_residual":  1.0 - _safe(stats_eps.var_residual,  stats_tgt.var_residual),
+        "weight_fro":   float(np.linalg.norm(W, "fro")),
+        "bias_norm":    float(np.linalg.norm(b)),
     }
 
 
@@ -287,7 +305,13 @@ def _run_condition(condition_name, cond_cfg, output_dir, n_windows,
     # (2) Predictability decomposition on context/target halves.
     res = predictability_decompose(X_ctx, X_tgt)
     logger.info(
-        "[%s] [PREDICT ctx→tgt] R²_total=%.4f  R²_subj=%.4f  R²_stim=%.4f  R²_res=%.4f",
+        "[%s] [PREDICT ctx→tgt] predictability: total=%.4f subj=%.4f stim=%.4f res=%.4f",
+        condition_name,
+        res["predictability_total"], res["predictability_subject"],
+        res["predictability_stimulus"], res["predictability_residual"],
+    )
+    logger.info(
+        "[%s] [PREDICT ctx→tgt]  (R² sanity): total=%.4f subj=%.4f stim=%.4f res=%.4f",
         condition_name,
         res["r2_total"], res["r2_subject"], res["r2_stimulus"], res["r2_residual"],
     )
@@ -319,14 +343,19 @@ def _run_condition(condition_name, cond_cfg, output_dir, n_windows,
         # (1) Static: what's IN the input, decomposed.
         "stats_full_clip":  asdict(stats_full),
         # (2) Predictability: how much of each source is recoverable via OLS.
-        "stats_target":     asdict(res["stats_tgt"]),
-        "stats_residual":   asdict(res["stats_eps"]),
-        "r2_total":         res["r2_total"],
-        "r2_subject":       res["r2_subject"],
-        "r2_stimulus":      res["r2_stimulus"],
-        "r2_residual":      res["r2_residual"],
-        "weight_fro":       res["weight_fro"],
-        "bias_norm":        res["bias_norm"],
+        "stats_target":              asdict(res["stats_tgt"]),
+        "stats_predicted":           asdict(res["stats_pred"]),
+        "stats_residual":            asdict(res["stats_eps"]),
+        "predictability_total":      res["predictability_total"],
+        "predictability_subject":    res["predictability_subject"],
+        "predictability_stimulus":   res["predictability_stimulus"],
+        "predictability_residual":   res["predictability_residual"],
+        "r2_total":                  res["r2_total"],
+        "r2_subject":                res["r2_subject"],
+        "r2_stimulus":               res["r2_stimulus"],
+        "r2_residual":               res["r2_residual"],
+        "weight_fro":                res["weight_fro"],
+        "bias_norm":                 res["bias_norm"],
     }
     with open(run_dir / "stats.json", "w") as f:
         json.dump(out, f, indent=2)
@@ -348,35 +377,34 @@ def _selftest():
     rng = np.random.default_rng(0)
     S, K, C = 60, 20, 16
 
+    def _fmt(r):
+        return (f"pred: tot={r['predictability_total']:+.3f} "
+                f"subj={r['predictability_subject']:+.3f} "
+                f"stim={r['predictability_stimulus']:+.3f}  | "
+                f"R²: tot={r['r2_total']:+.3f} "
+                f"subj={r['r2_subject']:+.3f} stim={r['r2_stimulus']:+.3f}")
+
     # Case A: pure noise
     X_ctx = rng.standard_normal((S, K, C))
-    X_tgt = rng.standard_normal((S, K, C))  # independent of ctx
-    r = predictability_decompose(X_ctx, X_tgt)
-    print(f"[noise]   R²_total={r['r2_total']:+.3f}  R²_subj={r['r2_subject']:+.3f}  "
-          f"R²_stim={r['r2_stimulus']:+.3f}")
+    X_tgt = rng.standard_normal((S, K, C))
+    print(f"[noise]   {_fmt(predictability_decompose(X_ctx, X_tgt))}")
 
-    # Case B: subject DC offset + indep noise on both halves
+    # Case B: subject DC offset shared across ctx/tgt
     offsets = rng.standard_normal((S, 1, C)) * 3.0
     X_ctx = rng.standard_normal((S, K, C)) + offsets
     X_tgt = rng.standard_normal((S, K, C)) + offsets
-    r = predictability_decompose(X_ctx, X_tgt)
-    print(f"[subjDC]  R²_total={r['r2_total']:+.3f}  R²_subj={r['r2_subject']:+.3f}  "
-          f"R²_stim={r['r2_stimulus']:+.3f}  (expect subj ≫ 0)")
+    print(f"[subjDC]  {_fmt(predictability_decompose(X_ctx, X_tgt))}  (expect subj ≫ 0)")
 
-    # Case C: shared stimulus between ctx and tgt (same clip position signal)
+    # Case C: shared stimulus (same clip-pos signal across ctx/tgt)
     stim = rng.standard_normal((1, K, C)) * 3.0
     X_ctx = rng.standard_normal((S, K, C)) + stim
     X_tgt = rng.standard_normal((S, K, C)) + stim
-    r = predictability_decompose(X_ctx, X_tgt)
-    print(f"[stim]    R²_total={r['r2_total']:+.3f}  R²_subj={r['r2_subject']:+.3f}  "
-          f"R²_stim={r['r2_stimulus']:+.3f}  (expect stim ≫ 0)")
+    print(f"[stim]    {_fmt(predictability_decompose(X_ctx, X_tgt))}  (expect stim ≫ 0)")
 
-    # Case D: both subject and stimulus
+    # Case D: both
     X_ctx = rng.standard_normal((S, K, C)) + offsets + stim
     X_tgt = rng.standard_normal((S, K, C)) + offsets + stim
-    r = predictability_decompose(X_ctx, X_tgt)
-    print(f"[both]    R²_total={r['r2_total']:+.3f}  R²_subj={r['r2_subject']:+.3f}  "
-          f"R²_stim={r['r2_stimulus']:+.3f}  (expect both ≫ 0)")
+    print(f"[both]    {_fmt(predictability_decompose(X_ctx, X_tgt))}  (expect both ≫ 0)")
     print("selftest OK")
 
 
