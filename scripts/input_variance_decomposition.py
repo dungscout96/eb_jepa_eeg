@@ -1,40 +1,49 @@
-"""Input-space variance decomposition (before the encoder).
+"""Input-space predictability decomposition (pre-encoder).
 
-Applies the same nested-ANOVA decomposition that scripts/variance_decomposition.py
-runs on JEPA embeddings, but on simple per-clip summary features of the
-*input* EEG. Tests whether the variance structure we observe in learned
-representations is inherited from the input variance structure or actually
-shaped by the encoder/regularizer.
+Tests Littwin's JEPA claim directly: the encoder's representation variance
+is proportional to the fraction of input variance that is *predictable from
+context to target* under the masked-prediction task. This goes beyond a
+static variance decomposition — a subject DC offset has low static variance
+but R² = 1.0 from context (a constant is trivially recovered), while random
+noise has high static variance but R² ≈ 0.
 
-Four conditions, mirroring the training arms:
+Procedure per clip
+------------------
+Each clip is read as `[n_windows, C, T]` float EEG.
+1. Split along time into a **context half** (first 1/2) and **target half**
+   (second 1/2). This stands in for JEPA's random mask — any partition the
+   encoder could see is a fair test of Littwin's claim.
+2. Per channel, compute RMS of each half → `X_ctx[C]`, `X_tgt[C]`.
+3. Stack across subjects and clips → `X_ctx[S, K, C]`, `X_tgt[S, K, C]`.
 
-| condition       | norm_mode       | CorrCA | notes                              |
-|-----------------|-----------------|--------|------------------------------------|
-| raw_global      | global          | no     | matches SIGReg/VICReg baselines    |
-| per_rec         | per_recording   | no     | matches retrain_perrec arm         |
-| corrca_global   | global          | yes    | ablation (CorrCA w/o per-rec norm) |
-| corrca_per_rec  | per_recording   | yes    | matches CorrCA training            |
+Then:
+4. **Static decomposition** of `X_tgt`: subject / stimulus / residual.
+5. **Linear regression** `X_tgt ≈ W · X_ctx + b` (OLS on the flat `[S*K, C]`
+   matrices).
+6. **Residual ε = X_tgt − (W·X_ctx + b)**, decomposed the same way.
+7. **R² per source = 1 − Var_source(ε) / Var_source(X_tgt)**.
 
-Feature per clip (default): per-channel RMS averaged across windows. The
-resulting vector [C] captures channel-wise amplitude, which is where
-subject-baseline differences live in EEG (each subject's channels have
-characteristic amplitudes). Under per-rec norm, per-channel RMS gets
-flattened toward 1 within a recording → prediction: η²_subj collapses
-in the per_rec condition.
+Under Littwin, the encoder's representation variance should track R² per
+source, not total input variance per source.
 
-Output schema matches scripts/variance_decomposition.py so
-`--aggregate_dir` / `--reanalyze_dir` work the same way.
+Four conditions, mirroring training arms:
+
+| condition       | norm_mode     | CorrCA | matches                              |
+|-----------------|---------------|--------|--------------------------------------|
+| raw_global      | global        | no     | SIGReg/VICReg baselines              |
+| per_rec         | per_recording | no     | retrain_perrec arm                   |
+| corrca_global   | global        | yes    | ablation (CorrCA w/o per-rec norm)   |
+| corrca_per_rec  | per_recording | yes    | CorrCA training                      |
 
 Usage
 -----
 # All 4 conditions in one call, K=32, val split:
 python scripts/input_variance_decomposition.py \\
-    --output_dir=outputs/input_variance_decomp \\
-    --n_windows=4 --window_size_seconds=4 \\
-    --n_clips_per_rec=32 \\
+    --output_dir=outputs/input_predictability_decomp \\
+    --n_windows=4 --window_size_seconds=4 --n_clips_per_rec=32 \\
     --corrca_filters=/projects/bbnv/kkokate/eb_jepa_eeg/corrca_filters.npz
 
-# Self-test (synthetic data, no dataset needed):
+# Selftest (no dataset needed, synthetic toy cases):
 python scripts/input_variance_decomposition.py --selftest
 """
 
@@ -42,7 +51,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 from dataclasses import asdict
 from pathlib import Path
 
@@ -50,68 +58,52 @@ import fire
 import numpy as np
 
 from scripts.variance_decomposition import (
-    DecompStats,
     _aggregate,
     _meta_arrays,
     _reanalyze,
-    _selftest as _decomp_selftest,
     decompose,
 )
 
-logger = logging.getLogger("input_variance_decomp")
+logger = logging.getLogger("input_predictability")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 
 # ---------------------------------------------------------------------------
-# Feature extraction per clip
+# Context/target feature extraction per clip
 # ---------------------------------------------------------------------------
 
 
-def _rms_per_channel(eeg):
-    """Per-channel RMS averaged across windows and timepoints.
+def _ctx_tgt_rms(eeg):
+    """Split clip in half along time, return (rms_ctx, rms_tgt) per channel.
 
     eeg: torch.Tensor [n_windows, C, T]
-    returns: np.ndarray [C]
+    returns: (np.ndarray [C], np.ndarray [C])
     """
     import torch
-    return torch.sqrt(torch.mean(eeg ** 2, dim=(0, 2))).cpu().numpy()
-
-
-def _log_power_per_channel(eeg):
-    """log(mean power + eps) per channel. More Gaussian-like than RMS."""
-    import torch
-    power = torch.mean(eeg ** 2, dim=(0, 2))
-    return torch.log(power + 1e-8).cpu().numpy()
-
-
-def _flat(eeg):
-    """Flatten [n_windows, C, T] → [n_windows*C*T]. High-dim; costly but lossless."""
-    return eeg.cpu().numpy().reshape(-1)
-
-
-FEATURES = {
-    "rms": _rms_per_channel,
-    "log_power": _log_power_per_channel,
-    "flat": _flat,
-}
+    nw, C, T = eeg.shape
+    # Flatten time across windows so the split is contiguous, not per-window.
+    flat = eeg.permute(1, 0, 2).reshape(C, nw * T)   # [C, nw*T]
+    mid = (nw * T) // 2
+    ctx_rms = torch.sqrt(torch.mean(flat[:, :mid] ** 2, dim=1))
+    tgt_rms = torch.sqrt(torch.mean(flat[:, mid:] ** 2, dim=1))
+    return ctx_rms.cpu().numpy(), tgt_rms.cpu().numpy()
 
 
 # ---------------------------------------------------------------------------
-# Dataset construction per condition
+# Dataset construction
 # ---------------------------------------------------------------------------
 
 
 CONDITIONS = {
-    "raw_global":       dict(norm_mode="global",         corrca=False),
-    "per_rec":          dict(norm_mode="per_recording",  corrca=False),
-    "corrca_global":    dict(norm_mode="global",         corrca=True),
-    "corrca_per_rec":   dict(norm_mode="per_recording",  corrca=True),
+    "raw_global":     dict(norm_mode="global",        corrca=False),
+    "per_rec":        dict(norm_mode="per_recording", corrca=False),
+    "corrca_global":  dict(norm_mode="global",        corrca=True),
+    "corrca_per_rec": dict(norm_mode="per_recording", corrca=True),
 }
 
 
 def _build_dataset(n_windows, window_size_seconds, split, norm_mode, corrca_path,
                    cfg_fname, batch_size, num_workers):
-    """Build a JEPAMovieDataset with the requested preprocessing config."""
     from eb_jepa.datasets.hbn import JEPAMovieDataset
     from eb_jepa.training_utils import load_config
     from experiments.eeg_jepa.main import resolve_preprocessed_dir
@@ -148,22 +140,16 @@ def _build_dataset(n_windows, window_size_seconds, split, norm_mode, corrca_path
 
 
 # ---------------------------------------------------------------------------
-# Per-clip feature extraction
+# Per-clip extraction across a dataset
 # ---------------------------------------------------------------------------
 
 
-def _features_per_clip(dataset, n_clips_per_rec, feature_fn):
-    """Return Z [S, K, D] of per-clip features and recording metadata.
-
-    Mirrors scripts.variance_decomposition._embed_per_clip but replaces
-    the encoder forward pass with a simple feature extraction.
-    """
+def _ctx_tgt_per_clip(dataset, n_clips_per_rec):
+    """Return X_ctx, X_tgt of shape [S, K, C] and per-recording metadata."""
     import torch
     from eb_jepa.datasets.hbn import _read_raw_windows
 
-    all_feats = []
-    all_meta = []
-
+    all_ctx, all_tgt, all_meta = [], [], []
     for rec_idx in range(len(dataset)):
         crop_inds = dataset._crop_inds[rec_idx]
         n_total = len(crop_inds)
@@ -173,14 +159,13 @@ def _features_per_clip(dataset, n_clips_per_rec, feature_fn):
             continue
 
         starts = np.linspace(0, n_clips - 1, n_clips_per_rec, dtype=int)
-        clip_feats = []
+        ctx_feats, tgt_feats = [], []
         for start in starts:
             indices = list(range(start, start + required, dataset.temporal_stride))
             eeg_np = _read_raw_windows(dataset._fif_paths[rec_idx], crop_inds[indices])
             eeg = torch.from_numpy(eeg_np)  # [n_windows, C, T]
 
-            # Replicate __getitem__ preprocessing exactly (same as the
-            # encoder-side script):
+            # Replicate __getitem__ preprocessing exactly.
             if dataset._norm_mode == "per_recording":
                 rec_mean = eeg.mean(dim=(0, 2), keepdim=True)
                 rec_std = eeg.std(dim=(0, 2), keepdim=True).clamp(min=1e-8)
@@ -192,16 +177,66 @@ def _features_per_clip(dataset, n_clips_per_rec, feature_fn):
             if getattr(dataset, "_corrca_W", None) is not None:
                 eeg = torch.einsum("wct,ck->wkt", eeg, dataset._corrca_W)
 
-            clip_feats.append(feature_fn(eeg))
+            ctx, tgt = _ctx_tgt_rms(eeg)
+            ctx_feats.append(ctx); tgt_feats.append(tgt)
 
-        all_feats.append(np.stack(clip_feats))  # [K, D]
+        all_ctx.append(np.stack(ctx_feats))  # [K, C]
+        all_tgt.append(np.stack(tgt_feats))
         all_meta.append(dataset._recording_metadata[rec_idx])
 
         if (rec_idx + 1) % 50 == 0:
             logger.info("  extracted %d/%d recordings", rec_idx + 1, len(dataset))
 
-    Z = np.stack(all_feats)  # [S, K, D]
-    return Z, all_meta
+    return np.stack(all_ctx), np.stack(all_tgt), all_meta
+
+
+# ---------------------------------------------------------------------------
+# Predictability decomposition
+# ---------------------------------------------------------------------------
+
+
+def predictability_decompose(X_ctx, X_tgt):
+    """Fit OLS target = W·context + b, then decompose ε by variance source.
+
+    Inputs: X_ctx, X_tgt shape [S, K, C].
+    Returns dict with:
+      - stats_tgt:    static decomposition of X_tgt (DecompStats)
+      - stats_eps:    static decomposition of residual ε
+      - r2_total, r2_subject, r2_stimulus, r2_residual
+      - weight_frobenius, bias_norm
+    """
+    S, K, C = X_tgt.shape
+    N = S * K
+    X_ctx_flat = X_ctx.reshape(N, C)
+    X_tgt_flat = X_tgt.reshape(N, C)
+    # OLS with intercept: pad context with a column of ones.
+    X_aug = np.hstack([X_ctx_flat, np.ones((N, 1), dtype=X_ctx_flat.dtype)])
+    coef, _, _, _ = np.linalg.lstsq(X_aug, X_tgt_flat, rcond=None)
+    W = coef[:-1]          # [C, C]
+    b = coef[-1]           # [C]
+
+    Y_pred = X_ctx_flat @ W + b   # [N, C]
+    eps = X_tgt_flat - Y_pred     # [N, C]
+    eps = eps.reshape(S, K, C)
+
+    stats_tgt, _ = decompose(X_tgt)
+    stats_eps, _ = decompose(eps)
+
+    def r2(var_tgt, var_eps):
+        if var_tgt <= 0:
+            return float("nan")
+        return 1.0 - var_eps / var_tgt
+
+    return {
+        "stats_tgt":     stats_tgt,
+        "stats_eps":     stats_eps,
+        "r2_total":      r2(stats_tgt.var_total,     stats_eps.var_total),
+        "r2_subject":    r2(stats_tgt.var_subject,   stats_eps.var_subject),
+        "r2_stimulus":   r2(stats_tgt.var_stimulus,  stats_eps.var_stimulus),
+        "r2_residual":   r2(stats_tgt.var_residual,  stats_eps.var_residual),
+        "weight_fro":    float(np.linalg.norm(W, "fro")),
+        "bias_norm":     float(np.linalg.norm(b)),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -210,9 +245,8 @@ def _features_per_clip(dataset, n_clips_per_rec, feature_fn):
 
 
 def _run_condition(condition_name, cond_cfg, output_dir, n_windows,
-                   window_size_seconds, n_clips_per_rec, split, feature,
+                   window_size_seconds, n_clips_per_rec, split,
                    corrca_path, cfg_fname, batch_size, num_workers):
-    """Build dataset, extract features, run decomposition, save results."""
     corrca_arg = corrca_path if cond_cfg["corrca"] else ""
     if cond_cfg["corrca"] and not corrca_path:
         raise ValueError(
@@ -224,45 +258,107 @@ def _run_condition(condition_name, cond_cfg, output_dir, n_windows,
         norm_mode=cond_cfg["norm_mode"], corrca_path=corrca_arg,
         cfg_fname=cfg_fname, batch_size=batch_size, num_workers=num_workers,
     )
-    feature_fn = FEATURES[feature]
 
-    logger.info("[%s] extracting features (K=%d, feature=%s)",
-                condition_name, n_clips_per_rec, feature)
-    Z, meta_list = _features_per_clip(dataset, n_clips_per_rec, feature_fn)
-    logger.info("[%s] Z shape = %s", condition_name, Z.shape)
+    logger.info("[%s] extracting context+target features (K=%d)",
+                condition_name, n_clips_per_rec)
+    X_ctx, X_tgt, meta_list = _ctx_tgt_per_clip(dataset, n_clips_per_rec)
+    logger.info("[%s] X_ctx shape=%s  X_tgt shape=%s",
+                condition_name, X_ctx.shape, X_tgt.shape)
 
-    stats, _raw = decompose(Z)
+    res = predictability_decompose(X_ctx, X_tgt)
     logger.info(
-        "[%s] η²_subj=%.4f η²_stim=%.4f stim/within=%.4f  eff_rank(subj/within)=%.2f/%.2f",
-        condition_name, stats.eta_sq, stats.eta_sq_stimulus,
-        stats.stim_frac_of_within, stats.eff_rank_subject, stats.eff_rank_within,
+        "[%s] R²_total=%.4f  R²_subj=%.4f  R²_stim=%.4f  R²_res=%.4f",
+        condition_name,
+        res["r2_total"], res["r2_subject"], res["r2_stimulus"], res["r2_residual"],
+    )
+    stats_tgt = res["stats_tgt"]
+    logger.info(
+        "[%s] Var_tgt: total=%.4f subj=%.4f stim=%.4f res=%.4f (η²_subj=%.3f)",
+        condition_name, stats_tgt.var_total, stats_tgt.var_subject,
+        stats_tgt.var_stimulus, stats_tgt.var_residual, stats_tgt.eta_sq,
     )
 
     subject_ids, ages, sexes = _meta_arrays(meta_list)
 
     run_dir = Path(output_dir) / condition_name
     run_dir.mkdir(parents=True, exist_ok=True)
-
     np.savez_compressed(
-        run_dir / "embeddings.npz",
-        Z=Z, subject_ids=subject_ids, ages=ages, sexes=sexes,
+        run_dir / "features.npz",
+        X_ctx=X_ctx, X_tgt=X_tgt,
+        subject_ids=subject_ids, ages=ages, sexes=sexes,
     )
-    stats_dict = asdict(stats)
-    stats_dict.update({
-        "run_name": condition_name,
-        "condition": condition_name,
-        "split": split,
-        "n_windows": n_windows,
+
+    # Flat JSON — include both target stats and predictability R²s.
+    out = {
+        "run_name":         condition_name,
+        "condition":        condition_name,
+        "split":            split,
+        "n_windows":        n_windows,
         "window_size_seconds": window_size_seconds,
-        "n_clips_per_rec": n_clips_per_rec,
-        "feature": feature,
-        "norm_mode": cond_cfg["norm_mode"],
-        "corrca": cond_cfg["corrca"],
-        "embed_dim": Z.shape[-1],
-    })
+        "n_clips_per_rec":  n_clips_per_rec,
+        "feature":          "ctx_tgt_rms",
+        "norm_mode":        cond_cfg["norm_mode"],
+        "corrca":           cond_cfg["corrca"],
+        "embed_dim":        X_tgt.shape[-1],
+        "stats_target":     asdict(res["stats_tgt"]),
+        "stats_residual":   asdict(res["stats_eps"]),
+        "r2_total":         res["r2_total"],
+        "r2_subject":       res["r2_subject"],
+        "r2_stimulus":      res["r2_stimulus"],
+        "r2_residual":      res["r2_residual"],
+        "weight_fro":       res["weight_fro"],
+        "bias_norm":        res["bias_norm"],
+    }
     with open(run_dir / "stats.json", "w") as f:
-        json.dump(stats_dict, f, indent=2)
+        json.dump(out, f, indent=2)
     logger.info("[%s] wrote %s", condition_name, run_dir)
+
+
+# ---------------------------------------------------------------------------
+# Self-test
+# ---------------------------------------------------------------------------
+
+
+def _selftest():
+    """Toy cases: subject DC-only, stimulus-only, and pure noise.
+
+    Predictability claim: subject DC should give R²_subj ≈ 1.0 (constants
+    are trivially recovered); stimulus-shared between ctx and tgt gives
+    R²_stim ≈ 1.0; pure noise gives R² ≈ 0.
+    """
+    rng = np.random.default_rng(0)
+    S, K, C = 60, 20, 16
+
+    # Case A: pure noise
+    X_ctx = rng.standard_normal((S, K, C))
+    X_tgt = rng.standard_normal((S, K, C))  # independent of ctx
+    r = predictability_decompose(X_ctx, X_tgt)
+    print(f"[noise]   R²_total={r['r2_total']:+.3f}  R²_subj={r['r2_subject']:+.3f}  "
+          f"R²_stim={r['r2_stimulus']:+.3f}")
+
+    # Case B: subject DC offset + indep noise on both halves
+    offsets = rng.standard_normal((S, 1, C)) * 3.0
+    X_ctx = rng.standard_normal((S, K, C)) + offsets
+    X_tgt = rng.standard_normal((S, K, C)) + offsets
+    r = predictability_decompose(X_ctx, X_tgt)
+    print(f"[subjDC]  R²_total={r['r2_total']:+.3f}  R²_subj={r['r2_subject']:+.3f}  "
+          f"R²_stim={r['r2_stimulus']:+.3f}  (expect subj ≫ 0)")
+
+    # Case C: shared stimulus between ctx and tgt (same clip position signal)
+    stim = rng.standard_normal((1, K, C)) * 3.0
+    X_ctx = rng.standard_normal((S, K, C)) + stim
+    X_tgt = rng.standard_normal((S, K, C)) + stim
+    r = predictability_decompose(X_ctx, X_tgt)
+    print(f"[stim]    R²_total={r['r2_total']:+.3f}  R²_subj={r['r2_subject']:+.3f}  "
+          f"R²_stim={r['r2_stimulus']:+.3f}  (expect stim ≫ 0)")
+
+    # Case D: both subject and stimulus
+    X_ctx = rng.standard_normal((S, K, C)) + offsets + stim
+    X_tgt = rng.standard_normal((S, K, C)) + offsets + stim
+    r = predictability_decompose(X_ctx, X_tgt)
+    print(f"[both]    R²_total={r['r2_total']:+.3f}  R²_subj={r['r2_subject']:+.3f}  "
+          f"R²_stim={r['r2_stimulus']:+.3f}  (expect both ≫ 0)")
+    print("selftest OK")
 
 
 # ---------------------------------------------------------------------------
@@ -271,26 +367,24 @@ def _run_condition(condition_name, cond_cfg, output_dir, n_windows,
 
 
 def run(
-    output_dir: str = "outputs/input_variance_decomp",
+    output_dir: str = "outputs/input_predictability_decomp",
     n_windows: int = 4,
     window_size_seconds: int = 4,
     n_clips_per_rec: int = 32,
     split: str = "val",
-    feature: str = "rms",
-    conditions: str = "all",  # comma-separated subset of CONDITIONS or "all"
+    conditions: str = "all",
     corrca_filters: str = "",
     batch_size: int = 64,
     num_workers: int = 4,
     fname: str = "experiments/eeg_jepa/cfgs/default.yaml",
     seed: int = 2025,
-    # Compat modes with scripts/variance_decomposition.py
     aggregate_dir: str = "",
     reanalyze_dir: str = "",
     selftest: bool = False,
 ):
-    """Run input-space variance decomposition for one or more conditions."""
+    """Run input-space predictability decomposition for one or more conditions."""
     if selftest:
-        _decomp_selftest()
+        _selftest()
         return
 
     if reanalyze_dir:
@@ -310,9 +404,6 @@ def run(
             if c not in CONDITIONS:
                 raise ValueError(f"Unknown condition {c!r}; valid: {list(CONDITIONS)}")
 
-    if feature not in FEATURES:
-        raise ValueError(f"Unknown feature {feature!r}; valid: {list(FEATURES)}")
-
     needs_corrca = any(CONDITIONS[c]["corrca"] for c in wanted)
     if needs_corrca and not corrca_filters:
         raise ValueError("At least one condition needs --corrca_filters=<path>")
@@ -321,14 +412,12 @@ def run(
     setup_seed(seed)
 
     logger.info("Running %d condition(s): %s", len(wanted), ", ".join(wanted))
-    for cond_name in wanted:
+    for cond in wanted:
         _run_condition(
-            cond_name, CONDITIONS[cond_name], output_dir,
+            cond, CONDITIONS[cond], output_dir,
             n_windows, window_size_seconds, n_clips_per_rec, split,
-            feature, corrca_filters, fname, batch_size, num_workers,
+            corrca_filters, fname, batch_size, num_workers,
         )
-
-    _aggregate(Path(output_dir))
     logger.info("All done.")
 
 
