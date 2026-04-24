@@ -1,30 +1,36 @@
-"""Input-space predictability decomposition (pre-encoder).
+"""Input-space variance + predictability decomposition (pre-encoder).
 
-Tests Littwin's JEPA claim directly: the encoder's representation variance
-is proportional to the fraction of input variance that is *predictable from
-context to target* under the masked-prediction task. This goes beyond a
-static variance decomposition — a subject DC offset has low static variance
-but R² = 1.0 from context (a constant is trivially recovered), while random
-noise has high static variance but R² ≈ 0.
+Tests Littwin's JEPA claim: representation variance tracks the fraction of
+input variance that is *predictable from context to target* under the
+masked-prediction task, not merely total input variance per source. The
+two quantities coincide in many cases but diverge in informative ones
+(e.g. CorrCA may reduce subject variance while leaving within-recording
+constancy — and therefore subject predictability — intact).
 
 Procedure per clip
 ------------------
-Each clip is read as `[n_windows, C, T]` float EEG.
-1. Split along time into a **context half** (first 1/2) and **target half**
-   (second 1/2). This stands in for JEPA's random mask — any partition the
-   encoder could see is a fair test of Littwin's claim.
-2. Per channel, compute RMS of each half → `X_ctx[C]`, `X_tgt[C]`.
-3. Stack across subjects and clips → `X_ctx[S, K, C]`, `X_tgt[S, K, C]`.
+Each clip is read as `[n_windows, C, T]` float EEG. We compute three
+per-channel RMS feature vectors:
+
+- `X_full`: RMS across the whole clip → for static variance decomposition.
+- `X_ctx`: RMS of the first half along time → context features.
+- `X_tgt`: RMS of the second half → target features.
 
 Then:
-4. **Static decomposition** of `X_tgt`: subject / stimulus / residual.
-5. **Linear regression** `X_tgt ≈ W · X_ctx + b` (OLS on the flat `[S*K, C]`
-   matrices).
-6. **Residual ε = X_tgt − (W·X_ctx + b)**, decomposed the same way.
-7. **R² per source = 1 − Var_source(ε) / Var_source(X_tgt)**.
 
-Under Littwin, the encoder's representation variance should track R² per
-source, not total input variance per source.
+(1) **Static** decomposition on `X_full`: subject / stimulus / residual
+    variance components. Tells us what's IN the input.
+
+(2) **Predictability** decomposition via OLS `X_tgt ≈ W · X_ctx + b`:
+    residual ε = X_tgt − (W·X_ctx + b), decomposed the same way. R² per
+    source = 1 − Var_source(ε) / Var_source(X_tgt). Tells us how much of
+    each variance component a linear context→target regression can
+    recover.
+
+The strongest Littwin test is comparing (2) — not (1) — to the encoder's
+representation variance from scripts/variance_decomposition.py. Per-rec
+norm and CorrCA affect variance and predictability differently; the
+discrepancy is the diagnostic.
 
 Four conditions, mirroring training arms:
 
@@ -73,20 +79,24 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 # ---------------------------------------------------------------------------
 
 
-def _ctx_tgt_rms(eeg):
-    """Split clip in half along time, return (rms_ctx, rms_tgt) per channel.
+def _full_ctx_tgt_rms(eeg):
+    """Return (rms_full, rms_ctx, rms_tgt) per channel for one clip.
 
     eeg: torch.Tensor [n_windows, C, T]
-    returns: (np.ndarray [C], np.ndarray [C])
+    returns: (np.ndarray [C], np.ndarray [C], np.ndarray [C])
+    - rms_full: RMS across the entire clip (used for static variance decomp)
+    - rms_ctx:  RMS across the first half (context)
+    - rms_tgt:  RMS across the second half (target)
     """
     import torch
     nw, C, T = eeg.shape
     # Flatten time across windows so the split is contiguous, not per-window.
     flat = eeg.permute(1, 0, 2).reshape(C, nw * T)   # [C, nw*T]
     mid = (nw * T) // 2
+    full_rms = torch.sqrt(torch.mean(flat ** 2, dim=1))
     ctx_rms = torch.sqrt(torch.mean(flat[:, :mid] ** 2, dim=1))
     tgt_rms = torch.sqrt(torch.mean(flat[:, mid:] ** 2, dim=1))
-    return ctx_rms.cpu().numpy(), tgt_rms.cpu().numpy()
+    return full_rms.cpu().numpy(), ctx_rms.cpu().numpy(), tgt_rms.cpu().numpy()
 
 
 # ---------------------------------------------------------------------------
@@ -145,11 +155,11 @@ def _build_dataset(n_windows, window_size_seconds, split, norm_mode, corrca_path
 
 
 def _ctx_tgt_per_clip(dataset, n_clips_per_rec):
-    """Return X_ctx, X_tgt of shape [S, K, C] and per-recording metadata."""
+    """Return X_full, X_ctx, X_tgt of shape [S, K, C] and per-recording metadata."""
     import torch
     from eb_jepa.datasets.hbn import _read_raw_windows
 
-    all_ctx, all_tgt, all_meta = [], [], []
+    all_full, all_ctx, all_tgt, all_meta = [], [], [], []
     for rec_idx in range(len(dataset)):
         crop_inds = dataset._crop_inds[rec_idx]
         n_total = len(crop_inds)
@@ -159,7 +169,7 @@ def _ctx_tgt_per_clip(dataset, n_clips_per_rec):
             continue
 
         starts = np.linspace(0, n_clips - 1, n_clips_per_rec, dtype=int)
-        ctx_feats, tgt_feats = [], []
+        full_feats, ctx_feats, tgt_feats = [], [], []
         for start in starts:
             indices = list(range(start, start + required, dataset.temporal_stride))
             eeg_np = _read_raw_windows(dataset._fif_paths[rec_idx], crop_inds[indices])
@@ -177,17 +187,18 @@ def _ctx_tgt_per_clip(dataset, n_clips_per_rec):
             if getattr(dataset, "_corrca_W", None) is not None:
                 eeg = torch.einsum("wct,ck->wkt", eeg, dataset._corrca_W)
 
-            ctx, tgt = _ctx_tgt_rms(eeg)
-            ctx_feats.append(ctx); tgt_feats.append(tgt)
+            full, ctx, tgt = _full_ctx_tgt_rms(eeg)
+            full_feats.append(full); ctx_feats.append(ctx); tgt_feats.append(tgt)
 
-        all_ctx.append(np.stack(ctx_feats))  # [K, C]
+        all_full.append(np.stack(full_feats))  # [K, C]
+        all_ctx.append(np.stack(ctx_feats))
         all_tgt.append(np.stack(tgt_feats))
         all_meta.append(dataset._recording_metadata[rec_idx])
 
         if (rec_idx + 1) % 50 == 0:
             logger.info("  extracted %d/%d recordings", rec_idx + 1, len(dataset))
 
-    return np.stack(all_ctx), np.stack(all_tgt), all_meta
+    return np.stack(all_full), np.stack(all_ctx), np.stack(all_tgt), all_meta
 
 
 # ---------------------------------------------------------------------------
@@ -259,23 +270,26 @@ def _run_condition(condition_name, cond_cfg, output_dir, n_windows,
         cfg_fname=cfg_fname, batch_size=batch_size, num_workers=num_workers,
     )
 
-    logger.info("[%s] extracting context+target features (K=%d)",
+    logger.info("[%s] extracting full/context/target features (K=%d)",
                 condition_name, n_clips_per_rec)
-    X_ctx, X_tgt, meta_list = _ctx_tgt_per_clip(dataset, n_clips_per_rec)
-    logger.info("[%s] X_ctx shape=%s  X_tgt shape=%s",
-                condition_name, X_ctx.shape, X_tgt.shape)
+    X_full, X_ctx, X_tgt, meta_list = _ctx_tgt_per_clip(dataset, n_clips_per_rec)
+    logger.info("[%s] X_full/ctx/tgt shapes all %s", condition_name, X_full.shape)
 
+    # (1) Static variance decomposition on the full-clip features.
+    stats_full, _ = decompose(X_full)
+    logger.info(
+        "[%s] [STATIC full-clip] η²_subj=%.4f η²_stim=%.4f stim/within=%.4f  "
+        "Var_total=%.4f",
+        condition_name, stats_full.eta_sq, stats_full.eta_sq_stimulus,
+        stats_full.stim_frac_of_within, stats_full.var_total,
+    )
+
+    # (2) Predictability decomposition on context/target halves.
     res = predictability_decompose(X_ctx, X_tgt)
     logger.info(
-        "[%s] R²_total=%.4f  R²_subj=%.4f  R²_stim=%.4f  R²_res=%.4f",
+        "[%s] [PREDICT ctx→tgt] R²_total=%.4f  R²_subj=%.4f  R²_stim=%.4f  R²_res=%.4f",
         condition_name,
         res["r2_total"], res["r2_subject"], res["r2_stimulus"], res["r2_residual"],
-    )
-    stats_tgt = res["stats_tgt"]
-    logger.info(
-        "[%s] Var_tgt: total=%.4f subj=%.4f stim=%.4f res=%.4f (η²_subj=%.3f)",
-        condition_name, stats_tgt.var_total, stats_tgt.var_subject,
-        stats_tgt.var_stimulus, stats_tgt.var_residual, stats_tgt.eta_sq,
     )
 
     subject_ids, ages, sexes = _meta_arrays(meta_list)
@@ -284,11 +298,13 @@ def _run_condition(condition_name, cond_cfg, output_dir, n_windows,
     run_dir.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         run_dir / "features.npz",
-        X_ctx=X_ctx, X_tgt=X_tgt,
+        X_full=X_full, X_ctx=X_ctx, X_tgt=X_tgt,
         subject_ids=subject_ids, ages=ages, sexes=sexes,
     )
 
-    # Flat JSON — include both target stats and predictability R²s.
+    # JSON — both the static variance decomposition (X_full) and the
+    # predictability decomposition (ε from ctx→tgt OLS). The cleanest
+    # Littwin test: compare stats_full's η²_source against r2_source.
     out = {
         "run_name":         condition_name,
         "condition":        condition_name,
@@ -296,10 +312,13 @@ def _run_condition(condition_name, cond_cfg, output_dir, n_windows,
         "n_windows":        n_windows,
         "window_size_seconds": window_size_seconds,
         "n_clips_per_rec":  n_clips_per_rec,
-        "feature":          "ctx_tgt_rms",
+        "feature":          "channel_rms",
         "norm_mode":        cond_cfg["norm_mode"],
         "corrca":           cond_cfg["corrca"],
-        "embed_dim":        X_tgt.shape[-1],
+        "embed_dim":        X_full.shape[-1],
+        # (1) Static: what's IN the input, decomposed.
+        "stats_full_clip":  asdict(stats_full),
+        # (2) Predictability: how much of each source is recoverable via OLS.
         "stats_target":     asdict(res["stats_tgt"]),
         "stats_residual":   asdict(res["stats_eps"]),
         "r2_total":         res["r2_total"],
