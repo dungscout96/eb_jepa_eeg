@@ -400,7 +400,7 @@ def run(
     checkpoint_path = Path(checkpoint)
     assert checkpoint_path.exists(), f"Checkpoint not found: {checkpoint_path}"
 
-    # Infer encoder_depth and predictor_dim from checkpoint state dict
+    # Infer encoder_depth, predictor_dim, patch_size from checkpoint state dict
     _ckpt_sd = torch.load(checkpoint_path, map_location="cpu", weights_only=False).get("model_state_dict", {})
     _depth = max(
         int(k.split(".")[3]) + 1
@@ -417,6 +417,11 @@ def run(
         _pred_dim = int(_ckpt_sd["predictor.output_proj.weight"].shape[0])
     else:
         _pred_dim = None
+    # Infer patch_size from to_patch_embedding (nn.Linear(patch_size, embed_dim) →
+    # weight shape [embed_dim, patch_size]). Falls back to cfg default if absent.
+    _patch_size = None
+    if "context_encoder.to_patch_embedding.weight" in _ckpt_sd:
+        _patch_size = int(_ckpt_sd["context_encoder.to_patch_embedding.weight"].shape[1])
 
     _overrides = {
         "data.n_windows": n_windows,
@@ -426,6 +431,8 @@ def run(
         "model.encoder_depth": _depth,
         "model.predictor_embed_dim": _pred_dim,
     }
+    if _patch_size is not None:
+        _overrides["model.patch_size"] = _patch_size
     if norm_mode:
         _overrides["data.norm_mode"] = norm_mode
     if add_envelope:
