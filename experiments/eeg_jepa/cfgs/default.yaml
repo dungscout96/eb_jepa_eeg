@@ -16,6 +16,7 @@ data:
   norm_mode: global       # "global" = dataset-wide mean/std; "per_recording" = removes subject fingerprint
   add_envelope: false     # Append 1-8 Hz analytic envelope as extra channels (doubles n_chans)
   corrca_filters: null    # Path to CorrCA .npz file (projects 129 channels → k stimulus components)
+  consensus_path: null    # Path to precomputed ISC-consensus .npz for Exp 10 (teacher-branch target signal)
   # Movie feature names used for probe evaluation (regression + classification heads)
   feature_names:
     - contrast_rms

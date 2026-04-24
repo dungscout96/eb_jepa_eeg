@@ -191,6 +191,8 @@ def run(
     global NUMERIC_FEATURES
     NUMERIC_FEATURES = feature_names
 
+    # Only the training set needs the ISC-consensus teacher signal
+    # (val/test evaluate the context encoder directly; no teacher branch).
     train_set = JEPAMovieDataset(
         split="train",
         n_windows=cfg.data.n_windows,
@@ -208,10 +210,12 @@ def run(
         temporal_stride=temporal_stride,
         feature_names=feature_names,
         eeg_norm_stats=train_set.get_eeg_norm_stats(),
+        load_consensus=False,
         cfg=cfg.data,
         preprocessed=preprocessed,
         preprocessed_dir=preprocessed_dir,
     )
+    use_consensus = train_set._consensus is not None
 
     feature_stats = train_set.compute_feature_stats()
     feature_median = train_set.compute_feature_median()
@@ -434,14 +438,20 @@ def run(
             disable=cfg.logging.get("tqdm_silent", False),
         )
 
-        for eeg, features, probe_labels in pbar:
+        for batch in pbar:
+            if use_consensus:
+                eeg, eeg_teacher, features, probe_labels = batch
+                eeg_teacher = eeg_teacher.to(device)
+            else:
+                eeg, features, probe_labels = batch
+                eeg_teacher = None
             eeg = eeg.to(device)
             features = features.to(device)  # [B, T, n_features]
             # probe_labels: [B] float (NaN where no subject metadata) — stays on CPU
 
             # --- Masked JEPA pretraining ---
             optimizer.zero_grad()
-            jepa_loss, loss_dict = jepa(eeg)
+            jepa_loss, loss_dict = jepa(eeg, eeg_teacher=eeg_teacher)
             jepa_loss.backward()
             torch.nn.utils.clip_grad_norm_(
                 list(jepa.context_encoder.parameters())
@@ -596,6 +606,7 @@ def run(
         temporal_stride=temporal_stride,
         feature_names=feature_names,
         eeg_norm_stats=train_set.get_eeg_norm_stats(),
+        load_consensus=False,
         cfg=cfg.data,
         preprocessed=preprocessed,
         preprocessed_dir=preprocessed_dir,

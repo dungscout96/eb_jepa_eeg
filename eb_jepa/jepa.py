@@ -273,17 +273,28 @@ class MaskedJEPA(nn.Module):
         for p_ctx, p_tgt in zip(self.context_encoder.parameters(), self.target_encoder.parameters()):
             p_tgt.data.lerp_(p_ctx.data, 1.0 - momentum)
 
-    def forward(self, eeg: torch.Tensor) -> tuple[torch.Tensor, dict]:
+    def forward(self, eeg, eeg_teacher=None):
         """Forward pass: mask, encode, predict, compute loss.
 
         Args:
-            eeg: [B, T, C, W] raw EEG
+            eeg: [B, T, C, W] context-branch input.
+            eeg_teacher: optional [B, T, C, W] target-branch input (same shape).
+                When None, the target encoder runs on `eeg` (standard V-JEPA).
+                When provided (Exp 10), typically an across-subject ISC-consensus
+                signal time-aligned to `eeg` — denoises the prediction target.
 
         Returns:
-            (total_loss, loss_dict) where loss_dict contains individual loss components
+            (total_loss, loss_dict)
         """
         B = eeg.shape[0]
         device = eeg.device
+
+        if eeg_teacher is None:
+            eeg_teacher = eeg
+        elif eeg_teacher.shape != eeg.shape:
+            raise ValueError(
+                f"eeg_teacher shape {tuple(eeg_teacher.shape)} != eeg shape {tuple(eeg.shape)}"
+            )
 
         # 1. Generate masks
         mask_result = self.mask_collator()
@@ -298,7 +309,7 @@ class MaskedJEPA(nn.Module):
 
         # 4. Target encoding: all tokens (no masking), no gradients
         with torch.no_grad():
-            tgt_tokens = self.target_encoder.encode_tokens(eeg, mask=None)  # [B, C*T*P, D]
+            tgt_tokens = self.target_encoder.encode_tokens(eeg_teacher, mask=None)  # [B, C*T*P, D]
 
         # 5. Gather positional embeddings for context and prediction targets
         ctx_pos = pos_embed[:, context_mask]  # [B, n_ctx, D]

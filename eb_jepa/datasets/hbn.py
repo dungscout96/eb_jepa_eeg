@@ -639,6 +639,7 @@ class HBNMovieDataset(Dataset):
         # Lightweight storage: file paths + absolute sample indices per recording
         self._fif_paths = []             # str per recording
         self._crop_inds = []             # np.ndarray (n_windows, 3) per recording
+        self._window_onsets = []         # np.ndarray (n_windows,) per recording, samples rel. to video_start
         self.labels = []                 # pd.Series per recording
         self._recording_metadata = []    # dict per recording (subject-level attributes)
         total_recordings = 0
@@ -744,6 +745,7 @@ class HBNMovieDataset(Dataset):
 
                 self._fif_paths.append(fif_path)
                 self._crop_inds.append(crop_inds)
+                self._window_onsets.append(window_onsets.to_numpy().astype(np.int64))
                 self.labels.append(movie_features_for_windows)
                 self._recording_metadata.append(subj_meta)
 
@@ -833,6 +835,7 @@ class JEPAMovieDataset(HBNMovieDataset):
         feature_names=None,
         eeg_norm_stats=None,
         temporal_stride=1,
+        load_consensus=True,
         *,
         cfg: DictConfig | dict,
         preprocessed: bool = False,
@@ -857,12 +860,32 @@ class JEPAMovieDataset(HBNMovieDataset):
                         corrca_path, corrca["W"].shape[0], corrca["W"].shape[1],
                         ", ".join(f"{v:.3f}" for v in corrca["isc_values"]))
 
+        # Consensus (ISC-averaged) target signal: used as the JEPA teacher input
+        # in Exp 10 to give a stimulus-locked, across-subject-averaged reference.
+        # Shape: [k, T_movie] where T_movie = movie_duration * sfreq.
+        consensus_path = cfg.get("consensus_path", None) if not isinstance(cfg, dict) else cfg.get("consensus_path", None)
+        self._consensus = None
+        if consensus_path is not None and load_consensus:
+            cons = np.load(consensus_path)
+            self._consensus = torch.from_numpy(cons["data"]).float()  # [k, T_movie]
+            cons_sfreq = int(cons["sfreq"])
+            if cons_sfreq != int(self.sfreq):
+                raise ValueError(
+                    f"Consensus sfreq {cons_sfreq} != dataset sfreq {int(self.sfreq)}"
+                )
+            logger.info(
+                "Loaded consensus from %s: shape %s, %d training subjects",
+                consensus_path, tuple(self._consensus.shape),
+                int(cons["n_subjects"]),
+            )
+
         required_windows = (n_windows - 1) * temporal_stride + 1
 
         # Filter recordings with enough windows and pre-extract feature tensors.
         # Parent already stored _fif_paths, _crop_inds, labels (all lightweight).
         filtered_paths = []
         filtered_crops = []
+        filtered_onsets = []
         filtered_metadata = []
         self.feature_recordings = []
         self._n_chans = None
@@ -886,6 +909,7 @@ class JEPAMovieDataset(HBNMovieDataset):
 
             filtered_paths.append(self._fif_paths[rec_idx])
             filtered_crops.append(crop_inds)
+            filtered_onsets.append(self._window_onsets[rec_idx])
             filtered_metadata.append(self._recording_metadata[rec_idx])
             self.feature_recordings.append(feats)
 
@@ -900,6 +924,7 @@ class JEPAMovieDataset(HBNMovieDataset):
         # Replace parent's storage with filtered set
         self._fif_paths = filtered_paths
         self._crop_inds = filtered_crops
+        self._window_onsets = filtered_onsets
         self._recording_metadata = filtered_metadata
         del self.labels  # labels are now in feature_recordings
 
@@ -1066,6 +1091,20 @@ class JEPAMovieDataset(HBNMovieDataset):
         # Binary subject label (age > median, sex, …) — scalar float tensor.
         # NaN means metadata was unavailable for this recording.
         probe_label = torch.tensor(self._probe_labels[idx], dtype=torch.float32)
+
+        # Consensus teacher signal (Exp 10): slice across-subject-averaged CorrCA
+        # signal at the movie time corresponding to each selected window.
+        if self._consensus is not None:
+            onsets = self._window_onsets[idx]
+            T_win = eeg.shape[-1]
+            T_cons = self._consensus.shape[-1]
+            teacher_windows = []
+            for i in indices:
+                s = int(onsets[i])
+                s = max(0, min(s, T_cons - T_win))
+                teacher_windows.append(self._consensus[:, s:s + T_win])
+            eeg_teacher = torch.stack(teacher_windows, dim=0)  # [n_windows, k, T_win]
+            return eeg, eeg_teacher, feats[indices], probe_label
 
         return eeg, feats[indices], probe_label
 
