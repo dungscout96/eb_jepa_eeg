@@ -66,7 +66,6 @@ import numpy as np
 from scripts.variance_decomposition import (
     _aggregate,
     _meta_arrays,
-    _reanalyze,
     decompose,
 )
 
@@ -363,6 +362,57 @@ def _run_condition(condition_name, cond_cfg, output_dir, n_windows,
 
 
 # ---------------------------------------------------------------------------
+# Reanalyze: recompute stats.json from saved features.npz (no re-reading EEG)
+# ---------------------------------------------------------------------------
+
+
+def _reanalyze_input(dir_path: Path):
+    """Walk dir_path/*/features.npz, recompute stats.json with latest schema."""
+    n = 0
+    for npz_path in sorted(dir_path.glob("*/features.npz")):
+        run_dir = npz_path.parent
+        data = np.load(npz_path, allow_pickle=True)
+        X_full = data["X_full"] if "X_full" in data.files else None
+        X_ctx, X_tgt = data["X_ctx"], data["X_tgt"]
+        if X_full is None:
+            # Older features.npz didn't save X_full — approximate by averaging
+            # ctx and tgt RMS (same channel, slightly smoothed).
+            X_full = np.sqrt(0.5 * (X_ctx ** 2 + X_tgt ** 2))
+
+        stats_full, _ = decompose(X_full)
+        res = predictability_decompose(X_ctx, X_tgt)
+
+        stats_path = run_dir / "stats.json"
+        old = json.load(open(stats_path)) if stats_path.exists() else {}
+        new = {**old,
+            "stats_full_clip":            asdict(stats_full),
+            "stats_target":               asdict(res["stats_tgt"]),
+            "stats_predicted":            asdict(res["stats_pred"]),
+            "stats_residual":             asdict(res["stats_eps"]),
+            "predictability_total":       res["predictability_total"],
+            "predictability_subject":     res["predictability_subject"],
+            "predictability_stimulus":    res["predictability_stimulus"],
+            "predictability_residual":    res["predictability_residual"],
+            "r2_total":                   res["r2_total"],
+            "r2_subject":                 res["r2_subject"],
+            "r2_stimulus":                res["r2_stimulus"],
+            "r2_residual":                res["r2_residual"],
+            "weight_fro":                 res["weight_fro"],
+            "bias_norm":                  res["bias_norm"],
+        }
+        new.setdefault("run_name", run_dir.name)
+        with open(stats_path, "w") as f:
+            json.dump(new, f, indent=2)
+        logger.info(
+            "  reanalyzed %s: η²_subj(full)=%.3f  pred_subj=%.3f  pred_stim=%.3f",
+            run_dir.name, stats_full.eta_sq,
+            res["predictability_subject"], res["predictability_stimulus"],
+        )
+        n += 1
+    logger.info("Reanalyzed %d conditions under %s", n, dir_path)
+
+
+# ---------------------------------------------------------------------------
 # Self-test
 # ---------------------------------------------------------------------------
 
@@ -435,8 +485,7 @@ def run(
         return
 
     if reanalyze_dir:
-        _reanalyze(Path(reanalyze_dir))
-        _aggregate(Path(reanalyze_dir))
+        _reanalyze_input(Path(reanalyze_dir))
         return
 
     if aggregate_dir:
