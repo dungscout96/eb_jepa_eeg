@@ -30,8 +30,13 @@ export UV_LINK_MODE=copy
 : "${SEED:?need SEED}"
 STD_COEFF="${STD_COEFF:-0.25}"
 PRED_DIM="${PRED_DIM:-16}"
+# Band weights for δ/θ/α/β/γ. Default = first-pass asymmetric weighting;
+# override via env var, e.g. BAND_WEIGHTS="[1.0,1.0,1.0,1.0,0.0]".
+BAND_WEIGHTS="${BAND_WEIGHTS:-[1.0,0.5,0.5,0.3,0.0]}"
+# TAG goes into EXP_ID + wandb group so different weightings don't collide.
+TAG="${TAG:-default}"
 
-echo "Job ID: $SLURM_JOB_ID  Node: $SLURM_NODELIST  cfg: std=${STD_COEFF} pd=${PRED_DIM} seed=${SEED}"
+echo "Job ID: $SLURM_JOB_ID  Node: $SLURM_NODELIST  cfg: std=${STD_COEFF} pd=${PRED_DIM} seed=${SEED} weights=${BAND_WEIGHTS} tag=${TAG}"
 
 cd "$SLURM_SUBMIT_DIR"
 
@@ -45,7 +50,7 @@ if [ -f "$HOME/.wandb_key" ]; then
 fi
 export WANDB_PROJECT="${WANDB_PROJECT:-eb_jepa}"
 
-EXP_ID="exp11_std${STD_COEFF}_pd${PRED_DIM}_seed${SEED}"
+EXP_ID="exp11_${TAG}_std${STD_COEFF}_pd${PRED_DIM}_seed${SEED}"
 EXP_DIR="/projects/bbnv/kkokate/eb_jepa_eeg/checkpoints/exp11_multiband/${EXP_ID}"
 mkdir -p "$EXP_DIR"
 
@@ -67,6 +72,7 @@ PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py \
     --loss.std_coeff="${STD_COEFF}" \
     --loss.cov_coeff="${STD_COEFF}" \
     --loss.pred_loss_type=smooth_l1 \
+    --loss.multiband.weights="${BAND_WEIGHTS}" \
     --logging.wandb_group="exp11_multiband_${EXP_ID}"
 
 CKPT="${EXP_DIR}/best.pth.tar"
