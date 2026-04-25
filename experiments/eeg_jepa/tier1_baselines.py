@@ -138,6 +138,29 @@ class PSDBandExtractor:
         return out.permute(0, 2, 1).unsqueeze(-1).unsqueeze(-1)
 
 
+class StackedExtractor:
+    """Concatenate per-window outputs of several extractors along the D axis.
+
+    Each child extractor must return a tensor of shape [B, D_i, T, 1, 1].
+    Output: [B, sum(D_i), T, 1, 1]. Used by the ``exp6_residual`` baseline
+    (Exp 12) to feed (Exp 6 encoder, raw CorrCA-5) features jointly into the
+    same MovieFeatureHead probe.
+    """
+
+    def __init__(self, extractors: list, names: list[str] | None = None):
+        self.extractors = extractors
+        self.names = names or [f"e{i}" for i in range(len(extractors))]
+        # feat_dim is None until first call; once set, fixed.
+        self.feat_dim = None
+
+    def __call__(self, eeg: torch.Tensor) -> torch.Tensor:
+        outs = [ext(eeg) for ext in self.extractors]
+        out = torch.cat(outs, dim=1)
+        if self.feat_dim is None:
+            self.feat_dim = int(out.shape[1])
+        return out
+
+
 class RandomInitEncoderExtractor:
     """Random-init EEGEncoderTokens; mean-pool tokens → per-window embedding."""
 
@@ -514,9 +537,9 @@ def run(
                          (one .npz per split) under this directory.
         checkpoint: Required for baseline=exp6.
     """
-    assert baseline in ("raw_corrca", "psd_band", "random_init", "exp6"), baseline
-    if baseline == "exp6":
-        assert checkpoint, "baseline=exp6 requires --checkpoint=/path/to/best.pth.tar"
+    assert baseline in ("raw_corrca", "psd_band", "random_init", "exp6", "exp6_residual"), baseline
+    if baseline in ("exp6", "exp6_residual"):
+        assert checkpoint, f"baseline={baseline} requires --checkpoint=/path/to/best.pth.tar"
     setup_seed(seed)
     device = setup_device("auto")
 
@@ -536,6 +559,11 @@ def run(
         overrides["data.corrca_filters"] = None
     else:
         overrides["data.corrca_filters"] = corrca_filters or None
+    # exp6_residual needs CorrCA enabled at the dataset level so the
+    # *raw_corrca* branch of StackedExtractor sees CorrCA-projected EEG.
+    if baseline == "exp6_residual":
+        assert overrides["data.corrca_filters"], \
+            "exp6_residual requires --corrca_filters set"
 
     cfg = load_config(fname, overrides)
 
@@ -621,7 +649,7 @@ def run(
             mlp_dim_ratio=cfg.model.get("mlp_dim_ratio", 2.66),
         ).to(device)
         extractor = RandomInitEncoderExtractor(encoder)
-    elif baseline == "exp6":
+    elif baseline in ("exp6", "exp6_residual"):
         # Load Exp 6 checkpoint and use its context_encoder via the same
         # RandomInitEncoderExtractor wrapper (mean-pools tokens to per-window).
         encoder = EEGEncoderTokens(
@@ -646,7 +674,18 @@ def run(
         missing, unexpected = encoder.load_state_dict(ce_sd, strict=False)
         logger.info("Loaded exp6 ctx encoder: %d missing, %d unexpected keys",
                     len(missing), len(unexpected))
-        extractor = RandomInitEncoderExtractor(encoder)
+        exp6_extractor = RandomInitEncoderExtractor(encoder)
+        if baseline == "exp6":
+            extractor = exp6_extractor
+        else:
+            # Exp 12: concat (Exp 6 encoder, raw_corrca downsampled) along D.
+            raw_extractor = RawCorrCAExtractor(downsample_to=psd_downsample_to)
+            extractor = StackedExtractor(
+                [exp6_extractor, raw_extractor],
+                names=["exp6", "raw_corrca"],
+            )
+            # Set feat_dim eagerly via dummy call sizes so logging works.
+            extractor.feat_dim = exp6_extractor.feat_dim + n_chans_in * psd_downsample_to
 
     # ------------------------------------------------------------------
     # Per-clip features (movie probes + movie ID)
