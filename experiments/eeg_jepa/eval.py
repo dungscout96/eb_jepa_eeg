@@ -56,8 +56,9 @@ def validation_loop(
         reg_loss = regression_probe(eeg, features)
         cls_loss = classification_probe(eeg, features)
 
-        # Predictions (from heads applied to frozen encoder output)
-        state = jepa.encode(eeg)  # [B, D, T, 1, 1]
+        # Predictions (from heads applied to frozen encoder output;
+        # concat CorrCA residual stream when probe was configured with it).
+        state = regression_probe._features(eeg)  # [B, D, T, 1, 1] (+ residual if enabled)
         reg_pred = regression_probe.head(state)  # [B, T, n_features]
         cls_pred = classification_probe.head(state)  # [B, T, n_features]
 

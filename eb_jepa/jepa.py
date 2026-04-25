@@ -441,22 +441,62 @@ class MaskedJEPANoEMA(nn.Module):
         pass
 
 
+def extract_corrca_residual(eeg: torch.Tensor, downsample_to: int = 100) -> torch.Tensor:
+    """Box-pool a CorrCA-projected EEG window into a per-window feature vector.
+
+    Mirrors the ``RawCorrCAExtractor`` in ``tier1_baselines.py`` so the residual
+    feature is identical to the tier1 ``raw_corrca`` baseline.
+
+    Args:
+        eeg: [B, T_win, C, T_samp] (post-CorrCA in our pipeline; C typically 5).
+        downsample_to: number of samples to pool to per window.
+
+    Returns:
+        [B, C*downsample_to, T_win, 1, 1] — same layout as ``MaskedJEPA.encode``
+        so it can be concatenated along dim=1 before the probe head.
+    """
+    B, T, C, Ts = eeg.shape
+    if Ts % downsample_to != 0:
+        Ts = (Ts // downsample_to) * downsample_to
+        eeg = eeg[..., :Ts]
+    factor = Ts // downsample_to
+    # Box-mean pool: [B, T, C, downsample_to]
+    x = eeg.reshape(B, T, C, downsample_to, factor).mean(dim=-1)
+    # Per-window feature: flatten C × downsample_to
+    x = x.reshape(B, T, C * downsample_to)  # [B, T, D]
+    # MaskedJEPA.encode-compatible layout
+    return x.permute(0, 2, 1).unsqueeze(-1).unsqueeze(-1)
+
+
 class MaskedJEPAProbe(nn.Module):
     """Probe for MaskedJEPA: trains a head on frozen encoder representations.
 
     Similar to JEPAProbe but works with MaskedJEPA's token-based encoder.
+    Supports an optional CorrCA-residual stream concatenated to the encoder
+    output before the head, matching the tier1 ``exp6_residual`` feature
+    construction (Exp 13: co-trained probe).
     """
 
-    def __init__(self, masked_jepa, head, hcost):
+    def __init__(self, masked_jepa, head, hcost, *,
+                 corrca_residual: bool = False,
+                 corrca_residual_dim: int = 100):
         super().__init__()
         self.masked_jepa = masked_jepa
         self.head = head
         self.hcost = hcost
+        self.corrca_residual = bool(corrca_residual)
+        self.corrca_residual_dim = int(corrca_residual_dim)
+
+    def _features(self, eeg):
+        with torch.no_grad():
+            state = self.masked_jepa.encode(eeg)  # [B, D_enc, T, 1, 1]
+            if self.corrca_residual:
+                res = extract_corrca_residual(eeg, self.corrca_residual_dim)
+                state = torch.cat([state, res], dim=1)
+        return state.detach()
 
     def forward(self, eeg, targets):
         """Forward pass: encode with frozen MaskedJEPA, apply head, compute loss."""
-        with torch.no_grad():
-            # Encode without masking, pool to [B, D, T, 1, 1]
-            state = self.masked_jepa.encode(eeg)
-        output = self.head(state.detach())
+        state = self._features(eeg)
+        output = self.head(state)
         return self.hcost(output, targets)

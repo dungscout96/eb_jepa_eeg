@@ -39,6 +39,8 @@ model:
   # Decoder heads
   hdec: 64          # Hidden dimension in movie feature heads
   temporal_probe: false  # Concat global temporal mean to per-window probe input
+  probe_corrca_residual: false      # Exp 13: concat raw_corrca box-pool feats with encoder output for online probe
+  probe_corrca_residual_dim: 100    # box-pool downsample target per window (n_chans*dim → residual D)
 
   # Masked prediction (V-JEPA style)
   patch_size: 50         # Temporal patch size in samples

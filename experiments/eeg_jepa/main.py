@@ -325,16 +325,36 @@ def run(
     # Online evaluation probes (trained on frozen encoder representations)
     # ------------------------------------------------------------------
     HeadClass = TemporalMovieFeatureHead if cfg.model.get("temporal_probe", False) else MovieFeatureHead
-    reg_head = HeadClass(embed_dim, cfg.model.hdec, n_features)
+    # Exp 13: co-trained CorrCA-residual probe — concat raw_corrca box-pool feats
+    # with encoder output along D before the probe head.
+    probe_corrca_residual = bool(cfg.model.get("probe_corrca_residual", False))
+    probe_corrca_dim = int(cfg.model.get("probe_corrca_residual_dim", 100))
+    if probe_corrca_residual:
+        residual_d = n_chans * probe_corrca_dim  # n_chans is post-CorrCA (5 typically)
+        probe_in_dim = embed_dim + residual_d
+        logger.info("Co-trained probe with CorrCA residual: enc=%d + raw=%d → probe_in=%d",
+                    embed_dim, residual_d, probe_in_dim)
+    else:
+        probe_in_dim = embed_dim
+
+    reg_head = HeadClass(probe_in_dim, cfg.model.hdec, n_features)
     reg_loss_fn = RegressionLoss(
         feature_stats["mean"].to(device),
         feature_stats["std"].to(device),
     )
-    regression_probe = MaskedJEPAProbe(jepa, reg_head, reg_loss_fn).to(device)
+    regression_probe = MaskedJEPAProbe(
+        jepa, reg_head, reg_loss_fn,
+        corrca_residual=probe_corrca_residual,
+        corrca_residual_dim=probe_corrca_dim,
+    ).to(device)
 
-    cls_head = HeadClass(embed_dim, cfg.model.hdec, n_features)
+    cls_head = HeadClass(probe_in_dim, cfg.model.hdec, n_features)
     cls_loss_fn = ClassificationLoss(feature_median.to(device))
-    classification_probe = MaskedJEPAProbe(jepa, cls_head, cls_loss_fn).to(device)
+    classification_probe = MaskedJEPAProbe(
+        jepa, cls_head, cls_loss_fn,
+        corrca_residual=probe_corrca_residual,
+        corrca_residual_dim=probe_corrca_dim,
+    ).to(device)
 
     log_model_info(
         jepa,
