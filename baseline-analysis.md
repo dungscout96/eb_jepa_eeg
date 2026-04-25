@@ -172,6 +172,40 @@ Four `braindecode` architectures trained end-to-end on the 4 stimulus targets jo
 
 Artifacts: `tier2_results/{model}_seed{42,123,456}.json` (12 files), per-clip predictions on Delta at `/projects/bbnv/kkokate/eb_jepa_eeg/tier2/embeddings/`. Code: `experiments/eeg_jepa/tier2_supervised.py`. SLURM: `scripts/tier2_supervised.sbatch` + `scripts/submit_tier2.sh`.
 
+### Deep4Net re-run with native preprocessing (2026-04-25)
+
+The original Tier 2 used a single shared preprocessing (200 Hz, 0.5–50 Hz BP, 2-s windows) so Deep4Net hit `n_times (400) < min required (441)` and braindecode auto-shrank its kernels by 0.91×. To remove this disadvantage we ran Deep4 with its **native Schirrmeister-2017 spec**:
+
+- Single 4-s window per clip (`n_windows=1, window_size_seconds=4`)
+- In-graph resample 200 → **250 Hz** via `F.interpolate(mode='linear')`
+- In-graph **4–38 Hz bandpass** via FFT mask (zero-phase)
+- In-graph per-window per-channel z-score (offline approximation of EMA standardization)
+- Otherwise identical pipeline (3 seeds, 50 epochs, early-stop on val mean reg corr)
+
+| Metric | orig (200 Hz, 2-s) | **native (250 Hz, 4-s)** | Δ |
+|---|---:|---:|---:|
+| best val mean reg corr | 0.067 ± 0.019 | **0.094 ± 0.008** | +0.028 |
+| reg position corr | 0.013 ± 0.049 | **0.073 ± 0.031** | +0.060 |
+| reg luminance corr | 0.046 ± 0.040 | 0.037 ± 0.057 | −0.009 |
+| reg contrast corr | 0.022 ± 0.011 | −0.020 ± 0.074 | −0.042 |
+| reg narrative corr | −0.020 ± 0.011 | −0.128 ± 0.069 | **−0.108** |
+| cls position AUC | 0.539 ± 0.024 | 0.503 ± 0.039 | −0.035 |
+| cls luminance AUC | 0.527 ± 0.035 | **0.561 ± 0.037** | +0.035 |
+| cls contrast AUC | 0.510 ± 0.030 | 0.524 ± 0.018 | +0.014 |
+| cls narrative AUC | 0.510 ± 0.030 | 0.484 ± 0.056 | −0.026 |
+| age reg corr | 0.360 ± 0.070 | 0.367 ± 0.044 | +0.007 |
+| age cls AUC | 0.668 ± 0.027 | 0.663 ± 0.015 | −0.005 |
+| sex AUC | 0.621 ± 0.073 | 0.567 ± 0.027 | −0.054 |
+
+**Findings:**
+
+1. **Native preprocessing materially helps val selection and position regression** (+0.028 val mean corr, +0.060 position corr). Deep4 was indeed disadvantaged by the shared pipeline; the native run is the fairer comparison.
+2. **Native preprocessing destroys narrative signal** (−0.108 corr): the 4–38 Hz bandpass cuts content < 4 Hz where the narrative envelope lives. Same issue would likely apply if we re-ran Shallow with the same bandpass. Confirms that narrative is a slow-band signal — any model that filters above 4 Hz loses it.
+3. **Conclusion is unchanged**: Deep4 native still loses to Exp 6 on every stimulus feature except a slight position advantage that's well within noise. The "Exp 6 wins position/luminance/contrast against all supervised baselines" headline survives. Deep4 native does climb past `shallow` and `eegnex` on val mean reg corr (0.094 vs 0.079 vs 0.148), but eegnet still leads at 0.148.
+4. **Subject probes essentially unchanged** — no preprocessing-driven shift in age or sex AUC.
+
+Artifacts: `tier2_results/native/deep4_native_seed{42,123,456}.json`. Code: `NativePreprocWrapper` in `experiments/eeg_jepa/tier2_supervised.py`; sbatch `scripts/tier2_deep4_native.sbatch`; submitter `scripts/submit_tier2_deep4_native.sh`.
+
 ---
 
 ## Tier 3 — frozen EEG foundation models (TBD)
