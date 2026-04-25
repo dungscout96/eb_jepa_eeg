@@ -80,6 +80,54 @@ def _build_model(name: str, n_chans: int, n_times: int,
     return cls(n_chans=n_chans, n_outputs=n_outputs, n_times=n_times)
 
 
+class NativePreprocWrapper(nn.Module):
+    """In-graph resample + bandpass + per-window standardization.
+
+    For Deep4 / Shallow native preprocessing: HBN comes at 200 Hz, the original
+    Schirrmeister-2017 designs were tuned for 250 Hz with 4-38 Hz bandpass.
+
+    Resamples by ``torch.nn.functional.interpolate(mode='linear')`` and applies
+    a zero-phase bandpass via FFT mask (cheap, no filter design needed).
+    """
+
+    def __init__(self, model: nn.Module, source_sfreq: float,
+                 target_sfreq: float, lowcut: float, highcut: float):
+        super().__init__()
+        self.model = model
+        self.source_sfreq = float(source_sfreq)
+        self.target_sfreq = float(target_sfreq)
+        self.lowcut = float(lowcut)
+        self.highcut = float(highcut)
+
+    def _resample(self, x: torch.Tensor) -> torch.Tensor:
+        if abs(self.target_sfreq - self.source_sfreq) < 1e-6:
+            return x
+        new_T = int(round(x.shape[-1] * self.target_sfreq / self.source_sfreq))
+        return F.interpolate(x, size=new_T, mode="linear", align_corners=False)
+
+    def _bandpass(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [B, C, T] real → FFT mask out-of-band, IFFT
+        T = x.shape[-1]
+        X = torch.fft.rfft(x, dim=-1)
+        freqs = torch.fft.rfftfreq(T, d=1.0 / self.target_sfreq).to(x.device)
+        mask = (freqs >= self.lowcut) & (freqs <= self.highcut)
+        return torch.fft.irfft(X * mask, n=T, dim=-1)
+
+    def _per_window_standardize(self, x: torch.Tensor) -> torch.Tensor:
+        # Per-channel z-score within each window (Schirrmeister "exponential
+        # moving standardization" approximation; full EMA needs sequential
+        # state, this trial-level z is the standard offline equivalent).
+        m = x.mean(dim=-1, keepdim=True)
+        s = x.std(dim=-1, keepdim=True).clamp(min=1e-8)
+        return (x - m) / s
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self._resample(x)
+        x = self._bandpass(x)
+        x = self._per_window_standardize(x)
+        return self.model(x)
+
+
 # ---------------------------------------------------------------------------
 # Wrappers: stack of two backbones (regression + classification heads)
 # ---------------------------------------------------------------------------
@@ -94,10 +142,23 @@ class DualHeadModel(nn.Module):
     """
 
     def __init__(self, name: str, n_chans: int, n_times: int, n_features: int,
-                 sfreq: float, chs_info=None):
+                 sfreq: float, chs_info=None,
+                 native_preproc: bool = False,
+                 source_sfreq: float | None = None):
         super().__init__()
-        self.reg = _build_model(name, n_chans, n_times, n_features, sfreq, chs_info)
-        self.cls = _build_model(name, n_chans, n_times, n_features, sfreq, chs_info)
+        # When native_preproc is on, the inner model expects the *resampled*
+        # n_times (computed at the call site). The wrapper handles resample
+        # + bandpass + standardize on the fly.
+        reg_model = _build_model(name, n_chans, n_times, n_features, sfreq, chs_info)
+        cls_model = _build_model(name, n_chans, n_times, n_features, sfreq, chs_info)
+        if native_preproc:
+            assert source_sfreq is not None
+            # 4-38 Hz bandpass per Schirrmeister 2017
+            self.reg = NativePreprocWrapper(reg_model, source_sfreq, sfreq, 4.0, 38.0)
+            self.cls = NativePreprocWrapper(cls_model, source_sfreq, sfreq, 4.0, 38.0)
+        else:
+            self.reg = reg_model
+            self.cls = cls_model
 
     def forward(self, x: torch.Tensor):
         return self.reg(x), self.cls(x)
@@ -345,6 +406,8 @@ def run(
     seed: int = 42,
     n_windows: int = 4,
     window_size_seconds: int = 2,
+    native_preproc: bool = False,
+    target_sfreq: float = 250.0,
     batch_size: int = 64,
     num_workers: int = 4,
     norm_mode: str = "per_recording",
@@ -424,8 +487,23 @@ def run(
     n_times = train_set.n_times
     sfreq = float(train_set.sfreq)
     chs_info = train_set.get_chs_info()
-    logger.info("Build %s (n_chans=%d, n_times=%d)", model, n_chans, n_times)
-    net = DualHeadModel(model, n_chans, n_times, n_features, sfreq, chs_info).to(device)
+
+    if native_preproc:
+        # The wrapper resamples 200 -> target_sfreq before the inner net,
+        # so the inner net must be sized for the post-resample length.
+        inner_n_times = int(round(n_times * target_sfreq / sfreq))
+        inner_sfreq = target_sfreq
+    else:
+        inner_n_times = n_times
+        inner_sfreq = sfreq
+    logger.info(
+        "Build %s (n_chans=%d, n_times=%d, native_preproc=%s, inner_n_times=%d, inner_sfreq=%.1f)",
+        model, n_chans, n_times, native_preproc, inner_n_times, inner_sfreq,
+    )
+    net = DualHeadModel(
+        model, n_chans, inner_n_times, n_features, inner_sfreq, chs_info,
+        native_preproc=native_preproc, source_sfreq=sfreq if native_preproc else None,
+    ).to(device)
     n_params = sum(p.numel() for p in net.parameters() if p.requires_grad)
     logger.info("model params=%d", n_params)
 
