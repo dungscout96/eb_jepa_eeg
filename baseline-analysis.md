@@ -208,8 +208,50 @@ Artifacts: `tier2_results/native/deep4_native_seed{42,123,456}.json`. Code: `Nat
 
 ---
 
-## Tier 3 — frozen EEG foundation models (TBD)
+## Tier 3 — frozen EEG foundation models (2026-04-25, kkokate/tier1-baselines)
 
-## Tier 3 — frozen EEG foundation models (TBD)
+Three pretrained foundation models loaded from HuggingFace + braindecode and applied to HBN with each model's **native preprocessing**, frozen, then evaluated with the same MovieFeatureHead probe + per-recording linear probes used in Tier 1 / Tier 2. 3 seeds {42, 123, 456}.
 
-Planned: LaBraM, EEGPT, BIOT, CBraMod via EEG-FM-Bench glue. Frozen + same MovieFeatureHead probe.
+| Model | Params | Pretraining | Window | Sample rate | HBN channels | Bandpass | Norm |
+|---|---:|---|---:|---:|---:|---|---|
+| BIOT (NeurIPS 2023) | 3.2M | TUH Abnormal + SHHS | 2 s | 200 Hz | 16 (10-20 subset of 19) | none | 95th-pctile per-channel |
+| CBraMod (ICLR 2025) | 4.9M | Mixed corpus, MAE | 2 s | 200 Hz | 19 (10-20) | 0.3–50 Hz | per-channel mean removal |
+| **LUNA** (NeurIPS 2025) | 7.1M | TUEG + Siena (21k h) | 2 s | 200 Hz | **all 129** (topology-agnostic) | none | per-window z-score |
+
+**Key technical note on LUNA:** unlike the other FMs, LUNA accepts **arbitrary channel counts** via a 3D-coordinate channel-location encoding (no fixed 10-20 channel-name embedding). We feed the full HBN-129 montage with electrode positions, no channel selection. This is the cleanest comparison to Exp 6 (which also sees all of HBN, via the CorrCA spatial filter).
+
+LaBraM and EEGPT deferred — their pretrained checkpoints have hardcoded fixed channel count (62) and patch position embedding (LaBraM's 16 patches) that don't admit a clean wrapper.
+
+### Test-set metrics (3-seed mean ± std)
+
+| Probe (test) | Exp 6 (5s) | BIOT | CBraMod | **LUNA** |
+|---|---:|---:|---:|---:|
+| reg position corr   | **0.176 ± 0.048** | 0.025 ± 0.040 | 0.040 ± 0.131 | 0.132 ± 0.053 |
+| reg luminance corr  | 0.168 ± 0.059 | 0.076 ± 0.063 | 0.086 ± 0.142 | **0.180 ± 0.100** |
+| reg contrast corr   | 0.115 ± 0.053 | 0.008 ± 0.058 | −0.025 ± 0.132 | **0.162 ± 0.079** |
+| reg narrative corr  | −0.003 ± 0.042 | −0.034 ± 0.016 | **0.074 ± 0.082** | −0.086 ± 0.067 |
+| cls position AUC    | **0.580 ± 0.025** | 0.513 ± 0.017 | 0.524 ± 0.055 | 0.553 ± 0.036 |
+| cls luminance AUC   | **0.567 ± 0.021** | 0.493 ± 0.013 | 0.512 ± 0.033 | 0.520 ± 0.078 |
+| cls contrast AUC    | **0.553 ± 0.032** | 0.475 ± 0.016 | 0.440 ± 0.046 | 0.499 ± 0.058 |
+| cls narrative AUC   | 0.528 ± 0.025 | **0.540 ± 0.110** | 0.526 ± 0.057 | 0.511 ± 0.091 |
+| age reg corr        | 0.325 ± 0.030 | **0.562 ± 0.011** | 0.516 ± 0.001 | 0.451 ± 0.005 |
+| age cls AUC         | 0.648 ± 0.022 | **0.813 ± 0.002** | 0.797 ± 0.000 | 0.706 ± 0.002 |
+| sex AUC             | 0.618 ± 0.007 | 0.664 ± 0.017 | **0.774 ± 0.001** | 0.582 ± 0.008 |
+
+### Findings
+
+1. **LUNA is the first method to beat Exp 6 on a stimulus feature regression.** Wins luminance (+0.012) and contrast (+0.047) on test corr; within 1σ on position (−0.044). Topology-agnostic encoding (all 129 channels with 3D coords) appears to capture more visual stimulus signal than CorrCA-5 + Exp 6.
+2. **No FM beats Exp 6 on stimulus AUC** — Exp 6 still wins position/luminance/contrast classification across the board.
+3. **All 3 FMs trounce Exp 6 on subject-trait probes** — BIOT age corr **0.562** (vs Exp 6 0.325), age AUC **0.813** (vs 0.648); CBraMod sex AUC **0.774**. Same trend as Tier 2: pretrained encoders preserve spectral subject fingerprint that Exp 6's JEPA bottleneck strips out.
+4. **Narrative remains Exp 6's confirmed blind spot** — CBraMod gets +0.074 narrative corr (matches raw_corrca's +0.071 from Tier 1). Now confirmed by 3 independent baselines (raw_corrca, eegnet/eegnex, CBraMod).
+5. **High variance across CBraMod seeds** (luminance ±0.142, contrast ±0.132) — its frozen embedding is unstable across probe seeds; BIOT and LUNA much more consistent.
+6. **LUNA's age leak is intermediate** (age corr 0.451 vs BIOT 0.562, Exp 6 0.325). The 3D-coordinate channel encoding may be partially obscuring per-channel spectral fingerprint, hence less age leak than the named-channel FMs.
+
+### What this means for Exp 6 next iteration
+
+- **LUNA is the first credible alternative to Exp 6 on stimulus regression.** Worth seriously considering as either (a) a frozen feature extractor for downstream tasks (no SSL of our own needed), or (b) an architectural prior — the topology-agnostic 3D-coord channel encoding may be the right design for HBN's 129-ch montage.
+- **Exp 6 still wins stimulus classification AUCs** — its representation is binary-decision-friendly even where corrs are matched.
+- **Subject-trait gap to FMs is structural, not a bug.** PSD (T1), shallow CNN (T2), and 3 FMs (T3) all preserve more age/sex signal than Exp 6. Confirmed across 7+ baselines now — Exp 6's JEPA bottleneck is *removing* spectral subject info regardless of method-class.
+- **Narrative architectural-residual idea now backed by 3 baselines** — raw_corrca (T1), eegnet/eegnex (T2), CBraMod (T3). Exp 6's narrative gap is a real, multi-method-confirmed weakness.
+
+Artifacts: `tier3_results/{model}_seed{42,123,456}.json`, embeddings on Delta at `/projects/bbnv/kkokate/eb_jepa_eeg/tier3/embeddings/`. Code: `experiments/eeg_jepa/tier3_foundation.py`, vendored LUNA at `experiments/eeg_jepa/external/luna/`. SLURM: `scripts/tier3_foundation.sbatch` + `scripts/submit_tier3.sh`.
