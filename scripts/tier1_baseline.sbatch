@@ -33,9 +33,9 @@ set -euo pipefail
 export HBN_PREPROCESS_DIR="${HBN_PREPROCESS_DIR:-/projects/bbnv/kkokate/hbn_preprocessed}"
 export UV_LINK_MODE=copy
 
-: "${BASELINE:?need BASELINE (raw_corrca|psd_band|random_init|exp6)}"
+: "${BASELINE:?need BASELINE (raw_corrca|psd_band|random_init|exp6|exp6_residual)}"
 SEED="${SEED:-42}"
-# Optional: path to Exp-6 checkpoint, required only for BASELINE=exp6.
+# Optional: path to Exp-6 checkpoint, required for BASELINE=exp6 or exp6_residual.
 CKPT="${CKPT:-}"
 
 echo "========================================"
@@ -67,8 +67,8 @@ else
 fi
 
 CHECKPOINT_ARG=""
-if [ "$BASELINE" = "exp6" ]; then
-    : "${CKPT:?BASELINE=exp6 needs CKPT=/path/to/best.pth.tar}"
+if [ "$BASELINE" = "exp6" ] || [ "$BASELINE" = "exp6_residual" ]; then
+    : "${CKPT:?BASELINE=$BASELINE needs CKPT=/path/to/best.pth.tar}"
     CHECKPOINT_ARG="--checkpoint=${CKPT}"
 fi
 
