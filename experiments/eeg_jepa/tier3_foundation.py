@@ -42,6 +42,7 @@ from tqdm import tqdm
 from braindecode.models import BIOT, CBraMod, EEGPT, Labram
 
 from eb_jepa.architectures import MovieFeatureHead
+from experiments.eeg_jepa.external.luna.LUNA import LUNA as _LUNAModel
 from eb_jepa.datasets.hbn import JEPAMovieDataset, _read_raw_windows
 from eb_jepa.logging import get_logger
 from eb_jepa.training_utils import load_config, setup_device, setup_seed
@@ -109,6 +110,22 @@ class ModelSpec:
             self.n_chans = 19
             self.n_outputs_pretrain = 2
             self.channel_subset = TEN_TWENTY_NAMES
+        elif name == "luna":
+            # LUNA (NeurIPS 2025) — topology-agnostic; takes ARBITRARY channels
+            # via 3D coordinate positional encoding. We use the full 129-ch
+            # HBN montage with the native 200 Hz sample rate (no resample) so
+            # the per-window length stays 400 samples (10 patches at default
+            # patch_size=40), matching Tier 1/2's 4 x 2-s clip context.
+            # LUNA was pretrained at 256 Hz on TUEG; feeding 200 Hz changes
+            # absolute-frequency semantics in the FrequencyFeatureEmbedder
+            # but the paper claims topology- and rate-flexible inference.
+            self.target_sfreq = 200.0
+            self.bandpass = (None, None)
+            self.window_seconds = 2.0
+            self.norm_mode = "ems"  # per-window per-channel z-score
+            self.n_chans = 129
+            self.n_outputs_pretrain = 0  # placeholder; loader uses num_classes=4 head
+            self.channel_subset = None  # no selection — use all HBN channels
         elif name == "labram":
             # LaBraM: 200 Hz, 0.5-44.5 Hz BP; pretrain expects ~62-ch and
             # 16 patches × 200 samples = 16 s. Channel naming is required
@@ -177,11 +194,13 @@ def _normalize(x: torch.Tensor, mode: str, scale: float) -> torch.Tensor:
 HF_REPOS = {
     "biot":    "braindecode/biot-pretrained-prest-16chs",
     "cbramod": "braindecode/cbramod-pretrained",
+    "luna":    "thorir/LUNA",
 }
 
 MODEL_CLS = {
     "biot":    BIOT,
     "cbramod": CBraMod,
+    "luna":    _LUNAModel,
 }
 
 
@@ -227,14 +246,32 @@ def _load_pretrained(name: str, spec: ModelSpec, chs_info_subset):
         )
         return model
 
+    if name == "luna":
+        # LUNA in classification mode (num_classes=4 — arbitrary, head is unused).
+        # Loaded weights bring encoder; classifier head stays randomly init'd
+        # (we hook penultimate, not the head output).
+        model = cls(num_classes=4)
+        from huggingface_hub import hf_hub_download
+        from safetensors.torch import load_file
+        path = hf_hub_download(repo_id=repo, filename="LUNA_base.safetensors")
+        sd = load_file(path)
+        missing, unexpected = model.load_state_dict(sd, strict=False)
+        logger.info(
+            "LUNA loaded: %d missing (classifier head, expected), %d unexpected",
+            len(missing), len(unexpected),
+        )
+        return model
+
     raise ValueError(f"unknown model {name}")
 
 
-def _embedding(model: nn.Module, x: torch.Tensor) -> torch.Tensor:
+def _embedding(model: nn.Module, x: torch.Tensor,
+               channel_locations: torch.Tensor | None = None) -> torch.Tensor:
     """Capture penultimate activation as the per-clip embedding.
 
-    Hooks the final Linear/Conv module's input. Robust across the four
-    braindecode FM wrappers, all of which end in a classification linear.
+    Hooks the final Linear/Conv module's input. Works for braindecode FMs
+    (BIOT, CBraMod) which forward as ``model(x)``. For LUNA, the forward
+    signature requires ``channel_locations`` (3D coords), so pass it through.
     """
     captured = {}
 
@@ -247,9 +284,14 @@ def _embedding(model: nn.Module, x: torch.Tensor) -> torch.Tensor:
         if isinstance(m, (nn.Linear, nn.Conv2d, nn.Conv1d)):
             final = m
     h = final.register_forward_hook(_hook)
-    with torch.no_grad():
-        model(x)
-    h.remove()
+    try:
+        with torch.no_grad():
+            if channel_locations is not None:
+                model(x, mask=None, channel_locations=channel_locations)
+            else:
+                model(x)
+    finally:
+        h.remove()
     return captured["x"]
 
 
@@ -259,6 +301,7 @@ def _embedding(model: nn.Module, x: torch.Tensor) -> torch.Tensor:
 
 
 def _features_per_recording(dataset, fm, spec, ch_idx, src_sfreq, device,
+                            channel_locations: torch.Tensor | None = None,
                             max_clips_per_rec: int = 4):
     rec_embs, rec_meta = [], []
     for rec_idx in range(len(dataset)):
@@ -281,12 +324,17 @@ def _features_per_recording(dataset, fm, spec, ch_idx, src_sfreq, device,
                 eeg = (eeg - rm) / rs
             else:
                 eeg = (eeg - dataset._eeg_mean) / dataset._eeg_std
-            # eeg: [n_windows, 129, T_src]; select 19 channels then preprocess
-            eeg = eeg[:, ch_idx, :].to(device)  # [n_windows, 19, T_src]
+            # eeg: [n_windows, 129, T_src]; select channels for FMs that need it
+            if ch_idx is not None:
+                eeg = eeg[:, ch_idx, :]
+            eeg = eeg.to(device)
             eeg = _resample_torch(eeg, src_sfreq, spec.target_sfreq)
             eeg = _bandpass_fft(eeg, spec.target_sfreq, *spec.bandpass)
             eeg = _normalize(eeg, spec.norm_mode, spec.scale)
-            emb = _embedding(fm, eeg)
+            ch_locs = None
+            if channel_locations is not None:
+                ch_locs = channel_locations.expand(eeg.size(0), -1, -1).to(device)
+            emb = _embedding(fm, eeg, ch_locs)
             clip_embs.append(emb.mean(dim=0).cpu())
         if clip_embs:
             rec_embs.append(torch.stack(clip_embs).mean(dim=0).numpy())
@@ -393,19 +441,27 @@ def _eval_reg(probe, embs, labels, device, ym, ys):
 # ---------------------------------------------------------------------------
 
 
-def _features_loader(loader, fm, spec, ch_idx, src_sfreq, device, pos_idx):
+def _features_loader(loader, fm, spec, ch_idx, src_sfreq, device, pos_idx,
+                     channel_locations: torch.Tensor | None = None):
     all_embs, all_targets, all_positions = [], [], []
     for eeg, features, _ in tqdm(loader, desc="extracting", leave=False):
         # eeg: [B, n_windows, 129, T_src] (per-rec normed)
         B, T, C, Ts = eeg.shape
-        eeg = eeg[:, :, ch_idx, :]                 # [B, T, 19, T_src]
-        eeg = eeg.reshape(B * T, len(ch_idx), Ts).to(device)
+        if ch_idx is not None:
+            eeg = eeg[:, :, ch_idx, :]
+            eeg = eeg.reshape(B * T, len(ch_idx), Ts)
+        else:
+            eeg = eeg.reshape(B * T, C, Ts)
+        eeg = eeg.to(device)
         eeg = _resample_torch(eeg, src_sfreq, spec.target_sfreq)
         eeg = _bandpass_fft(eeg, spec.target_sfreq, *spec.bandpass)
         eeg = _normalize(eeg, spec.norm_mode, spec.scale)
-        emb = _embedding(fm, eeg)                   # [B*T, D]
+        ch_locs = None
+        if channel_locations is not None:
+            ch_locs = channel_locations.expand(eeg.size(0), -1, -1).to(device)
+        emb = _embedding(fm, eeg, ch_locs)              # [B*T, D]
         D = emb.shape[1]
-        emb = emb.view(B, T, D).mean(dim=1)         # mean-pool over windows
+        emb = emb.view(B, T, D).mean(dim=1)             # pool over windows
         all_embs.append(emb.detach().cpu())
         all_targets.append(features.cpu())
         if pos_idx is not None:
@@ -564,14 +620,24 @@ def run(
 
     src_sfreq = float(train_set.sfreq)
     chs_info_full = train_set.get_chs_info()
-    ch_idx = _hbn_to_1020_indices(chs_info_full, subset=spec.channel_subset)
-    chs_info_subset = []
-    for src_idx, ten20_name in zip(ch_idx, spec.channel_subset):
-        ch = dict(chs_info_full[src_idx])
-        ch["ch_name"] = ten20_name  # rename to 10-20 standard
-        chs_info_subset.append(ch)
-    logger.info("Selected %d channels for %s: %s",
-                len(spec.channel_subset), model, spec.channel_subset)
+    if spec.channel_subset is None:
+        # LUNA: use all 129 HBN channels with 3D coordinates as positional info
+        ch_idx = None
+        chs_info_subset = chs_info_full
+        channel_locations_t = torch.tensor(
+            np.array([ch["loc"][:3] for ch in chs_info_full]), dtype=torch.float32,
+        ).unsqueeze(0)  # (1, 129, 3)
+        logger.info("Using all %d HBN channels (LUNA topology-agnostic)", len(chs_info_full))
+    else:
+        ch_idx = _hbn_to_1020_indices(chs_info_full, subset=spec.channel_subset)
+        chs_info_subset = []
+        for src_idx, ten20_name in zip(ch_idx, spec.channel_subset):
+            ch = dict(chs_info_full[src_idx])
+            ch["ch_name"] = ten20_name
+            chs_info_subset.append(ch)
+        channel_locations_t = None
+        logger.info("Selected %d channels for %s: %s",
+                    len(spec.channel_subset), model, spec.channel_subset)
 
     fm = _load_pretrained(model, spec, chs_info_subset).to(device)
     fm.eval()
@@ -588,6 +654,7 @@ def run(
     logger.info("Extracting train per-clip features...")
     train_X, train_y, train_pos = _features_loader(
         train_loader, fm, spec, ch_idx, src_sfreq, device, pos_idx,
+        channel_locations=channel_locations_t,
     )
     logger.info("Train embeddings shape: %s", tuple(train_X.shape))
 
@@ -595,6 +662,7 @@ def run(
     for split in splits_list:
         X, y, p = _features_loader(
             eval_loaders[split], fm, spec, ch_idx, src_sfreq, device, pos_idx,
+            channel_locations=channel_locations_t,
         )
         eval_X[split] = X; eval_y[split] = y; eval_pos[split] = p
         logger.info("%s embeddings shape: %s", split, tuple(X.shape))
@@ -636,6 +704,7 @@ def run(
     logger.info("Per-recording embeddings (train)...")
     train_rec_embs, train_meta = _features_per_recording(
         train_set, fm, spec, ch_idx, src_sfreq, device,
+        channel_locations=channel_locations_t,
     )
     train_labels = _extract_subject_labels(train_meta)
     train_ages = np.array([float(m["age"]) for m in train_meta if "age" in m])
@@ -657,6 +726,7 @@ def run(
     for split in splits_list:
         rec_embs, rec_meta = _features_per_recording(
             eval_sets[split], fm, spec, ch_idx, src_sfreq, device,
+            channel_locations=channel_locations_t,
         )
         eval_labels = _extract_subject_labels(rec_meta, median_age=train_median_age)
         for label_name, info in subject_probes.items():

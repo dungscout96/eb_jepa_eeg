@@ -22,7 +22,7 @@ set -euo pipefail
 export HBN_PREPROCESS_DIR="${HBN_PREPROCESS_DIR:-/projects/bbnv/kkokate/hbn_preprocessed}"
 export UV_LINK_MODE=copy
 
-: "${MODEL:?need MODEL (biot|cbramod)}"
+: "${MODEL:?need MODEL (biot|cbramod|luna)}"
 SEED="${SEED:-42}"
 
 cd "$SLURM_SUBMIT_DIR"
