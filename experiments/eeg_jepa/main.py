@@ -31,7 +31,7 @@ from eb_jepa.architectures import (
     TemporalMovieFeatureHead,
 )
 from eb_jepa.datasets.hbn import JEPAMovieDataset
-from eb_jepa.jepa import MaskedJEPA, MaskedJEPANoEMA, MaskedJEPAProbe
+from eb_jepa.jepa import MaskedJEPA, MaskedJEPAMultiBand, MaskedJEPANoEMA, MaskedJEPAProbe
 from eb_jepa.logging import get_logger
 from eb_jepa.losses import VCLoss, SIGRegLoss
 from eb_jepa.masking import MultiBlockMaskCollator
@@ -191,12 +191,14 @@ def run(
     global NUMERIC_FEATURES
     NUMERIC_FEATURES = feature_names
 
+    multiband_target = bool(cfg.data.get("multiband_target", False))
     train_set = JEPAMovieDataset(
         split="train",
         n_windows=cfg.data.n_windows,
         window_size_seconds=cfg.data.window_size_seconds,
         temporal_stride=temporal_stride,
         feature_names=feature_names,
+        multiband_target=multiband_target,
         cfg=cfg.data,
         preprocessed=preprocessed,
         preprocessed_dir=preprocessed_dir,
@@ -310,7 +312,23 @@ def run(
     # Prediction loss type: "mse" (default) or "smooth_l1" (Huber, used in V-JEPA)
     pred_loss_type = cfg.loss.get("pred_loss_type", "mse")
 
-    if use_ema:
+    if multiband_target:
+        if not use_ema:
+            raise ValueError("multiband_target requires use_ema=True (target encoder)")
+        mb_cfg = cfg.loss.get("multiband", {})
+        n_bands = len(JEPAMovieDataset.DEFAULT_BANDS)
+        band_weights = list(mb_cfg.get("weights", [1.0] * n_bands))
+        if len(band_weights) != n_bands:
+            raise ValueError(
+                f"loss.multiband.weights len {len(band_weights)} != n_bands {n_bands}"
+            )
+        logger.info("Multi-band JEPA: %d bands, weights=%s", n_bands, band_weights)
+        jepa = MaskedJEPAMultiBand(
+            encoder, target_encoder, predictor, mask_collator,
+            n_bands=n_bands, embed_dim=embed_dim, band_weights=band_weights,
+            regularizer=regularizer, pred_loss_type=pred_loss_type,
+        ).to(device)
+    elif use_ema:
         jepa = MaskedJEPA(
             encoder, target_encoder, predictor, mask_collator, regularizer,
             pred_loss_type=pred_loss_type,
@@ -355,6 +373,8 @@ def run(
     jepa_params = list(jepa.context_encoder.parameters()) + list(jepa.predictor.parameters())
     if jepa.regularizer is not None:
         jepa_params += [p for p in jepa.regularizer.parameters() if p.requires_grad]
+    if multiband_target:
+        jepa_params += list(jepa.band_heads.parameters())
     optimizer = Adam(jepa_params, lr=cfg.optim.lr)
     probe_optimizer = Adam(
         list(regression_probe.head.parameters())
@@ -434,20 +454,31 @@ def run(
             disable=cfg.logging.get("tqdm_silent", False),
         )
 
-        for eeg, features, probe_labels in pbar:
+        for batch in pbar:
+            if multiband_target:
+                eeg, eeg_bands, features, probe_labels = batch
+                eeg_bands = eeg_bands.to(device)
+            else:
+                eeg, features, probe_labels = batch
+                eeg_bands = None
             eeg = eeg.to(device)
             features = features.to(device)  # [B, T, n_features]
             # probe_labels: [B] float (NaN where no subject metadata) — stays on CPU
 
             # --- Masked JEPA pretraining ---
             optimizer.zero_grad()
-            jepa_loss, loss_dict = jepa(eeg)
+            if multiband_target:
+                jepa_loss, loss_dict = jepa(eeg, eeg_bands)
+            else:
+                jepa_loss, loss_dict = jepa(eeg)
             jepa_loss.backward()
-            torch.nn.utils.clip_grad_norm_(
+            clip_params = (
                 list(jepa.context_encoder.parameters())
-                + list(jepa.predictor.parameters()),
-                max_norm=1.0,
+                + list(jepa.predictor.parameters())
             )
+            if multiband_target:
+                clip_params += list(jepa.band_heads.parameters())
+            torch.nn.utils.clip_grad_norm_(clip_params, max_norm=1.0)
             sanity_metrics = sanity_hook.step(
                 global_step, eeg, features, jepa, loss_dict,
                 probe_labels=probe_labels,

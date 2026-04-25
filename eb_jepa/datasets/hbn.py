@@ -824,6 +824,17 @@ class JEPAMovieDataset(HBNMovieDataset):
         "narrative_event_score",
     ]
 
+    # Default frequency bands for multi-band spectral targets (Exp 11).
+    # Hz ranges chosen for 200Hz EEG: gamma capped at 55Hz to avoid line noise
+    # and HBN-specific muscle/EMG artifacts above ~60Hz.
+    DEFAULT_BANDS = [
+        ("delta", 0.5, 4.0),
+        ("theta", 4.0, 8.0),
+        ("alpha", 8.0, 13.0),
+        ("beta",  13.0, 30.0),
+        ("gamma", 30.0, 55.0),
+    ]
+
     def __init__(
         self,
         split="train",
@@ -833,6 +844,7 @@ class JEPAMovieDataset(HBNMovieDataset):
         feature_names=None,
         eeg_norm_stats=None,
         temporal_stride=1,
+        multiband_target=False,
         *,
         cfg: DictConfig | dict,
         preprocessed: bool = False,
@@ -856,6 +868,24 @@ class JEPAMovieDataset(HBNMovieDataset):
             logger.info("Loaded CorrCA filters from %s: %d → %d components (ISC: %s)",
                         corrca_path, corrca["W"].shape[0], corrca["W"].shape[1],
                         ", ".join(f"{v:.3f}" for v in corrca["isc_values"]))
+
+        # Multi-band spectral target (Exp 11): pre-compute Butterworth IIR
+        # coefficients per band; applied via filtfilt (zero-phase) in __getitem__
+        # to produce a [n_bands, n_win, C, T] teacher tensor.
+        self._multiband_target = bool(multiband_target)
+        self._band_filters = None
+        self._band_names = None
+        if self._multiband_target:
+            from scipy.signal import butter
+            self._band_names = [b[0] for b in self.DEFAULT_BANDS]
+            self._band_filters = []
+            for name, lo, hi in self.DEFAULT_BANDS:
+                b, a = butter(4, [lo, hi], btype="band", fs=int(self.sfreq))
+                self._band_filters.append((name, b.astype(np.float64), a.astype(np.float64)))
+            logger.info(
+                "Multi-band target enabled: %d bands %s @ %d Hz",
+                len(self._band_names), self._band_names, int(self.sfreq),
+            )
 
         required_windows = (n_windows - 1) * temporal_stride + 1
 
@@ -1066,6 +1096,19 @@ class JEPAMovieDataset(HBNMovieDataset):
         # Binary subject label (age > median, sex, …) — scalar float tensor.
         # NaN means metadata was unavailable for this recording.
         probe_label = torch.tensor(self._probe_labels[idx], dtype=torch.float32)
+
+        # Multi-band spectral target (Exp 11): zero-phase bandpass each window
+        # into 5 frequency bands. Shape: [n_bands, n_windows, C, T]
+        if self._multiband_target:
+            from scipy.signal import filtfilt
+            x = eeg.numpy()
+            band_stack = []
+            # filtfilt requires axis length > ~3*max(len(a), len(b)); 400 samples is fine
+            for _, b, a in self._band_filters:
+                filtered = filtfilt(b, a, x, axis=-1).astype("float32")
+                band_stack.append(filtered)
+            eeg_bands = torch.from_numpy(np.stack(band_stack, axis=0))  # [n_bands, n_win, C, T]
+            return eeg, eeg_bands, feats[indices], probe_label
 
         return eeg, feats[indices], probe_label
 

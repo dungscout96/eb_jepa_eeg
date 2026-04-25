@@ -16,6 +16,7 @@ data:
   norm_mode: global       # "global" = dataset-wide mean/std; "per_recording" = removes subject fingerprint
   add_envelope: false     # Append 1-8 Hz analytic envelope as extra channels (doubles n_chans)
   corrca_filters: null    # Path to CorrCA .npz file (projects 129 channels → k stimulus components)
+  multiband_target: false # Exp 11: bandpass-decompose teacher into δ/θ/α/β/γ before encoding
   # Movie feature names used for probe evaluation (regression + classification heads)
   feature_names:
     - contrast_rms
@@ -71,6 +72,10 @@ loss:
     num_slices: 256   # Number of random projection directions
     coeff: 0.1        # SIGReg loss weight (lambda)
   pred_loss_type: mse  # Prediction loss: "mse" or "smooth_l1" (Huber, used in V-JEPA)
+  # Multi-band spectral target weights (Exp 11). Applied only when
+  # data.multiband_target=true. Order: δ, θ, α, β, γ.
+  multiband:
+    weights: [1.0, 0.5, 0.5, 0.3, 0.0]  # γ=0: HBN gamma is muscle-contaminated
 
 optim:
   epochs: 100

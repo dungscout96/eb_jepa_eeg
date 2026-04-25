@@ -357,6 +357,161 @@ class MaskedJEPA(nn.Module):
         return self.context_encoder.pool_to_windows(tokens)
 
 
+class MaskedJEPAMultiBand(nn.Module):
+    """V-JEPA with multi-band spectral targets (Exp 11).
+
+    Differences vs MaskedJEPA:
+    - The target encoder runs once per frequency band on a band-filtered version
+      of the input (e.g. delta/theta/alpha/beta/gamma). Each band yields an
+      independent set of target tokens.
+    - The (single) predictor produces a shared latent prediction at masked
+      positions; per-band Linear "band heads" project this shared prediction
+      into each band's target space.
+    - Loss is sum_b w_b * smooth_l1(band_head_b(predictions),
+      target_encoder(eeg_band_b)[masked positions]).
+
+    Why this avoids Exp 10's collapse:
+    - Per-band targets remain per-window stochastic and subject-specific
+      (filtering is information-preserving — no across-subject averaging).
+    - The encoder cannot "solve" the task by encoding movie-time alone; alpha
+      and beta band content is largely subject- and state-dependent within a
+      window, so non-trivial subject-side information is required.
+
+    Args:
+        context_encoder, target_encoder, predictor, mask_collator, regularizer:
+            same as MaskedJEPA.
+        n_bands: number of frequency bands.
+        embed_dim: encoder embedding dimension (used to size band_heads).
+        band_weights: list of float, len == n_bands. Per-band loss weight.
+        pred_loss_type: "smooth_l1" or "mse".
+    """
+
+    def __init__(self, context_encoder, target_encoder, predictor, mask_collator,
+                 n_bands, embed_dim, band_weights=None,
+                 regularizer=None, pred_loss_type="smooth_l1"):
+        super().__init__()
+        self.context_encoder = context_encoder
+        self.target_encoder = target_encoder
+        self.predictor = predictor
+        self.mask_collator = mask_collator
+        self.regularizer = regularizer
+        self.pred_loss_type = pred_loss_type
+        self.n_bands = int(n_bands)
+        self.band_heads = nn.ModuleList(
+            [nn.Linear(embed_dim, embed_dim) for _ in range(self.n_bands)]
+        )
+        if band_weights is None:
+            band_weights = [1.0] * self.n_bands
+        if len(band_weights) != self.n_bands:
+            raise ValueError(
+                f"band_weights len {len(band_weights)} != n_bands {self.n_bands}"
+            )
+        self.register_buffer(
+            "band_weights",
+            torch.tensor(band_weights, dtype=torch.float32),
+        )
+
+        for p in self.target_encoder.parameters():
+            p.requires_grad = False
+
+    @torch.no_grad()
+    def update_target_encoder(self, momentum: float):
+        for p_ctx, p_tgt in zip(self.context_encoder.parameters(),
+                                self.target_encoder.parameters()):
+            p_tgt.data.lerp_(p_ctx.data, 1.0 - momentum)
+
+    def forward(self, eeg, eeg_bands):
+        """Forward pass with band-decomposed teacher inputs.
+
+        Args:
+            eeg: [B, T, C, W] — context-branch input (unfiltered CorrCA-5).
+            eeg_bands: [B, n_bands, T, C, W] — per-band-filtered teacher inputs.
+
+        Returns:
+            (total_loss, loss_dict)
+        """
+        B = eeg.shape[0]
+        device = eeg.device
+
+        if eeg_bands.shape[1] != self.n_bands:
+            raise ValueError(
+                f"eeg_bands has {eeg_bands.shape[1]} bands, expected {self.n_bands}"
+            )
+        if eeg_bands.shape[0] != B:
+            raise ValueError(
+                f"eeg_bands batch {eeg_bands.shape[0]} != eeg batch {B}"
+            )
+        if eeg_bands.shape[2:] != eeg.shape[1:]:
+            raise ValueError(
+                f"eeg_bands per-band shape {tuple(eeg_bands.shape[2:])} != "
+                f"eeg shape {tuple(eeg.shape[1:])}"
+            )
+
+        # 1. Generate masks
+        mask_result = self.mask_collator()
+        context_mask = mask_result.context_mask.to(device)
+        pred_masks = [pm.to(device) for pm in mask_result.pred_masks]
+
+        # 2. Position embeddings (full)
+        _, pos_embed = self.context_encoder.tokenize(eeg)
+
+        # 3. Context encoding
+        ctx_tokens = self.context_encoder.encode_tokens(eeg, mask=context_mask)
+
+        if len(pred_masks) == 0:
+            zero = torch.tensor(0.0, device=device, requires_grad=True)
+            return zero, {"pred_loss": 0.0, "reg_loss": 0.0}
+
+        all_pred_indices = torch.cat(pred_masks).unique()
+        ctx_pos = pos_embed[:, context_mask]
+        tgt_pos = pos_embed[:, all_pred_indices]
+
+        # 4. Per-band target encoding (no_grad)
+        with torch.no_grad():
+            band_targets = []
+            for b in range(self.n_bands):
+                tgt_b = self.target_encoder.encode_tokens(eeg_bands[:, b], mask=None)
+                band_targets.append(tgt_b[:, all_pred_indices])  # [B, n_pred, D]
+
+        # 5. Single predictor pass; per-band linear heads project the shared
+        #    predictor output into each band's target space.
+        predictions = self.predictor(ctx_tokens, ctx_pos, tgt_pos)  # [B, n_pred, D]
+
+        # 6. Loss
+        loss_dict = {}
+        pred_loss_sum = torch.tensor(0.0, device=device)
+        loss_fn = F.smooth_l1_loss if self.pred_loss_type == "smooth_l1" else F.mse_loss
+        for b in range(self.n_bands):
+            pred_b = self.band_heads[b](predictions)
+            loss_b = loss_fn(pred_b, band_targets[b].detach())
+            loss_dict[f"pred_loss_band{b}"] = loss_b.item()
+            pred_loss_sum = pred_loss_sum + self.band_weights[b] * loss_b
+        loss_dict["pred_loss"] = pred_loss_sum.item()
+
+        # 7. Regularizer (same as MaskedJEPA)
+        reg_loss = torch.tensor(0.0, device=device)
+        if self.regularizer is not None:
+            from eb_jepa.losses import SIGRegLoss
+            if isinstance(self.regularizer, SIGRegLoss):
+                ctx_pooled = ctx_tokens.mean(dim=1)
+                reg_loss, _, reg_dict = self.regularizer(ctx_pooled)
+            else:
+                ctx_for_reg = ctx_tokens.permute(0, 2, 1).unsqueeze(-1).unsqueeze(-1)
+                reg_loss, _, reg_dict = self.regularizer(ctx_for_reg)
+            loss_dict["reg_loss"] = reg_loss.item()
+            loss_dict.update(reg_dict)
+
+        total_loss = pred_loss_sum + reg_loss
+        loss_dict["total_loss"] = total_loss.item()
+        return total_loss, loss_dict
+
+    @torch.no_grad()
+    def encode(self, eeg):
+        """Probe-time encoding (unmasked, context encoder only). Same as MaskedJEPA."""
+        tokens = self.context_encoder.encode_tokens(eeg, mask=None)
+        return self.context_encoder.pool_to_windows(tokens)
+
+
 class MaskedJEPANoEMA(nn.Module):
     """LeWorldModel-style masked prediction for EEG (no EMA target encoder).
 
