@@ -491,24 +491,32 @@ def run(
     splits: str = "val,test",
     # Output
     output_json: str = "",
+    save_embeddings: str = "",
+    # Exp 6 baseline
+    checkpoint: str = "",
     fname: str = "experiments/eeg_jepa/cfgs/default.yaml",
 ):
     """Run a Tier 1 baseline.
 
     Args:
-        baseline: One of {'raw_corrca', 'psd_band', 'random_init'}.
+        baseline: One of {'raw_corrca', 'psd_band', 'random_init', 'exp6'}.
+                  exp6 loads the JEPA encoder from --checkpoint.
         seed: Random seed (controls extractor init for random_init + probe init).
         n_windows: Windows per clip (must match Exp 6 = 4 for comparability).
         window_size_seconds: Window length seconds (must match Exp 6 = 2).
         norm_mode: EEG normalization mode (default 'per_recording', as Exp 6).
-        corrca_filters: Path to CorrCA .npz. Used by raw_corrca + random_init.
-                        Set to '' to disable (required for psd_band, which
-                        operates on raw 129-ch EEG).
+        corrca_filters: Path to CorrCA .npz. Used by raw_corrca / random_init / exp6.
+                        Set to '' to disable (required for psd_band).
         hdec: MovieFeatureHead hidden dim (matches default.yaml hdec=64).
-        psd_downsample_to: Unused by raw_corrca (kept for arg parity).
-        output_json: If set, dump all metrics to this path.
+        psd_downsample_to: Used by raw_corrca + Exp-6 raw_corrca downsampling.
+        output_json: If set, dump aggregate metrics to this path.
+        save_embeddings: If set, dump per-clip embeddings + targets + positions
+                         (one .npz per split) under this directory.
+        checkpoint: Required for baseline=exp6.
     """
-    assert baseline in ("raw_corrca", "psd_band", "random_init"), baseline
+    assert baseline in ("raw_corrca", "psd_band", "random_init", "exp6"), baseline
+    if baseline == "exp6":
+        assert checkpoint, "baseline=exp6 requires --checkpoint=/path/to/best.pth.tar"
     setup_seed(seed)
     device = setup_device("auto")
 
@@ -613,6 +621,32 @@ def run(
             mlp_dim_ratio=cfg.model.get("mlp_dim_ratio", 2.66),
         ).to(device)
         extractor = RandomInitEncoderExtractor(encoder)
+    elif baseline == "exp6":
+        # Load Exp 6 checkpoint and use its context_encoder via the same
+        # RandomInitEncoderExtractor wrapper (mean-pools tokens to per-window).
+        encoder = EEGEncoderTokens(
+            n_chans=n_chans_in,
+            n_times=n_times,
+            embed_dim=cfg.model.encoder_embed_dim,
+            depth=cfg.model.encoder_depth,
+            heads=cfg.model.encoder_heads,
+            head_dim=cfg.model.encoder_head_dim,
+            n_windows=n_windows,
+            patch_size=cfg.model.get("patch_size", 50),
+            patch_overlap=cfg.model.get("patch_overlap", 20),
+            freqs=cfg.model.get("freqs", 4),
+            chs_info=train_set.get_chs_info(),
+            mlp_dim_ratio=cfg.model.get("mlp_dim_ratio", 2.66),
+        ).to(device)
+        sd = torch.load(checkpoint, map_location=device, weights_only=False)
+        sd = sd.get("model_state_dict", sd)
+        # Strip the "context_encoder." prefix from the JEPA-style state dict.
+        ce_sd = {k[len("context_encoder."):]: v
+                 for k, v in sd.items() if k.startswith("context_encoder.")}
+        missing, unexpected = encoder.load_state_dict(ce_sd, strict=False)
+        logger.info("Loaded exp6 ctx encoder: %d missing, %d unexpected keys",
+                    len(missing), len(unexpected))
+        extractor = RandomInitEncoderExtractor(encoder)
 
     # ------------------------------------------------------------------
     # Per-clip features (movie probes + movie ID)
@@ -637,6 +671,30 @@ def run(
         eval_targets[split] = t
         eval_positions[split] = p
         logger.info("%s per-clip: %d clips", split, f.shape[0])
+
+    # ------------------------------------------------------------------
+    # Optional: dump per-clip embeddings for downstream extended analyses
+    # (bootstrap CIs, permutation tests, stacked probes, CKA, data-eff curves).
+    # We mean-pool over windows and squeezed dims to get [N_clip, D] which
+    # is sufficient for all those analyses and ~Tx smaller on disk.
+    # ------------------------------------------------------------------
+    if save_embeddings:
+        emb_dir = Path(save_embeddings)
+        emb_dir.mkdir(parents=True, exist_ok=True)
+        np.savez(
+            emb_dir / f"{baseline}_seed{seed}_train.npz",
+            embs=train_feats.mean(dim=(2, 3, 4)).numpy(),
+            targets=train_targets.numpy(),  # keep [N, T_win, n_features]
+            positions=train_positions if train_positions is not None else np.array([]),
+        )
+        for split in splits_list:
+            np.savez(
+                emb_dir / f"{baseline}_seed{seed}_{split}.npz",
+                embs=eval_feats[split].mean(dim=(2, 3, 4)).numpy(),
+                targets=eval_targets[split].numpy(),
+                positions=eval_positions[split] if eval_positions[split] is not None else np.array([]),
+            )
+        logger.info("Saved per-clip embeddings to %s", emb_dir)
 
     # ------------------------------------------------------------------
     # Train movie-feature probes

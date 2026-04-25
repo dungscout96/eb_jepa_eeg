@@ -33,8 +33,10 @@ set -euo pipefail
 export HBN_PREPROCESS_DIR="${HBN_PREPROCESS_DIR:-/projects/bbnv/kkokate/hbn_preprocessed}"
 export UV_LINK_MODE=copy
 
-: "${BASELINE:?need BASELINE (raw_corrca|psd_band|random_init)}"
+: "${BASELINE:?need BASELINE (raw_corrca|psd_band|random_init|exp6)}"
 SEED="${SEED:-42}"
+# Optional: path to Exp-6 checkpoint, required only for BASELINE=exp6.
+CKPT="${CKPT:-}"
 
 echo "========================================"
 echo "Job ID:   $SLURM_JOB_ID"
@@ -55,14 +57,19 @@ if [ -f "$HOME/.wandb_key" ]; then
 fi
 
 OUT_DIR="/projects/bbnv/kkokate/eb_jepa_eeg/tier1"
-mkdir -p "$OUT_DIR"
+EMB_DIR="${OUT_DIR}/embeddings"
+mkdir -p "$OUT_DIR" "$EMB_DIR"
 OUT_JSON="${OUT_DIR}/${BASELINE}_seed${SEED}.json"
+
+CHECKPOINT_ARG=""
+if [ "$BASELINE" = "exp6" ]; then
+    : "${CKPT:?BASELINE=exp6 needs CKPT=/path/to/best.pth.tar}"
+    CHECKPOINT_ARG="--checkpoint=${CKPT}"
+fi
 
 # Exp-6-matching hyperparams:
 #   n_windows=4, window_size_seconds=2, per_recording norm,
-#   CorrCA-5 for raw_corrca + random_init, off for psd_band.
-#
-# The script itself disables CorrCA automatically for psd_band.
+#   CorrCA-5 for raw_corrca + random_init + exp6, off for psd_band.
 PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/tier1_baselines.py \
     --baseline="${BASELINE}" \
     --seed="${SEED}" \
@@ -77,6 +84,8 @@ PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/tier1_baselines.py \
     --subject_probe_epochs=100 \
     --subject_probe_lr=1e-3 \
     --splits=val,test \
-    --output_json="${OUT_JSON}"
+    --output_json="${OUT_JSON}" \
+    --save_embeddings="${EMB_DIR}" \
+    ${CHECKPOINT_ARG}
 
 echo "Tier 1 ${BASELINE} seed=${SEED} complete: ${OUT_JSON}"
