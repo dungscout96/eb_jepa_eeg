@@ -59,7 +59,12 @@ fi
 OUT_DIR="/projects/bbnv/kkokate/eb_jepa_eeg/tier1"
 EMB_DIR="${OUT_DIR}/embeddings"
 mkdir -p "$OUT_DIR" "$EMB_DIR"
-OUT_JSON="${OUT_DIR}/${BASELINE}_seed${SEED}.json"
+TAG="${TAG:-}"
+if [ -n "$TAG" ]; then
+    OUT_JSON="${OUT_DIR}/${TAG}_${BASELINE}_seed${SEED}.json"
+else
+    OUT_JSON="${OUT_DIR}/${BASELINE}_seed${SEED}.json"
+fi
 
 CHECKPOINT_ARG=""
 if [ "$BASELINE" = "exp6" ]; then
