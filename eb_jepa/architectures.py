@@ -736,6 +736,7 @@ class EEGEncoderTokens(nn.Module):
         freqs: int = 4,
         chs_info=None,
         mlp_dim_ratio: float = 2.66,
+        body: Optional[nn.Module] = None,
     ):
         super().__init__()
         self.n_chans = n_chans
@@ -766,12 +767,16 @@ class EEGEncoderTokens(nn.Module):
         )
         self.ln = nn.LayerNorm(embed_dim)
 
-        # Transformer backbone
-        mlp_dim = int(embed_dim * mlp_dim_ratio)
-        self.transformer = REVETransformerBackbone(
-            dim=embed_dim, depth=depth, heads=heads,
-            head_dim=head_dim, mlp_dim=mlp_dim, geglu=True,
-        )
+        # Post-tokenization body: [B, N, D] -> [B, N, D].
+        # Default = REVE transformer; pass `body=...` to override (used by autoresearch).
+        if body is not None:
+            self.transformer = body
+        else:
+            mlp_dim = int(embed_dim * mlp_dim_ratio)
+            self.transformer = REVETransformerBackbone(
+                dim=embed_dim, depth=depth, heads=heads,
+                head_dim=head_dim, mlp_dim=mlp_dim, geglu=True,
+            )
 
         # Channel positions from REVE position bank
         self.default_pos = None

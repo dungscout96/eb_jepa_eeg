@@ -7,6 +7,10 @@ jepa_decoder.pth
 *.pth
 *.pyc
 
+# Autoresearch loop artifacts
+autoresearch/results.tsv
+run.log
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

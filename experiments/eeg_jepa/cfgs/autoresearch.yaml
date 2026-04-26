@@ -1,0 +1,109 @@
+# Autoresearch fixed-evaluation harness config (LOCKED).
+#
+# Only `eb_jepa/encoder_search.py` is mutable across runs. Every other field
+# below is part of the fixed evaluation harness — do not change between
+# experiments, or you invalidate cross-run comparisons.
+#
+# Anchors:
+#   - 4-window x 2-second clips (8 s of EEG per sample)
+#   - per-recording z-norm (matches CorrCA setup; strips subject fingerprint)
+#   - splits R1-R4 (train) / R5 (val) / R6 (test) — JEPAMovieDataset default
+#   - 30-min wall-clock training budget per run
+#   - decision metric: val_corr_weighted (see main.py summary block)
+
+meta:
+  seed: 2025
+  device: auto
+
+data:
+  batch_size: 64
+  num_workers: 4
+  n_windows: 4
+  window_size_seconds: 2
+  temporal_stride: 1
+  preprocessed: true
+  preprocessed_dir: null
+  norm_mode: per_recording
+  add_envelope: false
+  corrca_filters: null
+  feature_names:
+    - contrast_rms
+    - luminance_mean
+    - position_in_movie
+    - narrative_event_score
+  annotation_duration_tolerance_s: 1.0
+  post_movie_visual_processing_s: 2.0
+  max_recording_overshoot_s: 60.0
+  trial_stop_offset_s: 0.1
+  visual_processing_delay_s: 0.3
+
+model:
+  # Body-search switch: when true, post-tokenization body comes from
+  # eb_jepa.encoder_search.build_encoder_body (the only mutable file).
+  use_search_body: true
+
+  # encoder_* fields below are IGNORED when use_search_body=true (the body
+  # owns its own depth/heads/dim). Kept for compatibility with the
+  # encoder constructor signature.
+  encoder_embed_dim: 64
+  encoder_depth: 2
+  encoder_heads: 4
+  encoder_head_dim: 16
+
+  hdec: 64
+  temporal_probe: false
+
+  patch_size: 50
+  patch_overlap: 20
+  freqs: 4
+  mlp_dim_ratio: 2.66
+
+  predictor_depth: 2
+  predictor_embed_dim: null
+  use_ema: true
+  ema_momentum: 0.996
+  ema_momentum_end: 1.0
+
+masking:
+  n_pred_masks_short: 2
+  n_pred_masks_long: 2
+  short_channel_scale: [0.08, 0.15]
+  short_patch_scale: [0.3, 0.6]
+  long_channel_scale: [0.15, 0.35]
+  long_patch_scale: [0.5, 1.0]
+  min_context_fraction: 0.15
+
+loss:
+  regularizer: vc
+  use_projector: true
+  cov_coeff: 0.25
+  std_coeff: 0.25
+  sigreg:
+    num_slices: 256
+    coeff: 0.1
+  pred_loss_type: smooth_l1
+
+optim:
+  # Wall-clock budget gates training; epoch-cap set high to avoid hitting it.
+  epochs: 9999
+  time_budget_minutes: 30
+  early_stopping_patience: 0   # disabled — time budget is the only stop
+  lr: 5.0e-4
+  lr_min: 1.0e-6
+  warmup_epochs: 5
+
+logging:
+  log_wandb: true
+  wandb_group: autoresearch_apr26
+  log_every: 1
+  save_every: 9999            # disable periodic checkpoint dumps
+  tqdm_silent: true           # keep run.log small for fast grep
+
+sanity_checks:
+  enabled: false              # disable to save time per run
+  log_every_steps: 50
+  probe_every_steps: 200
+  probe_train_steps: 30
+  probe_buffer_size: 512
+  cosim_n_pairs: 128
+  horizon_every_steps: 200

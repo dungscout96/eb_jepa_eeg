@@ -12,6 +12,7 @@ Two evaluation decoder probes are trained alongside JEPA:
 
 import copy
 import math
+import time
 from pathlib import Path
 
 import fire
@@ -30,6 +31,7 @@ from eb_jepa.architectures import (
     Projector,
     TemporalMovieFeatureHead,
 )
+from eb_jepa.encoder_search import build_encoder_body
 from eb_jepa.datasets.hbn import JEPAMovieDataset
 from eb_jepa.jepa import MaskedJEPA, MaskedJEPANoEMA, MaskedJEPAProbe
 from eb_jepa.logging import get_logger
@@ -129,6 +131,7 @@ def run(
     if cfg is None:
         cfg = load_config(fname, overrides if overrides else None)
 
+    total_start_time = time.monotonic()
     device = setup_device(cfg.meta.device)
     setup_seed(cfg.meta.seed)
     temporal_stride = cfg.data.get("temporal_stride", 1)
@@ -254,6 +257,7 @@ def run(
     embed_dim = cfg.model.encoder_embed_dim
     masking_cfg = cfg.get("masking", {})
 
+    use_search_body = cfg.model.get("use_search_body", False)
     encoder = EEGEncoderTokens(
         n_chans=n_chans,
         n_times=n_times,
@@ -267,6 +271,7 @@ def run(
         freqs=cfg.model.get("freqs", 4),
         chs_info=chs_info,
         mlp_dim_ratio=cfg.model.get("mlp_dim_ratio", 2.66),
+        body=build_encoder_body(embed_dim) if use_search_body else None,
     )
     use_ema = cfg.model.get("use_ema", True)
     if use_ema:
@@ -427,6 +432,11 @@ def run(
     ema_end = cfg.model.get("ema_momentum_end", 1.0)
     total_steps = cfg.optim.epochs * len(train_loader)
 
+    # Wall-clock time budget (minutes). 0 or unset = disabled (epoch-gated only).
+    # Used by autoresearch loop: training stops at the first epoch boundary past budget.
+    time_budget_minutes = float(cfg.optim.get("time_budget_minutes", 0) or 0)
+    train_start_time = time.monotonic()
+
     for epoch in range(start_epoch, cfg.optim.epochs):
         pbar = tqdm(
             train_loader,
@@ -585,6 +595,18 @@ def run(
         scheduler.step()
         probe_scheduler.step()
 
+        # Wall-clock time budget — check at epoch boundary (autoresearch loop)
+        if time_budget_minutes > 0:
+            elapsed_min = (time.monotonic() - train_start_time) / 60.0
+            if elapsed_min >= time_budget_minutes:
+                logger.info(
+                    "Time budget reached at epoch %d (%.1f min >= %.1f min budget)",
+                    epoch, elapsed_min, time_budget_minutes,
+                )
+                break
+
+    training_seconds = time.monotonic() - train_start_time
+
     # ------------------------------------------------------------------
     # Test set evaluation
     # ------------------------------------------------------------------
@@ -607,6 +629,19 @@ def run(
         num_workers=num_workers,
         pin_memory=True,
     )
+    # Final validation pass — provides the val/reg_*_corr metrics used by the
+    # autoresearch summary block, robust to log_every / partial-epoch settings.
+    final_val_logs = validation_loop(
+        val_loader,
+        jepa,
+        regression_probe,
+        classification_probe,
+        device,
+        feature_stats,
+        feature_median,
+        NUMERIC_FEATURES,
+    )
+
     test_logs = validation_loop(
         test_loader,
         jepa,
@@ -623,6 +658,36 @@ def run(
         import wandb
         wandb.log(test_metrics, step=global_step)
         wandb.finish()
+
+    # ------------------------------------------------------------------
+    # Autoresearch summary block — parsed by autoresearch/parse_log.py.
+    # Weights match autoresearch/program.md; do not change without updating both.
+    # ------------------------------------------------------------------
+    v_pos = float(final_val_logs.get("val/reg_position_in_movie_corr", 0.0))
+    v_con = float(final_val_logs.get("val/reg_contrast_rms_corr", 0.0))
+    v_lum = float(final_val_logs.get("val/reg_luminance_mean_corr", 0.0))
+    v_nar = float(final_val_logs.get("val/reg_narrative_event_score_corr", 0.0))
+    val_corr_weighted = 0.30 * v_pos + 0.30 * v_con + 0.30 * v_lum + 0.10 * v_nar
+
+    if torch.cuda.is_available():
+        peak_vram_mb = torch.cuda.max_memory_allocated() / (1024 ** 2)
+    else:
+        peak_vram_mb = 0.0
+
+    num_params_m = sum(p.numel() for p in encoder.parameters()) / 1e6
+    total_seconds = time.monotonic() - total_start_time
+
+    print("---")
+    print(f"val_corr_weighted:        {val_corr_weighted:.6f}")
+    print(f"val_reg_position:         {v_pos:.6f}")
+    print(f"val_reg_contrast:         {v_con:.6f}")
+    print(f"val_reg_luminance:        {v_lum:.6f}")
+    print(f"val_reg_narrative:        {v_nar:.6f}")
+    print(f"training_seconds:         {training_seconds:.1f}")
+    print(f"total_seconds:            {total_seconds:.1f}")
+    print(f"peak_vram_mb:             {peak_vram_mb:.1f}")
+    print(f"num_params_M:             {num_params_m:.4f}")
+    print(f"num_steps:                {global_step}")
 
     logger.info("Training complete!")
 
