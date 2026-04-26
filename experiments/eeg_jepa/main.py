@@ -415,6 +415,12 @@ def run(
     best_val_reg = float("inf")
     epochs_without_improvement = 0
 
+    # Autoresearch peak tracker — best val_corr_weighted seen across all epochs.
+    # Decoupled from val/reg_loss-based best.pth.tar (which is probe-MSE-best,
+    # not corr-best — the two diverge in early training).
+    best_val_corr_weighted = float("-inf")
+    best_val_corr_weighted_epoch = -1
+
     # Load checkpoint if requested
     start_epoch = 0
     global_step = 0
@@ -550,6 +556,16 @@ def run(
                 total_epochs=cfg.optim.epochs,
             )
 
+            # Autoresearch peak tracker — running max of val_corr_weighted.
+            ep_pos = float(val_logs.get("val/reg_position_in_movie_corr", 0.0))
+            ep_con = float(val_logs.get("val/reg_contrast_rms_corr", 0.0))
+            ep_lum = float(val_logs.get("val/reg_luminance_mean_corr", 0.0))
+            ep_nar = float(val_logs.get("val/reg_narrative_event_score_corr", 0.0))
+            ep_corr_w = 0.30 * ep_pos + 0.30 * ep_con + 0.30 * ep_lum + 0.10 * ep_nar
+            if ep_corr_w > best_val_corr_weighted:
+                best_val_corr_weighted = ep_corr_w
+                best_val_corr_weighted_epoch = epoch
+
             # Track best val/reg_loss and save best checkpoint
             current_val_reg = val_logs.get("val/reg_loss", float("inf"))
             if current_val_reg < best_val_reg:
@@ -677,8 +693,17 @@ def run(
     num_params_m = sum(p.numel() for p in encoder.parameters()) / 1e6
     total_seconds = time.monotonic() - total_start_time
 
+    # The final-pass weighted corr can be lower than the per-epoch peak when a
+    # model degrades after its best epoch. Both are emitted; downstream picks.
+    val_corr_weighted_max = max(best_val_corr_weighted, val_corr_weighted)
+    val_corr_weighted_max_epoch = (
+        best_val_corr_weighted_epoch if best_val_corr_weighted >= val_corr_weighted else epoch
+    )
+
     print("---")
     print(f"val_corr_weighted:        {val_corr_weighted:.6f}")
+    print(f"val_corr_weighted_max:    {val_corr_weighted_max:.6f}")
+    print(f"val_corr_weighted_max_ep: {val_corr_weighted_max_epoch}")
     print(f"val_reg_position:         {v_pos:.6f}")
     print(f"val_reg_contrast:         {v_con:.6f}")
     print(f"val_reg_luminance:        {v_lum:.6f}")

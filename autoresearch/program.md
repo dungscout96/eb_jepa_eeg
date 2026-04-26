@@ -34,8 +34,14 @@ val_corr_weighted = 0.30 * val/reg_position_in_movie_corr
                   + 0.10 * val/reg_narrative_event_score_corr
 ```
 
-Defined in `experiments/eeg_jepa/main.py` (see end of `run()`). All four raw
-corrs are also written to `results.tsv` so weights can be retuned post-hoc.
+Two flavors emitted per run:
+- `val_corr_weighted` — final state (after the time budget cuts training).
+- `val_corr_weighted_max` — running max across all per-epoch validations.
+
+**Use `val_corr_weighted_max` for keep/discard decisions.** Avoids penalizing
+architectures that peak then degrade. The final value is also logged for
+diagnostics. Both are stored in `results.tsv` along with the four raw corrs
+so weights can be retuned post-hoc.
 
 ## What you CAN change in `eb_jepa/encoder_search.py`
 

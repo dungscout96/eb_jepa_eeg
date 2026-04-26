@@ -17,6 +17,8 @@ from pathlib import Path
 
 EXPECTED_KEYS = [
     "val_corr_weighted",
+    "val_corr_weighted_max",
+    "val_corr_weighted_max_ep",
     "val_reg_position",
     "val_reg_contrast",
     "val_reg_luminance",
@@ -66,11 +68,13 @@ def parse(log_path: Path) -> dict | None:
 def tsv_row(commit: str, parsed: dict) -> str:
     """Format a results.tsv row from parsed summary."""
     if parsed is None or "_missing_keys" in parsed:
-        return f"{commit}\t0.000000\t0.000000\t0.000000\t0.000000\t0.000000\t0.0\tcrash\t"
+        return f"{commit}\t0.000000\t0.000000\t-1\t0.000000\t0.000000\t0.000000\t0.000000\t0.0\tcrash\t"
     peak_vram_gb = parsed["peak_vram_mb"] / 1024.0
     return (
         f"{commit}\t"
         f"{parsed['val_corr_weighted']:.6f}\t"
+        f"{parsed['val_corr_weighted_max']:.6f}\t"
+        f"{int(parsed['val_corr_weighted_max_ep'])}\t"
         f"{parsed['val_reg_position']:.6f}\t"
         f"{parsed['val_reg_contrast']:.6f}\t"
         f"{parsed['val_reg_luminance']:.6f}\t"
