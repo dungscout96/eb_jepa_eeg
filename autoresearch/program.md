@@ -23,9 +23,22 @@ the branch, repeat.
 - **SLURM time_limit**: 1 h (leaves ~30 min for startup + final eval).
 - **GPU**: 1 × A40 on Delta `gpuA40x4`.
 
-## Decision metric (`val_bpb` analog)
+## Decision rule
 
-Higher is better. Composite of four val regression correlations:
+Three layers — a hard gate, an optimisation target, and a consistency check.
+
+### Layer 1: hard collapse gate (auto-discard if either fails)
+
+```
+sanity_emb_var_min   > 0.01     # else: encoder dimension(s) collapsed
+sanity_cosim_max     < 0.99     # else: pathological pairwise similarity
+```
+
+Failures are auto-marked `status=discard` by `parse_log.py` regardless of any
+other metric. Cheap, unambiguous; catches degenerate runs that would otherwise
+"score" through luck or shortcut features.
+
+### Layer 2: optimisation target (`val_bpb` analog)
 
 ```
 val_corr_weighted = 0.30 * val/reg_position_in_movie_corr
@@ -39,9 +52,23 @@ Two flavors emitted per run:
 - `val_corr_weighted_max` — running max across all per-epoch validations.
 
 **Use `val_corr_weighted_max` for keep/discard decisions.** Avoids penalizing
-architectures that peak then degrade. The final value is also logged for
-diagnostics. Both are stored in `results.tsv` along with the four raw corrs
-so weights can be retuned post-hoc.
+architectures that peak then degrade.
+
+### Layer 3: consistency check (`rep_score`, diagnostic only)
+
+For each candidate, after standardising across the last ~10 runs in
+`results.tsv`:
+
+```
+rep_score = z(sanity_lin_probe_acc)
+          + 0.5 * z(sanity_emb_var_mean)
+          - 0.5 * z(sanity_cosim_mean)
+```
+
+If `val_corr_weighted_max` improves but `rep_score` drops sharply (Δ > 1 std
+below the running mean), **flag the run as suspicious** (likely position-leak
+or probe-overfit win) but do NOT auto-discard — leave to operator judgment.
+Selection rationale in [autoresearch/analysis/metric_correlation_report.md](analysis/metric_correlation_report.md).
 
 ## What you CAN change in `eb_jepa/encoder_search.py`
 

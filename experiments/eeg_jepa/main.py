@@ -443,6 +443,10 @@ def run(
     time_budget_minutes = float(cfg.optim.get("time_budget_minutes", 0) or 0)
     train_start_time = time.monotonic()
 
+    # Latest values from SanityCheckHook — kept rolling so the autoresearch
+    # summary block reports the most recently emitted sanity/* metrics.
+    latest_sanity: dict[str, float] = {}
+
     for epoch in range(start_epoch, cfg.optim.epochs):
         pbar = tqdm(
             train_loader,
@@ -468,6 +472,8 @@ def run(
                 global_step, eeg, features, jepa, loss_dict,
                 probe_labels=probe_labels,
             )
+            if sanity_metrics:
+                latest_sanity.update({k: float(v) for k, v in sanity_metrics.items()})
             optimizer.step()
 
             # EMA update of target encoder (cosine momentum schedule)
@@ -700,6 +706,14 @@ def run(
         best_val_corr_weighted_epoch if best_val_corr_weighted >= val_corr_weighted else epoch
     )
 
+    # Latest sanity/* values (collapse + non-circular probe diagnostics).
+    # See autoresearch/analysis/metric_correlation_report.md for selection rationale.
+    s_lpa = latest_sanity.get("sanity/linear_probe_acc", 0.0)
+    s_emv = latest_sanity.get("sanity/embedding_variance_mean", 0.0)
+    s_emn = latest_sanity.get("sanity/embedding_variance_min", 0.0)
+    s_csm = latest_sanity.get("sanity/cosim_random_pairs_mean", 0.0)
+    s_csx = latest_sanity.get("sanity/cosim_random_pairs_max", 0.0)
+
     print("---")
     print(f"val_corr_weighted:        {val_corr_weighted:.6f}")
     print(f"val_corr_weighted_max:    {val_corr_weighted_max:.6f}")
@@ -708,6 +722,11 @@ def run(
     print(f"val_reg_contrast:         {v_con:.6f}")
     print(f"val_reg_luminance:        {v_lum:.6f}")
     print(f"val_reg_narrative:        {v_nar:.6f}")
+    print(f"sanity_linear_probe_acc:  {s_lpa:.6f}")
+    print(f"sanity_emb_var_mean:      {s_emv:.6f}")
+    print(f"sanity_emb_var_min:       {s_emn:.6f}")
+    print(f"sanity_cosim_mean:        {s_csm:.6f}")
+    print(f"sanity_cosim_max:         {s_csx:.6f}")
     print(f"training_seconds:         {training_seconds:.1f}")
     print(f"total_seconds:            {total_seconds:.1f}")
     print(f"peak_vram_mb:             {peak_vram_mb:.1f}")

@@ -100,7 +100,7 @@ logging:
   tqdm_silent: true           # keep run.log small for fast grep
 
 sanity_checks:
-  enabled: false              # disable to save time per run
+  enabled: true               # required — sanity/* metrics gate collapse + cross-check rep quality
   log_every_steps: 50
   probe_every_steps: 200
   probe_train_steps: 30
