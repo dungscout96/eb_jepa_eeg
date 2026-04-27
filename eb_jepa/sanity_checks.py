@@ -170,17 +170,31 @@ class SanityCheckHook:
 
         metrics: dict[str, float] = {}
 
-        if step % self.log_every_steps == 0:
-            metrics.update(self._compute_embedding_metrics(eeg, jepa))
-            metrics.update(self._compute_grad_norm(jepa))
-            metrics.update(self._compute_loss_trend())
-            self._update_probe_buffer(eeg, features, jepa, probe_labels)
+        # Isolate this hook's RNG consumption from the training stream.
+        # Without this, the hook's randint/randperm/mask_collator() calls
+        # advance the global CPU+CUDA RNG that the training MultiBlockMaskCollator
+        # also draws from — verified to reproducibly induce JEPA collapse on
+        # configs with weak VC regularization (autoresearch seeds 2025/2026/2027).
+        cpu_state = torch.get_rng_state()
+        cuda_state = (
+            torch.cuda.get_rng_state(eeg.device) if eeg.is_cuda else None
+        )
+        try:
+            if step % self.log_every_steps == 0:
+                metrics.update(self._compute_embedding_metrics(eeg, jepa))
+                metrics.update(self._compute_grad_norm(jepa))
+                metrics.update(self._compute_loss_trend())
+                self._update_probe_buffer(eeg, features, jepa, probe_labels)
 
-        if step % self.probe_every_steps == 0 and len(self._emb_buffer) >= 16:
-            metrics.update(self._train_and_eval_probe(eeg.device))
+            if step % self.probe_every_steps == 0 and len(self._emb_buffer) >= 16:
+                metrics.update(self._train_and_eval_probe(eeg.device))
 
-        if step % self.horizon_every_steps == 0 and step > 0:
-            metrics.update(self._compute_horizon_losses(eeg, jepa))
+            if step % self.horizon_every_steps == 0 and step > 0:
+                metrics.update(self._compute_horizon_losses(eeg, jepa))
+        finally:
+            torch.set_rng_state(cpu_state)
+            if cuda_state is not None:
+                torch.cuda.set_rng_state(cuda_state, eeg.device)
 
         return metrics
 
