@@ -64,5 +64,6 @@ dev = [
 eeg = [
     "braindecode @ git+https://github.com/braindecode/braindecode.git",
     "eegdash",
-    "neurolab @ git+https://github.com/dungscout96/neurolab.git"
+    "neurolab @ git+https://github.com/dungscout96/neurolab.git",
+    "timm>=1.0.26",
 ]
