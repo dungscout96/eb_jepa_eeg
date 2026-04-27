@@ -1,9 +1,9 @@
 #!/bin/bash
 # Issue #8 Phase B — temporal context sweep, single seed (2025).
-# Skips nw4_ws2 (already in Phase A or Exp 6). Adds nw1_ws1, nw2_ws1, nw4_ws4.
+# Skips nw4_ws2 (already in Phase A or Exp 6). Adds nw1_ws1, nw2_ws1, nw2_ws4, nw4_ws4.
 #
 # Operator must set USE_CORRCA={0|1} based on the Phase A decision.
-# Without CorrCA, n_chans=129; nw4_ws4 needs bs=32 to fit on A40-40GB.
+# Without CorrCA, n_chans=129; longer-context cells need bs=32 to fit on A40-40GB.
 
 set -euo pipefail
 
@@ -16,6 +16,7 @@ mkdir -p logs
 CELLS=(
   "1 1 64 64"
   "2 1 64 64"
+  "2 4 32 64"
   "4 4 32 64"
 )
 
