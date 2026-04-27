@@ -170,14 +170,36 @@ def _extract_subject_labels(metadata_list, median_age=None):
     return labels
 
 
-def _train_cls_probe(train_embs, train_labels, device, probe_epochs, probe_lr):
-    """Train a linear probe for binary classification (age>median or sex)."""
+def _build_probe_head(in_dim, out_dim, probe_type="linear", hidden_dim=128, dropout=0.1):
+    """Build a probe head: linear or 2-layer MLP.
+
+    MLP design follows standard SSL non-linear probe protocol — Linear → LayerNorm →
+    GELU → Dropout → Linear, with hidden_dim ≈ 2 × in_dim by default. LayerNorm is
+    used (not BatchNorm) so subject-trait probes stay stable on small per-recording
+    batches (~600 train recordings).
+    """
+    if probe_type == "linear":
+        return nn.Linear(in_dim, out_dim)
+    if probe_type == "mlp":
+        return nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, out_dim),
+        )
+    raise ValueError(f"Unknown probe_type: {probe_type!r} (expected 'linear' or 'mlp')")
+
+
+def _train_cls_probe(train_embs, train_labels, device, probe_epochs, probe_lr,
+                     probe_type="linear", probe_hidden_dim=128):
+    """Train a probe (linear or 2-layer MLP) for binary classification."""
     valid = ~np.isnan(train_labels)
     X = torch.from_numpy(train_embs[valid]).float().to(device)
     y = torch.from_numpy(train_labels[valid]).float().to(device)
 
     D = X.shape[1]
-    probe = nn.Linear(D, 1).to(device)
+    probe = _build_probe_head(D, 1, probe_type, probe_hidden_dim).to(device)
     opt = Adam(probe.parameters(), lr=probe_lr)
 
     probe.train()
@@ -192,8 +214,9 @@ def _train_cls_probe(train_embs, train_labels, device, probe_epochs, probe_lr):
     return probe
 
 
-def _train_reg_probe(train_embs, train_labels, device, probe_epochs, probe_lr):
-    """Train a linear probe for regression (age prediction)."""
+def _train_reg_probe(train_embs, train_labels, device, probe_epochs, probe_lr,
+                     probe_type="linear", probe_hidden_dim=128):
+    """Train a probe (linear or 2-layer MLP) for regression (age prediction)."""
     valid = ~np.isnan(train_labels)
     X = torch.from_numpy(train_embs[valid]).float().to(device)
     y = torch.from_numpy(train_labels[valid]).float().to(device)
@@ -203,7 +226,7 @@ def _train_reg_probe(train_embs, train_labels, device, probe_epochs, probe_lr):
     y_norm = (y - y_mean) / y_std
 
     D = X.shape[1]
-    probe = nn.Linear(D, 1).to(device)
+    probe = _build_probe_head(D, 1, probe_type, probe_hidden_dim).to(device)
     opt = Adam(probe.parameters(), lr=probe_lr)
 
     probe.train()
@@ -290,8 +313,9 @@ def _embed_clips_with_position(loader, jepa, device, pos_feature_idx):
     return np.concatenate(all_embs), np.concatenate(all_pos)
 
 
-def _train_movie_id_probe(embs, positions, device, n_bins, probe_epochs, probe_lr):
-    """Train a K-way linear probe to predict temporal bin from clip embeddings."""
+def _train_movie_id_probe(embs, positions, device, n_bins, probe_epochs, probe_lr,
+                          probe_type="linear", probe_hidden_dim=128):
+    """Train a K-way probe (linear or 2-layer MLP) for temporal-bin prediction."""
     # Discretize positions into n_bins equal-width bins
     bin_edges = np.linspace(positions.min(), positions.max() + 1e-8, n_bins + 1)
     bin_labels = np.digitize(positions, bin_edges) - 1
@@ -301,7 +325,7 @@ def _train_movie_id_probe(embs, positions, device, n_bins, probe_epochs, probe_l
     y = torch.from_numpy(bin_labels).long().to(device)
 
     D = X.shape[1]
-    probe = nn.Linear(D, n_bins).to(device)
+    probe = _build_probe_head(D, n_bins, probe_type, probe_hidden_dim).to(device)
     opt = Adam(probe.parameters(), lr=probe_lr)
 
     probe.train()
@@ -359,6 +383,13 @@ def run(
     # Subject-trait probe training
     subject_probe_epochs: int = 100,
     subject_probe_lr: float = 1e-3,
+    # Probe head type: "linear" (default, baseline) or "mlp" (2-layer non-linear).
+    # Applies to subject-trait + movie-id probes; movie-feature heads use a
+    # separate `movie_probe_hidden_dim` knob (MovieFeatureHead is already a 2-layer MLP).
+    probe_type: str = "linear",
+    probe_hidden_dim: int = 128,
+    # Override hidden dim of MovieFeatureHead. Default reads cfg.model.hdec (=64 in default.yaml).
+    movie_probe_hidden_dim: int = 0,
     # Eval splits: "val", "test", or "val,test"
     splits: str = "val,test",
     # Data preprocessing overrides (must match training config)
@@ -564,8 +595,9 @@ def run(
         )
         cls_loss_fn = ClassificationLoss(feature_median.to(device))
 
-        reg_head = MovieFeatureHead(embed_dim, cfg.model.hdec, n_features)
-        cls_head = MovieFeatureHead(embed_dim, cfg.model.hdec, n_features)
+        movie_hidden = movie_probe_hidden_dim if movie_probe_hidden_dim > 0 else cfg.model.hdec
+        reg_head = MovieFeatureHead(embed_dim, movie_hidden, n_features)
+        cls_head = MovieFeatureHead(embed_dim, movie_hidden, n_features)
         regression_probe = MaskedJEPAProbe(jepa, reg_head, reg_loss_fn).to(device)
         classification_probe = MaskedJEPAProbe(jepa, cls_head, cls_loss_fn).to(device)
 
@@ -627,13 +659,15 @@ def run(
             if label_name == "age_reg":
                 logger.info("Training age regression probe (%d valid)...", n_valid)
                 probe, y_mean, y_std = _train_reg_probe(
-                    train_embs, labels, device, subject_probe_epochs, subject_probe_lr
+                    train_embs, labels, device, subject_probe_epochs, subject_probe_lr,
+                    probe_type=probe_type, probe_hidden_dim=probe_hidden_dim,
                 )
                 subject_probes[label_name] = ("reg", probe, y_mean, y_std)
             else:
                 logger.info("Training %s classification probe (%d valid)...", label_name, n_valid)
                 probe = _train_cls_probe(
-                    train_embs, labels, device, subject_probe_epochs, subject_probe_lr
+                    train_embs, labels, device, subject_probe_epochs, subject_probe_lr,
+                    probe_type=probe_type, probe_hidden_dim=probe_hidden_dim,
                 )
                 subject_probes[label_name] = ("cls", probe)
     else:
@@ -657,6 +691,7 @@ def run(
         movie_id_probe, movie_id_bin_edges = _train_movie_id_probe(
             train_clip_embs, train_positions, device, n_bins,
             probe_epochs, probe_lr,
+            probe_type=probe_type, probe_hidden_dim=probe_hidden_dim,
         )
         # Train-set accuracy for reference
         train_movie_metrics = _eval_movie_id_probe(
@@ -749,6 +784,11 @@ def run(
                     "window_size_seconds": window_size_seconds,
                     "probe_epochs": probe_epochs,
                     "subject_probe_epochs": subject_probe_epochs,
+                    "probe_type": probe_type,
+                    "probe_hidden_dim": probe_hidden_dim,
+                    "movie_probe_hidden_dim": (
+                        movie_probe_hidden_dim if movie_probe_hidden_dim > 0 else cfg.model.hdec
+                    ),
                     "splits": splits,
                     "probe_label": train_set.probe_label_name,
                 },
