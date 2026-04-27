@@ -367,6 +367,8 @@ def run(
     corrca_filters: str = "",
     # Run modes
     subject_only: bool = False,
+    # Prediction dump (for post-hoc bootstrap CIs over recordings)
+    save_predictions_dir: str = "",
     # W&B
     wandb_run_id: str = "",
     wandb_project: str = "eb_jepa",
@@ -671,7 +673,13 @@ def run(
     # ------------------------------------------------------------------
     all_metrics = {}
 
+    save_dir = Path(save_predictions_dir) if save_predictions_dir else None
+    if save_dir is not None:
+        save_dir.mkdir(parents=True, exist_ok=True)
+
     for split, loader in eval_loaders.items():
+        save_data = {} if save_dir is not None else None
+
         # Movie-feature metrics
         if regression_probe is not None:
             logger.info("Evaluating movie-feature probes on %s...", split)
@@ -681,6 +689,27 @@ def run(
             )
             for k, v in movie_metrics.items():
                 all_metrics[f"probe_eval/{split}/{k.split('/', 1)[-1]}"] = v
+
+            if save_data is not None:
+                # One extra deterministic-iteration pass to capture per-clip preds/targets.
+                # JEPAMovieDataset returns one random clip per recording, so with
+                # shuffle=False the iteration order matches recording index 0..N-1.
+                jepa.eval(); regression_probe.eval(); classification_probe.eval()
+                reg_p, cls_p, tgt = [], [], []
+                with torch.no_grad():
+                    for eeg, features, _ in loader:
+                        eeg = eeg.to(device)
+                        state = jepa.encode(eeg)
+                        reg_p.append(regression_probe.head(state).cpu().numpy())
+                        cls_p.append(classification_probe.head(state).cpu().numpy())
+                        tgt.append(features.numpy())
+                save_data["movie_reg_preds"] = np.concatenate(reg_p)
+                save_data["movie_cls_logits"] = np.concatenate(cls_p)
+                save_data["movie_targets"] = np.concatenate(tgt)
+                save_data["feature_names"] = np.array(feature_names)
+                save_data["feature_mean"] = feature_stats["mean"].numpy()
+                save_data["feature_std"] = feature_stats["std"].numpy()
+                save_data["feature_median"] = feature_median.numpy()
 
         # Movie identity metrics
         if movie_id_probe is not None:
@@ -693,6 +722,14 @@ def run(
             )
             for k, v in mid_metrics.items():
                 all_metrics[f"probe_eval/{split}/movie_id/{k}"] = v
+
+            if save_data is not None:
+                movie_id_probe.eval()
+                with torch.no_grad():
+                    X = torch.from_numpy(eval_clip_embs).float().to(device)
+                    save_data["movie_id_logits"] = movie_id_probe(X).cpu().numpy()
+                save_data["movie_id_positions"] = eval_positions
+                save_data["movie_id_bin_edges"] = movie_id_bin_edges
 
         # Subject-trait metrics
         if subject_probes:
@@ -716,6 +753,35 @@ def run(
                     metrics = _eval_reg_probe(probe, eval_embs, eval_labels, device, y_mean, y_std)
                     for k, v in metrics.items():
                         all_metrics[f"probe_eval/{split}/subject/{label_name}/{k}"] = v
+
+            if save_data is not None:
+                save_data["subj_embs"] = eval_embs
+                for label_name, probe_info in subject_probes.items():
+                    eval_labels = eval_labels_dict.get(label_name)
+                    if eval_labels is None:
+                        continue
+                    save_data[f"subj_{label_name}_labels"] = eval_labels
+                    with torch.no_grad():
+                        X = torch.from_numpy(eval_embs).float().to(device)
+                        if probe_info[0] == "cls":
+                            save_data[f"subj_{label_name}_logits"] = (
+                                probe_info[1](X).squeeze(-1).cpu().numpy()
+                            )
+                        else:
+                            _, probe, y_mean, y_std = probe_info
+                            save_data[f"subj_{label_name}_pred_norm"] = (
+                                probe(X).squeeze(-1).cpu().numpy()
+                            )
+                            save_data[f"subj_{label_name}_y_mean"] = y_mean
+                            save_data[f"subj_{label_name}_y_std"] = y_std
+
+        if save_data is not None:
+            n_recs = len(eval_sets[split])
+            save_data["rec_ids"] = np.arange(n_recs)
+            save_data["seed"] = seed
+            out_path = save_dir / f"{split}_seed{seed}.npz"
+            np.savez_compressed(out_path, **save_data)
+            logger.info("Saved predictions for %s to %s", split, out_path)
 
     # ------------------------------------------------------------------
     # Print summary
