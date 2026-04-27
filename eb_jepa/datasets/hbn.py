@@ -1046,11 +1046,15 @@ class JEPAMovieDataset(HBNMovieDataset):
             _read_raw_windows(self._fif_paths[idx], crop_inds[indices])
         )
 
-        # Normalization: per-recording removes subject fingerprint, global preserves it
+        # Normalization: per-recording removes subject fingerprint, global preserves
+        # it. "none" passes raw µV through (used by Tier 3 frozen-FM probes whose
+        # backbones expect to apply their own pretraining-spec normalization).
         if self._norm_mode == "per_recording":
             rec_mean = eeg.mean(dim=(0, 2), keepdim=True)  # [1, C, 1]
             rec_std = eeg.std(dim=(0, 2), keepdim=True).clamp(min=1e-8)
             eeg = (eeg - rec_mean) / rec_std
+        elif self._norm_mode == "none":
+            pass
         else:
             eeg = (eeg - self._eeg_mean) / self._eeg_std
 

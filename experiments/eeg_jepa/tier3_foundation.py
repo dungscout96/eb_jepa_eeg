@@ -152,8 +152,13 @@ class ModelSpec:
 def _resample_torch(x: torch.Tensor, src_sfreq: float, tgt_sfreq: float) -> torch.Tensor:
     if abs(src_sfreq - tgt_sfreq) < 1e-6:
         return x
-    new_T = int(round(x.shape[-1] * tgt_sfreq / src_sfreq))
-    return F.interpolate(x, size=new_T, mode="linear", align_corners=False)
+    # Linear interpolation has no anti-alias filter; safe only for upsampling
+    # or near-no-op rates. All current FMs target 200 Hz (HBN source) so this
+    # branch should not trigger; assert to catch silent regressions.
+    raise NotImplementedError(
+        f"_resample_torch hit non-trivial branch (src={src_sfreq}, tgt={tgt_sfreq}); "
+        "use a Kaiser-windowed resampler (torchaudio.functional.resample) before enabling."
+    )
 
 
 def _bandpass_fft(x: torch.Tensor, sfreq: float, lo, hi) -> torch.Tensor:
@@ -267,26 +272,38 @@ def _load_pretrained(name: str, spec: ModelSpec, chs_info_subset):
 
 def _embedding(model: nn.Module, x: torch.Tensor,
                channel_locations: torch.Tensor | None = None) -> torch.Tensor:
-    """Capture penultimate activation as the per-clip embedding.
+    """Capture the pretrained encoder's output as the per-clip embedding.
 
-    Hooks the final Linear/Conv module's input. Works for braindecode FMs
-    (BIOT, CBraMod) which forward as ``model(x)``. For LUNA, the forward
-    signature requires ``channel_locations`` (3D coords), so pass it through.
+    BIOT / CBraMod: forward = ``model(x)``; the last ``Linear/Conv`` is the
+    classification head, so hooking its input gives the encoder output.
+
+    LUNA: the last ``Linear`` is inside the (randomly initialized)
+    ``ClassificationHeadWithQueries.decoder_ffn``. Hooking that returns a
+    partially-random tensor. The true encoder output is ``model.norm`` (the
+    ``LayerNorm`` after ``model.blocks``), so we hook that explicitly and
+    mean-pool over the patch dimension to get a single per-clip vector.
     """
     captured = {}
 
-    def _hook(_m, inp, _out):
-        x_in = inp[0]
-        captured["x"] = x_in.detach().reshape(x_in.size(0), -1)
+    is_luna = channel_locations is not None
+    if is_luna:
+        def _hook(_m, _inp, out):
+            # out: (B, N, D) — mean-pool over patches for a fixed-D embedding
+            captured["x"] = out.detach().mean(dim=1)
+        target = model.norm
+    else:
+        def _hook(_m, inp, _out):
+            x_in = inp[0]
+            captured["x"] = x_in.detach().reshape(x_in.size(0), -1)
+        target = None
+        for m in model.modules():
+            if isinstance(m, (nn.Linear, nn.Conv2d, nn.Conv1d)):
+                target = m
 
-    final = None
-    for m in model.modules():
-        if isinstance(m, (nn.Linear, nn.Conv2d, nn.Conv1d)):
-            final = m
-    h = final.register_forward_hook(_hook)
+    h = target.register_forward_hook(_hook)
     try:
         with torch.no_grad():
-            if channel_locations is not None:
+            if is_luna:
                 model(x, mask=None, channel_locations=channel_locations)
             else:
                 model(x)
@@ -311,8 +328,11 @@ def _features_per_recording(dataset, fm, spec, ch_idx, src_sfreq, device,
         n_clips = n_total - required + 1
         if n_clips <= 0:
             continue
-        n_sample = min(max_clips_per_rec, n_clips)
-        starts = np.linspace(0, n_clips - 1, n_sample, dtype=int)
+        # Non-overlapping clip starts (stride = required) so per-rec averaging
+        # combines genuinely independent samples instead of duplicates.
+        max_non_overlap = (n_clips - 1) // required + 1
+        n_sample = min(max_clips_per_rec, max_non_overlap)
+        starts = (np.arange(n_sample) * required).astype(int)
         clip_embs = []
         for start in starts:
             indices = list(range(start, start + required, dataset.temporal_stride))
@@ -322,6 +342,8 @@ def _features_per_recording(dataset, fm, spec, ch_idx, src_sfreq, device,
                 rm = eeg.mean(dim=(0, 2), keepdim=True)
                 rs = eeg.std(dim=(0, 2), keepdim=True).clamp(min=1e-8)
                 eeg = (eeg - rm) / rs
+            elif dataset._norm_mode == "none":
+                pass  # raw µV — let the FM-spec normalization be the only one
             else:
                 eeg = (eeg - dataset._eeg_mean) / dataset._eeg_std
             # eeg: [n_windows, 129, T_src]; select channels for FMs that need it
@@ -445,7 +467,8 @@ def _features_loader(loader, fm, spec, ch_idx, src_sfreq, device, pos_idx,
                      channel_locations: torch.Tensor | None = None):
     all_embs, all_targets, all_positions = [], [], []
     for eeg, features, _ in tqdm(loader, desc="extracting", leave=False):
-        # eeg: [B, n_windows, 129, T_src] (per-rec normed)
+        # eeg: [B, n_windows, 129, T_src]; with --norm_mode=none the dataset
+        # leaves raw µV and we let the FM-spec _normalize() be the sole norm.
         B, T, C, Ts = eeg.shape
         if ch_idx is not None:
             eeg = eeg[:, :, ch_idx, :]
@@ -552,7 +575,7 @@ def run(
     window_size_seconds: int = 2,
     batch_size: int = 32,
     num_workers: int = 4,
-    norm_mode: str = "per_recording",
+    norm_mode: str = "none",
     hdec: int = 64,
     probe_epochs: int = 20,
     probe_lr: float = 1e-3,
