@@ -126,9 +126,6 @@ def validation_loop(
     for k, v in sorted(metrics.items()):
         print(f"  {k}: {v:.4f}")
 
-    # Restore training mode
-    jepa.train()
-    regression_probe.train()
-    classification_probe.train()
-
+    # Caller is responsible for restoring train mode if needed —
+    # validation_loop must not mutate frozen-encoder state. (issue #8 audit)
     return metrics

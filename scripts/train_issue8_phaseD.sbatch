@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --gpus-per-task=1
 #SBATCH --mem=64G
-#SBATCH --time=06:00:00
+#SBATCH --time=08:00:00
 #SBATCH --output=logs/issue8D_%j.out
 #SBATCH --error=logs/issue8D_%j.err
 # ---------------------------------------------------------------

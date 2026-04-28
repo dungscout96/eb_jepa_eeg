@@ -560,19 +560,24 @@ def run(
                 total_epochs=cfg.optim.epochs,
             )
 
-            # Track best val/reg_loss and save best checkpoint
+            # Track best val/reg_loss and save best checkpoint.
+            # Only write best.pth.tar when early stopping is enabled (patience>0),
+            # since val/reg_loss is the noisy auxiliary online probe loss
+            # (issue #8 diagnosis). With patience=0, downstream should consume
+            # latest.pth.tar instead.
             current_val_reg = val_logs.get("val/reg_loss", float("inf"))
             if current_val_reg < best_val_reg:
                 best_val_reg = current_val_reg
                 epochs_without_improvement = 0
-                save_checkpoint(
-                    exp_dir / "best.pth.tar",
-                    model=jepa,
-                    optimizer=optimizer,
-                    epoch=epoch,
-                    step=global_step,
-                )
-                logger.info("New best val/reg_loss=%.4f at epoch %d", best_val_reg, epoch)
+                if patience > 0:
+                    save_checkpoint(
+                        exp_dir / "best.pth.tar",
+                        model=jepa,
+                        optimizer=optimizer,
+                        epoch=epoch,
+                        step=global_step,
+                    )
+                    logger.info("New best val/reg_loss=%.4f at epoch %d", best_val_reg, epoch)
             else:
                 epochs_without_improvement += 1
 
