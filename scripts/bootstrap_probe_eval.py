@@ -127,7 +127,8 @@ def _bootstrap_movie_id(npz, n_bootstrap, rng):
 
 def _bootstrap_subject(npz, n_bootstrap, rng):
     out = {}
-    keys = [k[5:-7] for k in npz.files
+    npz_keys = list(npz.keys()) if isinstance(npz, dict) else list(npz.files)
+    keys = [k[5:-7] for k in npz_keys
             if k.startswith("subj_") and k.endswith("_labels")]
     for label_name in keys:
         labels = npz[f"subj_{label_name}_labels"]
@@ -221,8 +222,8 @@ def run(predictions_dir: str, split: str = "test",
     results.update(_bootstrap_subject(npz, n_bootstrap, rng))
 
     for name, s in results.items():
-        ci = f"[{s['ci_lo']:+.3f}, {s['ci_hi']:+.3f}]"
-        print(f"{name:<40} {s['mean']:>+8.4f} {s['std']:>8.4f} {ci:>20}")
+        ci = f"[{s['ci_lo']:.3f}, {s['ci_hi']:.3f}]"
+        print(f"{name:<40} {s['mean']:>8.4f} {s['std']:>8.4f} {ci:>20}")
 
     return results
 

@@ -367,6 +367,10 @@ def run(
     corrca_filters: str = "",
     # Run modes
     subject_only: bool = False,
+    # Leakage probe: shuffle position_in_movie labels within each recording.
+    # If position is genuinely encoded (clip-aligned), corr should drop to ~0;
+    # if signal is purely a within-recording temporal trend, corr survives.
+    shuffle_position_within_rec: bool = False,
     # Prediction dump (for post-hoc bootstrap CIs over recordings)
     save_predictions_dir: str = "",
     # W&B
@@ -491,6 +495,20 @@ def run(
             pin_memory=True,
         )
         logger.info("Split '%s': %d recordings", split, len(split_set))
+
+    if shuffle_position_within_rec:
+        if "position_in_movie" not in feature_names:
+            raise ValueError("shuffle_position_within_rec needs position_in_movie in feature_names")
+        pos_col = feature_names.index("position_in_movie")
+        rng = np.random.default_rng(seed + 7919)
+        for ds_name, ds in [("train", train_set), *eval_sets.items()]:
+            for rec_feats in ds.feature_recordings:
+                perm = torch.from_numpy(rng.permutation(len(rec_feats)))
+                rec_feats[:, pos_col] = rec_feats[perm, pos_col]
+            logger.info(
+                "Shuffled position_in_movie within %s recordings (n=%d)",
+                ds_name, len(ds.feature_recordings),
+            )
 
     # ------------------------------------------------------------------
     # Build and load frozen encoder
