@@ -31,7 +31,9 @@ from scipy.stats import pearsonr
 from sklearn.linear_model import Ridge
 from torch.utils.data import DataLoader
 
-from eb_jepa.datasets.hbn import JEPAMovieDataset
+from eb_jepa.datasets.hbn import (
+    JEPAMovieDataset, MOVIE_METADATA, _read_raw_windows,
+)
 from eb_jepa.logging import get_logger
 from eb_jepa.training_utils import load_config, setup_seed
 from experiments.eeg_jepa.main import resolve_preprocessed_dir
@@ -91,6 +93,73 @@ def _extract(dataset, n_passes, sfreq, seed):
     return X, Y
 
 
+def _extract_time_aligned(dataset, K, sfreq):
+    """K evenly-spaced (linspace) clips per recording — approximately
+    time-aligned across recordings since all recordings cover the same movie.
+    Bypasses dataset.__getitem__'s random clip sampling.
+    """
+    feats_list = []
+    labels_list = []
+    required = (dataset.n_windows - 1) * dataset.temporal_stride + 1
+    for rec_idx in range(len(dataset)):
+        crop_inds = dataset._crop_inds[rec_idx]
+        n_total = len(crop_inds)
+        n_clips = n_total - required + 1
+        if n_clips <= 0:
+            continue
+        starts = np.linspace(0, n_clips - 1, min(K, n_clips), dtype=int)
+        for start in starts:
+            indices = list(range(start, start + required, dataset.temporal_stride))
+            eeg_np = _read_raw_windows(dataset._fif_paths[rec_idx], crop_inds[indices])
+            eeg = torch.from_numpy(eeg_np)
+            if dataset._norm_mode == "per_recording":
+                rec_mean = eeg.mean(dim=(0, 2), keepdim=True)
+                rec_std = eeg.std(dim=(0, 2), keepdim=True).clamp(min=1e-8)
+                eeg = (eeg - rec_mean) / rec_std
+            else:
+                eeg = (eeg - dataset._eeg_mean) / dataset._eeg_std
+            if dataset._add_envelope:
+                eeg = dataset._append_lowfreq_envelope(eeg)
+            if dataset._corrca_W is not None:
+                eeg = torch.einsum("wct,ck->wkt", eeg, dataset._corrca_W)
+            feats_list.append(_trivial_features(eeg, sfreq))
+            labels_list.append(
+                dataset.feature_recordings[rec_idx][indices].mean(dim=0).numpy()
+            )
+    return np.stack(feats_list), np.stack(labels_list)
+
+
+def _shuffle_label_globally(datasets, target_label, feature_names, seed,
+                            movie="ThePresent"):
+    """Permute one label column across movie frames, consistently across
+    all recordings. At each movie frame f, assign the original label value
+    from a random other frame: new_label[f] = original_label[perm[f]].
+
+    Recover the original frame for each window from position_in_movie
+    (= frame_idx / (n_frames-1)).
+    """
+    import pandas as pd
+    target_idx = feature_names.index(target_label)
+    pos_idx = feature_names.index("position_in_movie")
+    parquet_path = MOVIE_METADATA[movie]["feature_parquet"]
+    df = pd.read_parquet(parquet_path)
+    n_frames = len(df)
+
+    rng = np.random.default_rng(seed)
+    perm = rng.permutation(n_frames)
+    permuted_label_at_frame = df[target_label].values[perm]
+
+    for ds in datasets:
+        for rec_idx in range(len(ds._fif_paths)):
+            feats = ds.feature_recordings[rec_idx]
+            positions = feats[:, pos_idx].numpy()
+            frame_indices = np.clip(
+                np.round(positions * (n_frames - 1)).astype(int), 0, n_frames - 1
+            )
+            new_vals = permuted_label_at_frame[frame_indices].astype(np.float32)
+            feats[:, target_idx] = torch.from_numpy(new_vals)
+
+
 def run(
     n_windows: int = 4,
     window_size_seconds: int = 2,
@@ -99,6 +168,10 @@ def run(
     n_passes: int = 20,
     seed: int = 2025,
     fname: str = "experiments/eeg_jepa/cfgs/default.yaml",
+    # Test 1: globally permute a label column across movie frames
+    shuffle_label: str = "",
+    # Test 2: K evenly-spaced clips per recording (deterministic, not random)
+    time_aligned_K: int = 0,
 ):
     setup_seed(seed)
     overrides = {
@@ -139,15 +212,29 @@ def run(
     sfreq = train_set.n_times / window_size_seconds
     logger.info("sfreq=%.1f Hz, n_chans=%d", sfreq, train_set.n_chans)
 
-    logger.info("Extracting train features (%d recordings × %d passes)...",
-                len(train_set), n_passes)
-    X_train, Y_train = _extract(train_set, n_passes, sfreq, seed)
-    logger.info("  X_train: %s, Y_train: %s", X_train.shape, Y_train.shape)
+    if shuffle_label:
+        logger.info("Shuffling label '%s' globally across movie frames (seed=%d)",
+                    shuffle_label, seed)
+        _shuffle_label_globally(
+            [train_set, eval_sets["val"], eval_sets["test"]],
+            shuffle_label, feature_names, seed,
+        )
 
-    logger.info("Extracting val features...")
-    X_val, Y_val = _extract(eval_sets["val"], n_passes, sfreq, seed + 1)
-    logger.info("Extracting test features...")
-    X_test, Y_test = _extract(eval_sets["test"], n_passes, sfreq, seed + 2)
+    if time_aligned_K > 0:
+        logger.info("Extracting time-aligned clips (K=%d per recording)...", time_aligned_K)
+        X_train, Y_train = _extract_time_aligned(train_set, time_aligned_K, sfreq)
+        X_val, Y_val = _extract_time_aligned(eval_sets["val"], time_aligned_K, sfreq)
+        X_test, Y_test = _extract_time_aligned(eval_sets["test"], time_aligned_K, sfreq)
+    else:
+        logger.info("Extracting train features (%d recordings × %d passes)...",
+                    len(train_set), n_passes)
+        X_train, Y_train = _extract(train_set, n_passes, sfreq, seed)
+        logger.info("  X_train: %s, Y_train: %s", X_train.shape, Y_train.shape)
+
+        logger.info("Extracting val features...")
+        X_val, Y_val = _extract(eval_sets["val"], n_passes, sfreq, seed + 1)
+        logger.info("Extracting test features...")
+        X_test, Y_test = _extract(eval_sets["test"], n_passes, sfreq, seed + 2)
 
     # Standardize features (helps ridge)
     mu = X_train.mean(axis=0, keepdims=True)
@@ -156,7 +243,14 @@ def run(
     X_val_n = (X_val - mu) / sd
     X_test_n = (X_test - mu) / sd
 
-    print(f"\n=== Trivial-feature linear probe → movie features ===")
+    mode = []
+    if shuffle_label:
+        mode.append(f"shuffle={shuffle_label}")
+    if time_aligned_K > 0:
+        mode.append(f"time_aligned_K={time_aligned_K}")
+    if not mode:
+        mode.append(f"random_n_passes={n_passes}")
+    print(f"\n=== Trivial-feature linear probe → movie features [{' + '.join(mode)}] ===")
     print(f"Setup: n_windows={n_windows}, ws={window_size_seconds}s, "
           f"norm_mode={norm_mode}, corrca={'yes' if corrca_filters else 'no'}")
     print(f"Features: {X_train.shape[1]} dims (per-channel mean+std + 5 bandpowers)")
