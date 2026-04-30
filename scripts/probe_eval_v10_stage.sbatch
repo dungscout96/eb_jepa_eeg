@@ -52,9 +52,18 @@ if [ -f "$HOME/.wandb_key" ]; then
 fi
 export WANDB_PROJECT="${WANDB_PROJECT:-eb_jepa}"
 
+# v10 worktree's uv.lock pulled a newer torchaudio that requires CUDA 13.
+# Our code changes added no new deps, so reuse the issue8 worktree's
+# working .venv (torch 2.6.0+cu124, torchaudio 2.6.0+cu124) directly.
+ISSUE8_VENV_PY="/projects/bbnv/kkokate/eb_jepa_eeg/.venv/bin/python"
+if [ ! -x "$ISSUE8_VENV_PY" ]; then
+    echo "ERROR: issue8 venv python not found at $ISSUE8_VENV_PY"
+    exit 3
+fi
+
 PRED_DIR="/projects/bbnv/kkokate/eb_jepa_eeg/predictions/v10_stage/${EXP_TAG}"
 
-PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/probe_eval.py \
+PYTHONPATH=. "$ISSUE8_VENV_PY" experiments/eeg_jepa/probe_eval.py \
     --checkpoint="${CKPT}" \
     --n_windows="${NW}" \
     --window_size_seconds="${WS}" \
