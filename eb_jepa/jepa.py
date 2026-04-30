@@ -344,17 +344,39 @@ class MaskedJEPA(nn.Module):
         return total_loss, loss_dict
 
     @torch.no_grad()
-    def encode(self, eeg: torch.Tensor) -> torch.Tensor:
+    def encode(self, eeg: torch.Tensor, stage: str = None) -> torch.Tensor:
         """Encode EEG without masking (for probes).
 
         Args:
             eeg: [B, T, C, W]
+            stage: Which representation to expose. If None, falls back to
+                ``self._probe_stage`` (set by probe_eval) or ``"context_enc"``.
+                Options:
+                  - ``"context_enc"`` (default): full forward through context encoder.
+                  - ``"target_enc"``: full forward through EMA target encoder.
+                  - ``"patches"``: pre-transformer patch + position embeddings (context encoder).
+                  - ``"target_patches"``: pre-transformer patch + position embeddings (target encoder).
 
         Returns:
             [B, D, T, 1, 1] pooled per-window representations
         """
-        tokens = self.context_encoder.encode_tokens(eeg, mask=None)
-        return self.context_encoder.pool_to_windows(tokens)
+        if stage is None:
+            stage = getattr(self, "_probe_stage", "context_enc")
+        if stage == "target_enc":
+            encoder = self.target_encoder
+            tokens = encoder.encode_tokens(eeg, mask=None)
+        elif stage == "context_enc":
+            encoder = self.context_encoder
+            tokens = encoder.encode_tokens(eeg, mask=None)
+        elif stage == "patches":
+            encoder = self.context_encoder
+            tokens, _ = encoder.tokenize(eeg)
+        elif stage == "target_patches":
+            encoder = self.target_encoder
+            tokens, _ = encoder.tokenize(eeg)
+        else:
+            raise ValueError(f"Unknown probe stage: {stage!r}")
+        return encoder.pool_to_windows(tokens)
 
 
 class MaskedJEPANoEMA(nn.Module):
