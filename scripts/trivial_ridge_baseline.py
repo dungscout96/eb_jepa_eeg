@@ -75,12 +75,35 @@ def _trivial_features(eeg: torch.Tensor, sfreq: float) -> np.ndarray:
     return np.concatenate([means, stds, bp])   # [C*7]
 
 
-def _extract(dataset, n_passes, sfreq, seed, group_by_rec: bool = False):
-    """Iterate dataset n_passes times; collect trivial features + labels.
+def _jepa_features(eeg: torch.Tensor, jepa, device, keep_channels: bool) -> np.ndarray:
+    """Encode a clip with JEPA → mean across windows → [D] vector."""
+    # eeg [nw,C,T]; jepa.encode expects [B, nw, C, T].
+    with torch.no_grad():
+        x = eeg.unsqueeze(0).to(device)
+        state = jepa.encode(x, keep_channels=keep_channels)  # [1, D, nw, 1, 1]
+        emb = state.squeeze(0).mean(dim=(1, 2, 3)).cpu().numpy()  # [D]
+    return emb
+
+
+def _extract(dataset, n_passes, sfreq, seed, group_by_rec: bool = False,
+             jepa=None, device=None, keep_channels: bool = False):
+    """Iterate dataset n_passes times; collect features + labels.
+
+    Features: trivial mean+std+log-band stats (default) or JEPA per-clip
+    embedding (when ``jepa`` is provided). The JEPA path matches the draft's
+    ridge protocol but with encoder-derived features in place of trivial
+    stats.
 
     If group_by_rec, output shape is (n_rec, n_passes, ...) so the bootstrap
     can index recordings on axis 0 (matches probe_eval.py npz schema).
     """
+    use_jepa = jepa is not None
+
+    def _feat(eeg):
+        if use_jepa:
+            return _jepa_features(eeg, jepa, device, keep_channels)
+        return _trivial_features(eeg, sfreq)
+
     rng = torch.Generator().manual_seed(seed)
     n_rec = len(dataset)
     if group_by_rec:
@@ -92,7 +115,7 @@ def _extract(dataset, n_passes, sfreq, seed, group_by_rec: bool = False):
             l_passes = []
             for _ in range(n_passes):
                 eeg, feats, _ = dataset[rec_idx]
-                f_passes.append(_trivial_features(eeg, sfreq))
+                f_passes.append(_feat(eeg))
                 l_passes.append(feats.mean(dim=0).numpy())
             feats_arr.append(np.stack(f_passes))   # [n_passes, D]
             labels_arr.append(np.stack(l_passes))  # [n_passes, n_features]
@@ -104,7 +127,7 @@ def _extract(dataset, n_passes, sfreq, seed, group_by_rec: bool = False):
     for p in range(n_passes):
         for rec_idx in torch.randperm(n_rec, generator=rng).tolist():
             eeg, feats, _ = dataset[rec_idx]  # eeg [nw,C,T], feats [nw, n_features]
-            feats_list.append(_trivial_features(eeg, sfreq))
+            feats_list.append(_feat(eeg))
             labels_list.append(feats.mean(dim=0).numpy())  # [n_features]
         if (p + 1) % 5 == 0 or p == n_passes - 1:
             logger.info("  pass %d/%d", p + 1, n_passes)
@@ -196,6 +219,10 @@ def run(
     save_predictions_dir: str = "",
     output_json: str = "",
     baseline: str = "trivial_ridge",
+    # JEPA mode — feed encoder embeddings into the ridge probe instead of
+    # handcrafted trivial stats. Requires a checkpoint.
+    checkpoint: str = "",
+    keep_channels: bool = False,
 ):
     setup_seed(seed)
     overrides = {
@@ -236,6 +263,74 @@ def run(
     sfreq = train_set.n_times / window_size_seconds
     logger.info("sfreq=%.1f Hz, n_chans=%d", sfreq, train_set.n_chans)
 
+    # ----------------------------------------------------------------
+    # Optional JEPA encoder (for the JEPA-into-ridge column comparison).
+    # When --checkpoint is set, _extract uses encoder embeddings (mean over
+    # windows) instead of trivial mean+std+log-band stats.
+    # ----------------------------------------------------------------
+    jepa_model = None
+    jepa_device = None
+    if checkpoint:
+        import copy
+        from eb_jepa.architectures import (
+            EEGEncoderTokens, MaskedPredictor,
+        )
+        from eb_jepa.jepa import MaskedJEPA
+        from eb_jepa.training_utils import setup_device
+        from eb_jepa.masking import MultiBlockMaskCollator
+        jepa_device = setup_device("auto")
+        sd_dict = torch.load(checkpoint, map_location=jepa_device, weights_only=False)
+        sd = sd_dict.get("model_state_dict", sd_dict)
+        # Discover predictor bottleneck dim from the saved state dict
+        try:
+            _pred_dim = int(sd["predictor.input_proj.weight"].shape[0])
+        except KeyError:
+            try:
+                _pred_dim = int(sd["predictor.output_proj.weight"].shape[1])
+            except KeyError:
+                _pred_dim = None
+        encoder = EEGEncoderTokens(
+            n_chans=train_set.n_chans,
+            n_times=train_set.n_times,
+            embed_dim=cfg.model.encoder_embed_dim,
+            depth=cfg.model.encoder_depth,
+            heads=cfg.model.encoder_heads,
+            head_dim=cfg.model.encoder_head_dim,
+            n_windows=n_windows,
+            patch_size=cfg.model.get("patch_size", 50),
+            patch_overlap=cfg.model.get("patch_overlap", 20),
+            freqs=cfg.model.get("freqs", 4),
+            chs_info=train_set.get_chs_info(),
+            mlp_dim_ratio=cfg.model.get("mlp_dim_ratio", 2.66),
+        ).to(jepa_device)
+        target_encoder = copy.deepcopy(encoder)
+        predictor = MaskedPredictor(
+            encoder.embed_dim,
+            depth=cfg.model.predictor_depth,
+            heads=cfg.model.predictor_heads,
+            head_dim=cfg.model.predictor_head_dim,
+            embed_dim=_pred_dim if _pred_dim else cfg.model.encoder_embed_dim,
+        ).to(jepa_device)
+        masking_cfg = cfg.masking
+        mask_collator = MultiBlockMaskCollator(
+            n_chans=train_set.n_chans,
+            n_patches_per_window=encoder.n_patches_per_window,
+            mask_config=masking_cfg,
+        )
+        from eb_jepa.losses import VCLoss
+        jepa_model = MaskedJEPA(
+            encoder, target_encoder, predictor, mask_collator,
+            VCLoss(std_coeff=0.0, cov_coeff=0.0),
+            n_pred_masks_short=masking_cfg.get("n_pred_masks_short", 2),
+            n_pred_masks_long=masking_cfg.get("n_pred_masks_long", 2),
+        ).to(jepa_device)
+        missing, unexpected = jepa_model.load_state_dict(sd, strict=False)
+        jepa_model.eval()
+        logger.info(
+            "Loaded JEPA from %s (missing=%d, unexpected=%d, keep_channels=%s)",
+            checkpoint, len(missing), len(unexpected), keep_channels,
+        )
+
     if shuffle_label:
         logger.info("Shuffling label '%s' globally across movie frames (seed=%d)",
                     shuffle_label, seed)
@@ -252,17 +347,22 @@ def run(
     else:
         logger.info("Extracting train features (%d recordings × %d passes)...",
                     len(train_set), n_passes)
-        X_train, Y_train = _extract(train_set, n_passes, sfreq, seed)
+        X_train, Y_train = _extract(
+            train_set, n_passes, sfreq, seed,
+            jepa=jepa_model, device=jepa_device, keep_channels=keep_channels,
+        )
         logger.info("  X_train: %s, Y_train: %s", X_train.shape, Y_train.shape)
 
         logger.info("Extracting val features...")
         X_val_grp, Y_val_grp = _extract(
             eval_sets["val"], n_passes, sfreq, seed + 1, group_by_rec=True,
+            jepa=jepa_model, device=jepa_device, keep_channels=keep_channels,
         )
         logger.info("  X_val:   %s, Y_val:   %s", X_val_grp.shape, Y_val_grp.shape)
         logger.info("Extracting test features...")
         X_test_grp, Y_test_grp = _extract(
             eval_sets["test"], n_passes, sfreq, seed + 2, group_by_rec=True,
+            jepa=jepa_model, device=jepa_device, keep_channels=keep_channels,
         )
         logger.info("  X_test:  %s, Y_test:  %s", X_test_grp.shape, Y_test_grp.shape)
         # Flatten for Ridge fit/eval (n_rec * n_passes, ...)
