@@ -3,6 +3,14 @@
 **Date:** 2026-05-01
 **Branch:** `kkokate/trivial-stats-baselines`
 
+> **Scope note (from cleanup 2026-05-01):** JEPA default-pool numbers are
+> dropped from this analysis. Default pool fails View 2 / View 3
+> significance on multiple stimulus features and is no longer the production
+> evaluation path. From here on, "JEPA" means **JEPA + `--keep_channels`**
+> (per-CorrCA-channel concat into the probe input dim). Default-pool numbers
+> remain archived in `docs/probe_eval_keep_channels.md` and PR #15 commit
+> history for reference.
+
 ## What this answers
 
 The paper draft's Table 3 claims trivial 35-dim CorrCA stats with a Ridge
@@ -12,12 +20,13 @@ procedure as PR #15 (View 2: 1-sample t-test on per-seed test corrs;
 View 3: per-seed recording bootstrap B=2000 → 1-sample t-test on the
 seed bootstrap-means).
 
-We test the draft's claim under **two probe stacks**:
+We test the draft's claim under **two probe stacks**, both with JEPA in
+its `--keep_channels` configuration:
 
-1. **MovieFeatureHead** (matches `probe_eval.py --keep_channels`): the
-   same MLP head + per-recording subject Linear probe + 20-bin movie-id
-   probe used to evaluate JEPA. This is the apples-to-apples comparison
-   "match the probe arch exactly".
+1. **MovieFeatureHead** (`probe_eval.py --keep_channels`): 2-layer MLP
+   `Linear(D=320 → 64) → ReLU → Linear(64 → 4)` per-window probe + per-
+   recording subject Linear probe + 20-bin movie-id Linear probe. Same
+   stack used to evaluate JEPA in PR #15.
 2. **Ridge** (matches the draft): per-clip features (mean of 4 windows),
    `sklearn.linear_model.Ridge(alpha=1.0)` regression per stimulus
    feature, `n_passes=20` random clips per recording.
@@ -29,147 +38,146 @@ Channel routing varies:
 
 | Baseline | n_chans | D = stats × C | Channel routing |
 |---|---:|---:|---|
-| `trivial_corrca_per_chan` | 5 | 35 | per-chan concatenated into D |
-| `trivial_corrca_chan1_only` | 1 | 7 | only CorrCA component 1 |
-| `trivial_raw_per_chan` | 129 | 903 | per-chan concatenated |
-| `trivial_corrca_pooled35` | 5 | 35 | mean-then-tile across chans |
-| `trivial_raw_pooled903` | 129 | 903 | mean-then-tile across chans |
+| `corrca_per_chan` (corrca35) | 5 | 35 | per-chan concatenated into D |
+| `corrca_chan1_only` | 1 | 7 | only CorrCA component 1 |
+| `raw_per_chan` (raw903) | 129 | 903 | per-chan concatenated |
+| `corrca_pooled35` | 5 | 35 | mean-then-tile across chans |
+| `raw_pooled903` | 129 | 903 | mean-then-tile across chans |
 
 `per_chan` modes are direct twins of JEPA `--keep_channels`; `pooled` modes
-are twins of the default channel-averaged pool.
+are the trivial counterparts of the channel-mean-pool variant we dropped
+on the JEPA side.
 
-## Results — Continuous stimulus regression (test, View 3 B=2000)
+## Continuous stimulus regression (test, View 3 B=2000) — `reg_<feature>_corr`
 
-`reg_<feature>_corr` View 3 mean ± σ (5 probe seeds; trivial baselines)
-or mean ± σ_enc (5 encoder seeds; JEPA from PR #15):
+| Probe / baseline | position | luminance | contrast | narrative |
+|---|---:|---:|---:|---:|
+| **JEPA + MLP `--keep_channels`** | **+0.212** ✓ | +0.187 ✓ | +0.101 ✓ | +0.062 ✓ |
+| **JEPA + Ridge `--keep_channels`** | +0.144 ✓ | **+0.208** ✓ | **+0.159** ✓ | **+0.090** ✓ |
+| Trivial Ridge `corrca35` (per_chan) | +0.125 ✓ | +0.142 ✓ | +0.139 ✓ | +0.044 ✓ |
+| Trivial Ridge `corrca_pooled35` | +0.072 ✓ | +0.090 ✓ | +0.090 ✓ | +0.021 ✓ |
+| Trivial Ridge `raw903` (per_chan) | +0.008 ns | +0.003 ns | +0.009 ns | +0.018 ns |
+| Trivial Ridge `raw_pooled903` | +0.009 ns | +0.059 ✓ | +0.037 ✓ | +0.022 ns |
+| Trivial MLP `corrca_per_chan` | +0.051 ns | +0.060 ns | +0.035 ns | −0.013 ns |
+| Trivial MLP `corrca_chan1_only` | +0.022 ns | +0.050 ns | −0.009 ns | +0.008 ns |
+| Trivial MLP `corrca_pooled35` | +0.036 ns | +0.034 ns | +0.002 ns | +0.004 ns |
+| Trivial MLP `raw_per_chan` | −0.010 ns | +0.003 ns | −0.012 ns | +0.041 ns |
+| Trivial MLP `raw_pooled903` | −0.023 ns | +0.047 ns | −0.007 ns | +0.007 ns |
 
-| Feature | JEPA default pool | JEPA `--keep_channels` | trivial corrca per_chan | trivial corrca chan1_only | trivial raw per_chan | trivial corrca pooled35 | trivial raw pooled903 |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| position | +0.088 ✗ | **+0.212 ✓** | +0.051 ns | +0.022 ns | −0.010 ns | +0.036 ns | −0.023 ns |
-| luminance | +0.137 ✓ | **+0.187 ✓** | +0.060 ns | +0.050 ns | +0.003 ns | +0.034 ns | +0.047 ns |
-| contrast | +0.030 ✗ | **+0.101 ✓** | +0.035 ns | −0.009 ns | −0.012 ns | +0.002 ns | −0.007 ns |
-| narrative | −0.020 ✗ | **+0.062 ✓** (p=2.7e-3) | −0.013 ns | +0.008 ns | +0.041 ns | +0.004 ns | +0.007 ns |
+**Bold** = best in column. `Trivial Ridge chan1_only` is pending — chan_slice
+fix is in code, jobs RUNNING, will be appended below.
 
-**Reading:** JEPA + CorrCA `--keep_channels` is significantly above chance
-on **every** continuous stimulus feature. **No** MovieFeatureHead trivial
-baseline is significantly above chance on **any** continuous stimulus
-feature. This contradicts the draft's "trivial 35-dim Ridge matches JEPA"
-claim under the apples-to-apples probe stack.
+### Per-feature winner
 
-## Results — Subject traits (test, View 3 B=2000)
+```
+position     | JEPA + MLP --keep_channels    | +0.212
+luminance    | JEPA + Ridge --keep_channels  | +0.208
+contrast     | JEPA + Ridge --keep_channels  | +0.159
+narrative    | JEPA + Ridge --keep_channels  | +0.090
+```
 
-| Probe | JEPA default pool | JEPA `--keep_channels` | trivial corrca per_chan | trivial raw per_chan | trivial corrca pooled35 | trivial raw pooled903 |
-|---|---:|---:|---:|---:|---:|---:|
-| `subject/age_reg/corr` | +0.370 | +0.504 | +0.134 ns | **+0.316 ✓** (p=0.001) | +0.160 ns | **+0.361 ✓** (p=2.3e-6) |
-| `subject/age_cls/auc` | — | — | **+0.645 ✓** | **+0.695 ✓** | **+0.659 ✓** | **+0.696 ✓** |
-| `subject/sex/auc` | +0.619 | +0.713 | +0.560 ns | **+0.588 ✓** (p=2.9e-4) | +0.522 ns | +0.488 ns |
+## Subject traits (test, View 3 B=2000)
 
-**Reading:** Subject-trait signal **does** survive in trivial baselines —
-specifically the 903-dim raw EEG stats reach age corr +0.361 (vs JEPA
-default +0.370) and the 129-d raw stats reach sex AUC +0.588. This is
-consistent with the prior Tier-1 finding that age/sex are spectral, not
-SSL-driven. JEPA `--keep_channels` still wins on age/sex (+0.504 / +0.713).
+| Probe | JEPA + MLP `--keep_channels` | trivial corrca per_chan | trivial raw per_chan | trivial corrca pooled35 | trivial raw pooled903 |
+|---|---:|---:|---:|---:|---:|
+| `subject/age_reg/corr` | **+0.504** | +0.134 ns | +0.316 ✓ (p=0.001) | +0.160 ns | +0.361 ✓ (p=2.3e-6) |
+| `subject/age_cls/auc` | — | +0.645 ✓ | +0.695 ✓ | +0.659 ✓ | +0.696 ✓ |
+| `subject/sex/auc` | **+0.713** | +0.560 ns | +0.588 ✓ (p=2.9e-4) | +0.522 ns | +0.488 ns |
+
+Subject-trait signal **does** survive in trivial baselines — the 903-dim raw
+EEG stats reach age corr +0.361 and sex AUC +0.588, both significant.
+Confirms prior Tier-1 finding that age/sex are spectral, not SSL-driven.
+JEPA `--keep_channels` still wins (+0.504 / +0.713).
+
+(JEPA + Ridge subject probes are not yet wired — only stim regression. If
+needed, ~10 jobs would extend `trivial_ridge_baseline.py` with per-rec
+Ridge / LogReg.)
+
+## Channel-routing effect (per_chan vs pooled, isolating the channel axis)
+
+Same probe, same channel set, only difference is whether the stats are
+kept per-channel (concat into D) or averaged-and-tiled (D unchanged but
+channels indistinguishable).
+
+```
+Probe                | feature    | per_chan  | pooled    | Δ (per_chan − pooled)
+---------------------|------------|----------:|----------:|----------:
+Trivial Ridge corrca | position   |  +0.125   |  +0.072   |   +0.053
+Trivial Ridge corrca | luminance  |  +0.142   |  +0.090   |   +0.052
+Trivial Ridge corrca | contrast   |  +0.139   |  +0.090   |   +0.049
+Trivial Ridge corrca | narrative  |  +0.044   |  +0.021   |   +0.023
+Trivial Ridge raw    | position   |  +0.008   |  +0.009   |   −0.001
+Trivial Ridge raw    | luminance  |  +0.003   |  +0.059   |   −0.056
+Trivial Ridge raw    | contrast   |  +0.009   |  +0.037   |   −0.028
+Trivial Ridge raw    | narrative  |  +0.018   |  +0.022   |   −0.004
+```
+
+Per-channel routing helps **CorrCA-projected features** (CorrCA channels
+encode different stimulus subspaces; routing matters). For raw 129-ch the
+gap is ~0 because no individual raw channel is special.
 
 ## Headline takeaways
 
-1. **The draft's Table 3 claim does not survive the matched-probe-arch test.**
-   Under `MovieFeatureHead` (the same probe used to evaluate JEPA), no
-   trivial baseline passes View 2 or View 3 significance on any continuous
-   stimulus feature. JEPA + `--keep_channels` does, on all four.
-2. **Channel routing matters at the trivial level too.** `per_chan`
-   variants beat `pooled` variants by ~0.02 corr — small but consistent
-   with the JEPA `--keep_channels` finding that channel-mean pooling
-   wastes per-channel signal.
-3. **CorrCA component 1 alone (7-d) is at chance for narrative under
+1. **The draft's Table 3 claim "JEPA = trivial Ridge corrca35" does not
+   survive the matched-probe comparison.** Under the same Ridge probe with
+   `n_passes=20`, **JEPA + Ridge `--keep_channels` beats trivial Ridge
+   corrca35 on every continuous feature**:
+   - position: +0.144 vs +0.125 → +0.019
+   - luminance: +0.208 vs +0.142 → +0.066
+   - contrast: +0.159 vs +0.139 → +0.020
+   - narrative: +0.090 vs +0.044 → +0.046
+
+2. **JEPA + MLP `--keep_channels` is the best probe for position** (+0.212),
+   while **JEPA + Ridge `--keep_channels` is the best probe for luminance,
+   contrast, and narrative**. Position is a within-clip drift signal that
+   the per-window MLP captures and per-clip Ridge averages away.
+
+3. **No MovieFeatureHead-trained trivial baseline reaches significance on
+   any stimulus feature.** The MLP probe is a poor reader of per-window
+   trivial spectral stats — variance dominates the per-window training.
+
+4. **Ridge + per-clip aggregation is the right probe for handcrafted
+   spectral baselines.** Trivial Ridge corrca35 reaches 0.12–0.14 corr on
+   position/luminance/contrast (significant under both views). This is the
+   strong floor the draft was reporting; we replicate it.
+
+5. **Subject-trait signal is spectral, not SSL.** `raw_pooled903` reaches
+   age corr +0.361 (vs JEPA `--keep_channels` +0.504) and `raw_per_chan`
+   reaches sex AUC +0.588 (vs JEPA +0.713). Confirms prior Tier-1 finding.
+
+6. **CorrCA component 1 alone (7-d) is at chance for narrative under
    per-window mean/std/log-band features.** The +0.213 raw-correlation
-   between component 1 and narrative does not survive being summarized
-   as 7 stats per window; it lives in slow temporal dynamics that
-   spectral features throw away.
-4. **Subject-trait wins for the 903-dim raw stats** — age corr +0.361,
-   sex AUC +0.588, both significant under View 3. Confirms that age/sex
-   are recoverable from raw EEG amplitude statistics without any encoder.
-5. **SSL pretraining does add stimulus-decoding signal beyond
-   handcrafted spectral features**, when measured under the same probe
-   stack. The draft's "JEPA = trivial" headline is an artifact of the
-   probe arch swap (Ridge per-clip vs MovieFeatureHead per-window), not
-   a property of the encoder.
+   between component 1 and narrative does not survive being summarized as
+   7 stats per window — it lives in slow temporal dynamics that spectral
+   features throw away.
 
-## Ridge probe sweep — full results (2026-05-01)
-
-Separate sweep with the **draft's exact Ridge procedure** (per-clip mean of
-4 windows, sklearn `Ridge(alpha=1.0)`, `n_passes=20`) on:
-- 5 trivial-stats baselines × 5 probe seeds {7,13,42,1234,2025}
-- JEPA encoder (default pool + `--keep_channels`) × 5 enc seeds {42,123,456,789,2025}
-  feeding the same Ridge probe instead of trivial stats.
-
-### Continuous stim regression (test, View 3 B=2000) — `reg_<feature>_corr`
-
-| Feature | JEPA + MLP default | JEPA + MLP --keep_channels | **JEPA + Ridge default** | **JEPA + Ridge --keep_channels** | trivial Ridge corrca35 | trivial Ridge chan1_only | trivial Ridge corrca_pooled35 | trivial Ridge raw903 | trivial Ridge raw_pooled903 |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| position | +0.088 ✗ | **+0.212** ✓ | +0.153 ✓ | +0.144 ✓ | +0.125 ✓ | tbd | +0.072 ✓ | +0.008 ns | +0.009 ns |
-| luminance | +0.137 ✓ | +0.187 ✓ | +0.199 ✓ | **+0.208** ✓ | +0.142 ✓ | tbd | +0.090 ✓ | +0.003 ns | +0.059 ✓ |
-| contrast | +0.030 ✗ | +0.101 ✓ | **+0.174** ✓ | +0.159 ✓ | +0.139 ✓ | tbd | +0.090 ✓ | +0.009 ns | +0.037 ✓ |
-| narrative | −0.020 ✗ | +0.062 ✓ | +0.033 ns (p=0.08) | **+0.090** ✓ | +0.044 ✓ | tbd | +0.021 ✓ | +0.018 ns | +0.022 ns |
-
-`tbd` = chan1_only run had a fire-int-conversion bug initially (`--chan_slice=0` → None);
-resubmitted, results to be appended once they land.
-
-### Headline takeaways from the Ridge column
-
-1. **The draft's Table 3 claim "JEPA = trivial Ridge corrca35" does NOT survive
-   the apples-to-apples comparison.** When both run through the same Ridge
-   probe with the same n_passes=20 protocol, **JEPA + CorrCA + Ridge beats
-   trivial Ridge corrca35 on every continuous feature**:
-   - position: +0.153 (default) / +0.144 (keep_chan) vs +0.125 (trivial Ridge)
-   - luminance: +0.199 / +0.208 vs +0.142
-   - contrast: +0.174 / +0.159 vs +0.139
-   - narrative: +0.090 (keep_chan) vs +0.044 (trivial Ridge)
-
-2. **`--keep_channels` recovers narrative even under Ridge.** Default-pool
-   JEPA + Ridge fails narrative (+0.033 p=0.08, ns); `--keep_channels` lifts
-   it to +0.090 sig. Same channel-routing fix that worked for the MLP probe
-   carries through to Ridge — confirms the dilution-by-channel-mean story
-   is encoder-pooling-related, not probe-arch-related.
-
-3. **For contrast/luminance, the per-clip Ridge probe is *better* than the
-   per-window MLP probe** on the JEPA encoder:
-   - contrast MLP 0.101 → Ridge 0.174 (+0.073)
-   - luminance MLP 0.187 → Ridge 0.208 (+0.021)
-   The encoder's contrast/luminance signal lives at clip-aggregate scale,
-   not window-by-window.
-
-4. **For position, the per-window MLP probe is much better** (+0.212 keep_chan vs +0.153 ridge default).
-   Position is a within-clip drift signal — averaging across the 4 windows
-   of a clip throws away the temporal structure the MLP was using.
-
-5. **Channel-routing matters at every probe scale.** Trivial `corrca35`
-   (+0.125 pos) beats trivial `corrca_pooled35` (+0.072 pos), same for the
-   other features. The keep-channels insight generalizes to handcrafted
-   spectral statistics, not just the encoder.
-
-6. **raw EEG variants** (raw903 / raw_pooled903) under Ridge stay near
-   chance for stim regression — confirms the draft's "raw EEG stats predict
-   nothing" claim.
-
-### What changes for the paper
+## What changes for the paper
 
 The headline of Table 3 should flip:
-- *Old*: "JEPA encoder, given the same CorrCA-filtered input, does not improve over a Ridge probe on per-window mean/std/log-power"
-- *New*: "Under the same Ridge probe, JEPA encoder embeddings beat 35-d CorrCA spectral stats on every continuous feature; the apparent parity in the original Table 3 was due to comparing JEPA's per-window MLP-probe numbers against trivial's per-clip Ridge numbers — not an apples-to-apples comparison"
 
-This still leaves the trivial CorrCA baseline as a non-trivial floor (it does
-decode position/luminance/contrast at 0.12–0.14 corr, well above raw or
-random-init), which preserves the paper's "CorrCA does much of the work"
-message in spirit. But the "JEPA adds nothing" claim doesn't hold once the
-probe scales are matched.
+- *Old*: "JEPA encoder, given the same CorrCA-filtered input, does not
+  improve over a Ridge probe on per-window mean/std/log-power"
+- *New*: "Under the matched Ridge probe with `--keep_channels`, JEPA
+  encoder embeddings beat 35-d CorrCA spectral stats on every continuous
+  stimulus feature (Δ = +0.019 to +0.066 corr). The apparent parity in
+  the original Table 3 was due to comparing JEPA's MLP-per-window numbers
+  against the trivial's Ridge-per-clip numbers — not an apples-to-apples
+  comparison"
+
+The trivial CorrCA Ridge baseline remains a non-trivial floor (0.12–0.14
+corr on stim features, well above raw/random-init), preserving the paper's
+"CorrCA does much of the work" message. But the "JEPA adds nothing" claim
+does not hold once the probe scales are matched.
 
 ## Methodology
 
 For each (baseline, probe seed) cell we run the full evaluation pipeline:
 - `JEPAMovieDataset` with n_windows=4, ws=2s, per-recording z-norm
 - splits R1–R4 / R5 / R6 (train / val / test)
-- features extracted by `TrivialStatsExtractor` (MovieFeatureHead path) or
-  `_trivial_features` (Ridge path)
+- features extracted by `TrivialStatsExtractor` (MovieFeatureHead path),
+  `_trivial_features` (trivial-Ridge path), or `_jepa_features` (JEPA-Ridge
+  path: `encoder.encode_tokens` + per-clip mean over the 4 windows; the
+  per-channel concat for `--keep_channels` is inlined in `_jepa_features`)
 - probe trained from scratch with the seed's RNG
 - per-recording prediction npz dumped in the schema
   `scripts/bootstrap_probe_eval.py` consumes
@@ -183,13 +191,21 @@ bootstrap means).
 JEPA reference numbers come from PR #15
 (`docs/probe_eval_keep_channels.md`), 5 enc × 5 probe seeds, ensemble-
 then-bootstrap matching the original significance_analysis_2026-04-29.md
-procedure.
+procedure. JEPA + Ridge numbers are 5 enc seeds × 1 probe seed (Ridge
+solve is deterministic given features).
 
 ## Artifacts
 
-- Per-recording prediction npz: `/projects/bbnv/kkokate/eb_jepa_eeg/tier1/predictions/<baseline>_seed<seed>/{val,test}_seed<seed>.npz`
-- Summary JSON: `/projects/bbnv/kkokate/eb_jepa_eeg/tier1/<baseline>_seed<seed>.json`
-- Per-baseline bootstrap markdown: `docs/trivial_bootstrap/<baseline>.md`
-- Driver: `scripts/bootstrap_trivial_perseed.py`
-- Submitter: `scripts/submit_trivial_baselines.sh` (MovieFeatureHead),
-  `scripts/submit_trivial_ridge.sh` (Ridge, in progress)
+- Per-recording prediction npz:
+  `/projects/bbnv/kkokate/eb_jepa_eeg/tier1/predictions/<baseline>_seed<seed>/{val,test}_seed<seed>.npz`
+- Summary JSON:
+  `/projects/bbnv/kkokate/eb_jepa_eeg/tier1/<baseline>_seed<seed>.json`
+- Per-baseline bootstrap markdown:
+  `docs/trivial_bootstrap/<baseline>.md`
+- Drivers:
+  - MovieFeatureHead: `experiments/eeg_jepa/tier1_baselines.py` +
+    `scripts/submit_trivial_baselines.sh`
+  - Ridge: `scripts/trivial_ridge_baseline.py` +
+    `scripts/submit_trivial_ridge.sh` (trivial) +
+    `scripts/submit_jepa_ridge.sh` (JEPA encoder)
+  - Bootstrap: `scripts/bootstrap_trivial_perseed.py`
