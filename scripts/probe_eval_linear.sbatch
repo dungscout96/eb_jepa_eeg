@@ -50,17 +50,19 @@ if [ -f "$HOME/.wandb_key" ]; then
     export WANDB_API_KEY=$(cat "$HOME/.wandb_key")
 fi
 
-# Use issue8 venv directly (avoids uv pulling broken torchaudio).
-ISSUE8_VENV_PY="/projects/bbnv/kkokate/eb_jepa_eeg/.venv/bin/python"
-if [ ! -x "$ISSUE8_VENV_PY" ]; then
-    echo "ERROR: issue8 venv python not found at $ISSUE8_VENV_PY"
+# Use the eb_jepa conda env directly. The /projects/.../.venv torchaudio
+# was bumped to require CUDA 13 (libcudart.so.13 missing). The conda env's
+# torchaudio is 2.6.0+cu124 and works on this cluster.
+CONDA_PY="/u/kkokate/.conda/envs/eb_jepa/bin/python"
+if [ ! -x "$CONDA_PY" ]; then
+    echo "ERROR: conda env python not found at $CONDA_PY"
     exit 3
 fi
 
 PRED_DIR="/projects/bbnv/kkokate/eb_jepa_eeg/predictions/linear_probe/${EXP_TAG}"
 mkdir -p "$PRED_DIR"
 
-PYTHONPATH=. "$ISSUE8_VENV_PY" experiments/eeg_jepa/probe_eval.py \
+PYTHONPATH=. "$CONDA_PY" experiments/eeg_jepa/probe_eval.py \
     --checkpoint="${CKPT}" \
     --n_windows="${NW}" \
     --window_size_seconds="${WS}" \
