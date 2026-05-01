@@ -354,10 +354,14 @@ def run(
             shuffle_label, feature_names, seed,
         )
 
-    chan_slice_list = (
-        [int(x) for x in chan_slice.split(",") if x.strip() != ""]
-        if chan_slice else None
-    )
+    # fire auto-converts "0" → int 0 despite the str type hint, and `if 0` is
+    # falsy. Explicitly handle both int and string forms:
+    if isinstance(chan_slice, int):
+        chan_slice_list = [chan_slice]
+    elif isinstance(chan_slice, str) and chan_slice != "":
+        chan_slice_list = [int(x) for x in chan_slice.split(",") if x.strip() != ""]
+    else:
+        chan_slice_list = None
 
     if time_aligned_K > 0:
         logger.info("Extracting time-aligned clips (K=%d per recording)...", time_aligned_K)
