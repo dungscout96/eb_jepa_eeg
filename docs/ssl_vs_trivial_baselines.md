@@ -54,7 +54,8 @@ on the JEPA side.
 |---|---:|---:|---:|---:|
 | **JEPA + MLP `--keep_channels`** | **+0.212** ✓ | +0.187 ✓ | +0.101 ✓ | +0.062 ✓ |
 | **JEPA + Ridge `--keep_channels`** | +0.144 ✓ | **+0.208** ✓ | **+0.159** ✓ | **+0.090** ✓ |
-| Trivial Ridge `corrca35` (per_chan) | +0.125 ✓ | +0.142 ✓ | +0.139 ✓ | +0.044 ✓ |
+| Trivial Ridge `corrca35` (per_chan, D=35) | +0.125 ✓ | +0.142 ✓ | +0.139 ✓ | +0.044 ✓ |
+| Trivial Ridge `corrca_chan1_only` (D=7) | +0.064 ✓ | +0.077 ✓ | +0.076 ✓ | +0.021 ✓ |
 | Trivial Ridge `corrca_pooled35` | +0.072 ✓ | +0.090 ✓ | +0.090 ✓ | +0.021 ✓ |
 | Trivial Ridge `raw903` (per_chan) | +0.008 ns | +0.003 ns | +0.009 ns | +0.018 ns |
 | Trivial Ridge `raw_pooled903` | +0.009 ns | +0.059 ✓ | +0.037 ✓ | +0.022 ns |
@@ -64,8 +65,7 @@ on the JEPA side.
 | Trivial MLP `raw_per_chan` | −0.010 ns | +0.003 ns | −0.012 ns | +0.041 ns |
 | Trivial MLP `raw_pooled903` | −0.023 ns | +0.047 ns | −0.007 ns | +0.007 ns |
 
-**Bold** = best in column. `Trivial Ridge chan1_only` is pending — chan_slice
-fix is in code, jobs RUNNING, will be appended below.
+**Bold** = best in column. All sweeps complete (5 enc / probe seeds × B=2000 bootstrap).
 
 ### Per-feature winner
 
@@ -145,11 +145,13 @@ gap is ~0 because no individual raw channel is special.
    age corr +0.361 (vs JEPA `--keep_channels` +0.504) and `raw_per_chan`
    reaches sex AUC +0.588 (vs JEPA +0.713). Confirms prior Tier-1 finding.
 
-6. **CorrCA component 1 alone (7-d) is at chance for narrative under
-   per-window mean/std/log-band features.** The +0.213 raw-correlation
-   between component 1 and narrative does not survive being summarized as
-   7 stats per window — it lives in slow temporal dynamics that spectral
-   features throw away.
+6. **CorrCA component 1 alone (7-d) is significant but weak for narrative
+   under spectral features.** Trivial Ridge chan1_only narr_corr = +0.021
+   (V3 p=0.018) — significant but tiny next to the +0.213 *raw-trajectory*
+   correlation between component 1 and the narrative annotation. The slow
+   narrative signal lives in raw amplitude dynamics that mean+std+log-bands
+   throw away. This is consistent with the per-subject ceiling memo's
+   prediction.
 
 ## What changes for the paper
 
