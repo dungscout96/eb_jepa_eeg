@@ -94,18 +94,30 @@ def _trivial_features(eeg: torch.Tensor, sfreq: float,
 
 
 def _jepa_features(eeg: torch.Tensor, encoder, device, keep_channels: bool) -> np.ndarray:
-    """Encode a clip with the JEPA context encoder → mean across windows → [D].
+    """Encode a clip with the JEPA context encoder → per-clip [D] vector.
 
-    Uses ``encoder.encode_tokens`` + ``pool_to_windows`` directly — same path
-    as ``MaskedJEPA.encode`` but without needing to build the predictor/
-    target_encoder/mask_collator wrappers.
+    Inlines keep_channels logic (PR #15) here instead of relying on
+    ``encoder.pool_to_windows(keep_channels=...)``, since this branch was
+    cut from kkokate/tier1-baselines and doesn't have that PR's edit.
     """
     # eeg [nw,C,T]; encoder expects [B, nw, C, T].
     with torch.no_grad():
         x = eeg.unsqueeze(0).to(device)
-        tokens = encoder.encode_tokens(x, mask=None)
-        state = encoder.pool_to_windows(tokens, keep_channels=keep_channels)
-        emb = state.squeeze(0).mean(dim=(1, 2, 3)).cpu().numpy()  # [D]
+        tokens = encoder.encode_tokens(x, mask=None)  # [B, C*T*P, D]
+        B = tokens.shape[0]
+        C = encoder.n_chans
+        T = encoder.n_windows
+        P = encoder.n_patches_per_window
+        D = encoder.embed_dim
+        x_tok = tokens.view(B, C, T, P, D)
+        if keep_channels:
+            # Pool patches only, concat channel axis into D → [B, T, C*D]
+            pooled = x_tok.mean(dim=3)                       # [B, C, T, D]
+            pooled = pooled.permute(0, 2, 1, 3).reshape(B, T, C * D)
+        else:
+            pooled = x_tok.mean(dim=(1, 3))                  # [B, T, D]
+        # Per-clip embedding = mean across windows → [D']
+        emb = pooled.mean(dim=1).squeeze(0).cpu().numpy()
     return emb
 
 
