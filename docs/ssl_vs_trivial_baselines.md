@@ -94,13 +94,74 @@ SSL-driven. JEPA `--keep_channels` still wins on age/sex (+0.504 / +0.713).
    probe arch swap (Ridge per-clip vs MovieFeatureHead per-window), not
    a property of the encoder.
 
-## Pending: ridge probe runs
+## Ridge probe sweep — full results (2026-05-01)
 
-A separate sweep is being run with the **draft's exact Ridge probe procedure**
-(per-clip mean of 4 windows, sklearn `Ridge(alpha=1.0)`, `n_passes=20`)
-on the same 5 probe seeds, so we can quantify how much of the draft's
-result is due to the probe-stack swap. Results to be appended below
-once the jobs finish.
+Separate sweep with the **draft's exact Ridge procedure** (per-clip mean of
+4 windows, sklearn `Ridge(alpha=1.0)`, `n_passes=20`) on:
+- 5 trivial-stats baselines × 5 probe seeds {7,13,42,1234,2025}
+- JEPA encoder (default pool + `--keep_channels`) × 5 enc seeds {42,123,456,789,2025}
+  feeding the same Ridge probe instead of trivial stats.
+
+### Continuous stim regression (test, View 3 B=2000) — `reg_<feature>_corr`
+
+| Feature | JEPA + MLP default | JEPA + MLP --keep_channels | **JEPA + Ridge default** | **JEPA + Ridge --keep_channels** | trivial Ridge corrca35 | trivial Ridge chan1_only | trivial Ridge corrca_pooled35 | trivial Ridge raw903 | trivial Ridge raw_pooled903 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| position | +0.088 ✗ | **+0.212** ✓ | +0.153 ✓ | +0.144 ✓ | +0.125 ✓ | tbd | +0.072 ✓ | +0.008 ns | +0.009 ns |
+| luminance | +0.137 ✓ | +0.187 ✓ | +0.199 ✓ | **+0.208** ✓ | +0.142 ✓ | tbd | +0.090 ✓ | +0.003 ns | +0.059 ✓ |
+| contrast | +0.030 ✗ | +0.101 ✓ | **+0.174** ✓ | +0.159 ✓ | +0.139 ✓ | tbd | +0.090 ✓ | +0.009 ns | +0.037 ✓ |
+| narrative | −0.020 ✗ | +0.062 ✓ | +0.033 ns (p=0.08) | **+0.090** ✓ | +0.044 ✓ | tbd | +0.021 ✓ | +0.018 ns | +0.022 ns |
+
+`tbd` = chan1_only run had a fire-int-conversion bug initially (`--chan_slice=0` → None);
+resubmitted, results to be appended once they land.
+
+### Headline takeaways from the Ridge column
+
+1. **The draft's Table 3 claim "JEPA = trivial Ridge corrca35" does NOT survive
+   the apples-to-apples comparison.** When both run through the same Ridge
+   probe with the same n_passes=20 protocol, **JEPA + CorrCA + Ridge beats
+   trivial Ridge corrca35 on every continuous feature**:
+   - position: +0.153 (default) / +0.144 (keep_chan) vs +0.125 (trivial Ridge)
+   - luminance: +0.199 / +0.208 vs +0.142
+   - contrast: +0.174 / +0.159 vs +0.139
+   - narrative: +0.090 (keep_chan) vs +0.044 (trivial Ridge)
+
+2. **`--keep_channels` recovers narrative even under Ridge.** Default-pool
+   JEPA + Ridge fails narrative (+0.033 p=0.08, ns); `--keep_channels` lifts
+   it to +0.090 sig. Same channel-routing fix that worked for the MLP probe
+   carries through to Ridge — confirms the dilution-by-channel-mean story
+   is encoder-pooling-related, not probe-arch-related.
+
+3. **For contrast/luminance, the per-clip Ridge probe is *better* than the
+   per-window MLP probe** on the JEPA encoder:
+   - contrast MLP 0.101 → Ridge 0.174 (+0.073)
+   - luminance MLP 0.187 → Ridge 0.208 (+0.021)
+   The encoder's contrast/luminance signal lives at clip-aggregate scale,
+   not window-by-window.
+
+4. **For position, the per-window MLP probe is much better** (+0.212 keep_chan vs +0.153 ridge default).
+   Position is a within-clip drift signal — averaging across the 4 windows
+   of a clip throws away the temporal structure the MLP was using.
+
+5. **Channel-routing matters at every probe scale.** Trivial `corrca35`
+   (+0.125 pos) beats trivial `corrca_pooled35` (+0.072 pos), same for the
+   other features. The keep-channels insight generalizes to handcrafted
+   spectral statistics, not just the encoder.
+
+6. **raw EEG variants** (raw903 / raw_pooled903) under Ridge stay near
+   chance for stim regression — confirms the draft's "raw EEG stats predict
+   nothing" claim.
+
+### What changes for the paper
+
+The headline of Table 3 should flip:
+- *Old*: "JEPA encoder, given the same CorrCA-filtered input, does not improve over a Ridge probe on per-window mean/std/log-power"
+- *New*: "Under the same Ridge probe, JEPA encoder embeddings beat 35-d CorrCA spectral stats on every continuous feature; the apparent parity in the original Table 3 was due to comparing JEPA's per-window MLP-probe numbers against trivial's per-clip Ridge numbers — not an apples-to-apples comparison"
+
+This still leaves the trivial CorrCA baseline as a non-trivial floor (it does
+decode position/luminance/contrast at 0.12–0.14 corr, well above raw or
+random-init), which preserves the paper's "CorrCA does much of the work"
+message in spirit. But the "JEPA adds nothing" claim doesn't hold once the
+probe scales are matched.
 
 ## Methodology
 
