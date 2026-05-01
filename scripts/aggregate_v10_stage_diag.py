@@ -79,13 +79,17 @@ def parse_logs(logs_dir: Path, split: str = "test"):
             continue
         prefix = tag_m.group("prefix")
         enc_seed = int(tag_m.group("enc"))
+        # CFG_RE only sees the bare stage (e.g. "context_enc"); the lane #1
+        # _perch suffix lives on the tag, so read the authoritative stage
+        # from the TAG_RE match.
+        tag_stage = tag_m.group("stage")
         metrics = {k: _extract_metric(text, split, k) for k in METRIC_KEYS}
         if metrics["reg_position_in_movie_corr"] is None:
             continue
         rows.append({
             "file": f.name,
             "config": prefix,
-            "stage": stage,
+            "stage": tag_stage,
             "enc_seed": enc_seed,
             "probe_seed": int(probe_seed),
             **metrics,
