@@ -391,6 +391,16 @@ def run(
     # preserves the 2-layer MovieFeatureHead behavior. Tests whether the
     # MLP non-linearity / extra capacity is hurting per-window probing.
     linear_movie_probe: bool = False,
+    # Movie-probe method: "adam" (default = current MLP/linear with Adam),
+    # "adamw" (AdamW with weight_decay), "lbfgs" (torch L-BFGS),
+    # "ridge" (sklearn closed-form Ridge with per-feature L2 sweep on val).
+    probe_method: str = "adam",
+    # Weight decay for AdamW. Ignored unless probe_method="adamw".
+    probe_weight_decay: float = 0.0,
+    # BatchNorm before the movie-probe head (Sariyildiz et al. 2023 fix).
+    input_batchnorm: bool = False,
+    # L2 sweep grid for ridge probe (CLIP-style 7-point geometric).
+    ridge_l2_grid: str = "1e-6,1e-4,1e-2,1,1e2,1e4,1e6",
     # W&B
     wandb_run_id: str = "",
     wandb_project: str = "eb_jepa",
@@ -604,6 +614,8 @@ def run(
     # Movie-feature probes (per-clip, same as online probes during training)
     # ------------------------------------------------------------------
     regression_probe = classification_probe = None
+    ridge_movie_models = None
+    ridge_movie_bn = None
     if not subject_only:
         reg_loss_fn = RegressionLoss(
             feature_stats["mean"].to(device),
@@ -611,43 +623,169 @@ def run(
         )
         cls_loss_fn = ClassificationLoss(feature_median.to(device))
 
-        head_cls = LinearMovieFeatureHead if linear_movie_probe else MovieFeatureHead
-        reg_head = head_cls(movie_head_in_dim, cfg.model.hdec, n_features)
-        cls_head = head_cls(movie_head_in_dim, cfg.model.hdec, n_features)
-        regression_probe = MaskedJEPAProbe(
-            jepa, reg_head, reg_loss_fn, keep_channels=keep_channels,
-        ).to(device)
-        classification_probe = MaskedJEPAProbe(
-            jepa, cls_head, cls_loss_fn, keep_channels=keep_channels,
-        ).to(device)
+        if probe_method == "ridge":
+            # CLIP-style closed-form linear probe with per-feature L2 sweep on val.
+            # Bypasses the gradient-trained Adam loop entirely. Subject + movie-id
+            # probes below are unchanged.
+            from sklearn.linear_model import Ridge as _SkRidge, LogisticRegression as _SkLR
+            l2_grid = [float(x) for x in ridge_l2_grid.split(",")]
+            logger.info("Ridge probe: per-feature L2 sweep over %s", l2_grid)
 
-        movie_probe_opt = Adam(
-            list(regression_probe.head.parameters())
-            + list(classification_probe.head.parameters()),
-            lr=probe_lr,
-        )
+            def _gather_per_window(loader_):
+                xs, ys = [], []
+                for eeg_, feats_, _ in tqdm(loader_, desc="Ridge encode", leave=False):
+                    eeg_ = eeg_.to(device)
+                    with torch.no_grad():
+                        st = jepa.encode(eeg_, keep_channels=keep_channels)  # [B, D, T, 1, 1]
+                    B_, D_, T_, _, _ = st.shape
+                    xs.append(st.view(B_, D_, T_).permute(0, 2, 1).reshape(B_ * T_, D_).cpu().numpy())
+                    ys.append(feats_.reshape(-1, n_features).numpy())
+                return np.concatenate(xs), np.concatenate(ys)
 
-        logger.info("Training movie-feature probes for %d epochs...", probe_epochs)
-        for epoch in range(probe_epochs):
-            regression_probe.train()
-            classification_probe.train()
-            reg_total = cls_total = 0.0
-            n = 0
-            for eeg, features, _ in tqdm(train_loader, desc=f"Movie probe {epoch+1}/{probe_epochs}", leave=False):
-                eeg = eeg.to(device)
-                features = features.to(device)
-                movie_probe_opt.zero_grad()
-                reg_loss = regression_probe(eeg, features)
-                cls_loss = classification_probe(eeg, features)
-                (reg_loss + cls_loss).backward()
-                movie_probe_opt.step()
-                reg_total += reg_loss.item()
-                cls_total += cls_loss.item()
-                n += 1
-            logger.info(
-                "Movie probe ep %d/%d  reg=%.4f  cls=%.4f",
-                epoch + 1, probe_epochs, reg_total / max(n, 1), cls_total / max(n, 1),
+            logger.info("Encoding train set for Ridge...")
+            X_tr, Y_tr = _gather_per_window(train_loader)
+            logger.info("Encoding val set for Ridge...")
+            X_val_r, Y_val_r = _gather_per_window(eval_loaders["val"])
+
+            mu = X_tr.mean(axis=0, keepdims=True) if input_batchnorm else 0.0
+            sd = X_tr.std(axis=0, keepdims=True).clip(min=1e-8) if input_batchnorm else 1.0
+            X_tr_n = (X_tr - mu) / sd
+            X_val_n = (X_val_r - mu) / sd
+
+            f_mean = feature_stats["mean"].numpy()
+            f_std = feature_stats["std"].numpy()
+
+            ridge_movie_models = {"reg": [], "cls": [], "alphas_reg": [], "alphas_cls": []}
+            ridge_movie_bn = (mu, sd)
+
+            for i, fname_ in enumerate(feature_names):
+                # Regression: per-feature L2 sweep on val
+                y_tr = Y_tr[:, i]
+                y_val = Y_val_r[:, i]
+                ym, ys_ = float(y_tr.mean()), float(y_tr.std())
+                y_tr_n = (y_tr - ym) / max(ys_, 1e-8)
+                best_alpha, best_r = None, -np.inf
+                for a in l2_grid:
+                    m_ = _SkRidge(alpha=a).fit(X_tr_n, y_tr_n)
+                    p_val = m_.predict(X_val_n) * ys_ + ym
+                    r_ = float(pearsonr(p_val, y_val).statistic) if np.std(p_val) > 1e-10 else 0.0
+                    if r_ > best_r:
+                        best_r, best_alpha = r_, a
+                m_final = _SkRidge(alpha=best_alpha).fit(X_tr_n, y_tr_n)
+                ridge_movie_models["reg"].append((m_final, ym, ys_))
+                ridge_movie_models["alphas_reg"].append(best_alpha)
+                logger.info("  reg %s: α=%.0e val_r=%.4f", fname_, best_alpha, best_r)
+
+                # Classification: median-split, LogisticRegression with L2 sweep
+                med_ = float(feature_median[i].item())
+                y_tr_bin = (y_tr > med_).astype(int)
+                y_val_bin = (y_val > med_).astype(int)
+                if len(np.unique(y_tr_bin)) < 2:
+                    ridge_movie_models["cls"].append(None)
+                    ridge_movie_models["alphas_cls"].append(None)
+                    continue
+                best_C, best_auc = None, -np.inf
+                for a in l2_grid:
+                    C_ = 1.0 / a
+                    m_ = _SkLR(C=C_, solver="lbfgs", max_iter=1000).fit(X_tr_n, y_tr_bin)
+                    pr_ = m_.predict_proba(X_val_n)[:, 1]
+                    try:
+                        au_ = float(roc_auc_score(y_val_bin, pr_))
+                    except ValueError:
+                        au_ = 0.5
+                    if au_ > best_auc:
+                        best_auc, best_C = au_, C_
+                m_final = _SkLR(C=best_C, solver="lbfgs", max_iter=1000).fit(X_tr_n, y_tr_bin)
+                ridge_movie_models["cls"].append(m_final)
+                ridge_movie_models["alphas_cls"].append(1.0 / best_C)
+                logger.info("  cls %s: C=%.0e val_auc=%.4f", fname_, best_C, best_auc)
+
+        else:
+            head_cls = LinearMovieFeatureHead if linear_movie_probe else MovieFeatureHead
+            head_in_dim = movie_head_in_dim
+            if input_batchnorm:
+                # BatchNorm1d sits inside the head; we monkey-patch the forward
+                # to apply it on the [B*T, D] reshape inside the head's own forward.
+                # Simpler: wrap the head with a Sequential.
+                _bn = nn.BatchNorm1d(movie_head_in_dim)
+                base_reg = head_cls(movie_head_in_dim, cfg.model.hdec, n_features)
+                base_cls = head_cls(movie_head_in_dim, cfg.model.hdec, n_features)
+
+                class _BNHead(nn.Module):
+                    def __init__(self, bn, base):
+                        super().__init__()
+                        self.bn = bn
+                        self.base = base
+                    def forward(self, x):
+                        # x: [B, D, T, 1, 1]; flatten over (B, T) so BN sees feature dim
+                        B_, D_, T_ = x.shape[:3]
+                        flat = x.view(B_, D_, T_).permute(0, 2, 1).reshape(B_ * T_, D_)
+                        flat = self.bn(flat)
+                        # repack to original [B, D, T, 1, 1]
+                        x_n = flat.view(B_, T_, D_).permute(0, 2, 1).view(B_, D_, T_, 1, 1)
+                        return self.base(x_n)
+                reg_head = _BNHead(_bn, base_reg)
+                cls_head = _BNHead(nn.BatchNorm1d(movie_head_in_dim), base_cls)
+            else:
+                reg_head = head_cls(movie_head_in_dim, cfg.model.hdec, n_features)
+                cls_head = head_cls(movie_head_in_dim, cfg.model.hdec, n_features)
+            regression_probe = MaskedJEPAProbe(
+                jepa, reg_head, reg_loss_fn, keep_channels=keep_channels,
+            ).to(device)
+            classification_probe = MaskedJEPAProbe(
+                jepa, cls_head, cls_loss_fn, keep_channels=keep_channels,
+            ).to(device)
+
+            opt_params = (
+                list(regression_probe.head.parameters())
+                + list(classification_probe.head.parameters())
             )
+            if probe_method == "lbfgs":
+                movie_probe_opt = torch.optim.LBFGS(opt_params, lr=probe_lr, max_iter=20)
+            elif probe_method == "adamw":
+                movie_probe_opt = torch.optim.AdamW(
+                    opt_params, lr=probe_lr, weight_decay=probe_weight_decay,
+                )
+            else:  # "adam" — backwards compat with PR #15
+                movie_probe_opt = Adam(opt_params, lr=probe_lr)
+
+            logger.info(
+                "Training movie-feature probes for %d epochs (method=%s, lr=%.0e, wd=%.0e, bn=%s)...",
+                probe_epochs, probe_method, probe_lr, probe_weight_decay, input_batchnorm,
+            )
+            for epoch in range(probe_epochs):
+                regression_probe.train()
+                classification_probe.train()
+                reg_total = cls_total = 0.0
+                n = 0
+                for eeg, features, _ in tqdm(train_loader, desc=f"Movie probe {epoch+1}/{probe_epochs}", leave=False):
+                    eeg = eeg.to(device)
+                    features = features.to(device)
+
+                    if probe_method == "lbfgs":
+                        def _closure():
+                            movie_probe_opt.zero_grad()
+                            r_ = regression_probe(eeg, features)
+                            c_ = classification_probe(eeg, features)
+                            (r_ + c_).backward()
+                            return r_ + c_
+                        loss_total = movie_probe_opt.step(_closure)
+                        with torch.no_grad():
+                            reg_loss = regression_probe(eeg, features)
+                            cls_loss = classification_probe(eeg, features)
+                    else:
+                        movie_probe_opt.zero_grad()
+                        reg_loss = regression_probe(eeg, features)
+                        cls_loss = classification_probe(eeg, features)
+                        (reg_loss + cls_loss).backward()
+                        movie_probe_opt.step()
+                    reg_total += reg_loss.item()
+                    cls_total += cls_loss.item()
+                    n += 1
+                logger.info(
+                    "Movie probe ep %d/%d  reg=%.4f  cls=%.4f",
+                    epoch + 1, probe_epochs, reg_total / max(n, 1), cls_total / max(n, 1),
+                )
 
     # ------------------------------------------------------------------
     # Subject-trait probes (per-recording embeddings, pooled over clips)
@@ -734,7 +872,87 @@ def run(
         save_data = {} if save_dir is not None else None
 
         # Movie-feature metrics
-        if regression_probe is not None:
+        if probe_method == "ridge" and ridge_movie_models is not None:
+            logger.info("Evaluating Ridge movie-feature probes on %s...", split)
+            mu_, sd_ = ridge_movie_bn
+            # One pass to gather per-window features + per-clip targets
+            jepa.eval()
+            xs, recs_per_rec, tgt_per_rec = [], [], []
+            with torch.no_grad():
+                for eeg, features, _ in loader:
+                    eeg = eeg.to(device)
+                    st = jepa.encode(eeg, keep_channels=keep_channels)
+                    B_, D_, T_, _, _ = st.shape
+                    xs.append(
+                        st.view(B_, D_, T_).permute(0, 2, 1)
+                        .reshape(B_ * T_, D_).cpu().numpy()
+                    )
+                    tgt_per_rec.append(features.numpy())  # [B, T, F]
+            X_ev = np.concatenate(xs)
+            X_ev_n = (X_ev - mu_) / sd_
+            tgt_arr = np.concatenate(tgt_per_rec)        # [N_rec, T, F]
+            n_rec_, T_, _ = tgt_arr.shape
+
+            reg_preds_flat = np.zeros((X_ev_n.shape[0], n_features), dtype=np.float32)
+            cls_logits_flat = np.zeros_like(reg_preds_flat)
+            for i, fname_ in enumerate(feature_names):
+                m_, ym_, ys_ = ridge_movie_models["reg"][i]
+                pn_ = m_.predict(X_ev_n)
+                reg_preds_flat[:, i] = pn_.astype(np.float32)
+                # Reverse the (X-feature_mean)/feature_std normalization that
+                # the bootstrap will re-apply: store normalized preds in the
+                # bootstrap's expected scale. The bootstrap unnormalizes via
+                # reg_preds*(f_std+1e-8)+f_mean, but our pn_ was trained on
+                # (y - ym)/ys_ where ym, ys_ are train mean/std (not feature_stats).
+                # To make the bootstrap call work correctly, dump *unnormalized*
+                # predictions and set feature_mean=0, feature_std=1 below.
+                m_cls = ridge_movie_models["cls"][i]
+                if m_cls is not None:
+                    pr_ = m_cls.predict_proba(X_ev_n)[:, 1]
+                    # Convert prob → logit so bootstrap's sigmoid(...) recovers it
+                    eps = 1e-7
+                    pr_c = np.clip(pr_, eps, 1 - eps)
+                    cls_logits_flat[:, i] = np.log(pr_c / (1 - pr_c)).astype(np.float32)
+                else:
+                    cls_logits_flat[:, i] = 0.0
+                # Unnormalize regression predictions back to target units
+                reg_preds_flat[:, i] = pn_.astype(np.float32) * ys_ + ym_
+
+            reg_preds_NTF = reg_preds_flat.reshape(n_rec_, T_, n_features)
+            cls_logits_NTF = cls_logits_flat.reshape(n_rec_, T_, n_features)
+
+            # Compute summary metrics
+            tgt_flat = tgt_arr.reshape(-1, n_features)
+            for i, fname_ in enumerate(feature_names):
+                p_ = reg_preds_flat[:, i]
+                t_ = tgt_flat[:, i]
+                if np.std(p_) > 1e-10 and np.std(t_) > 1e-10:
+                    r_ = float(pearsonr(p_, t_).statistic)
+                else:
+                    r_ = 0.0
+                all_metrics[f"probe_eval/{split}/reg_{fname_}_corr"] = r_
+                if ridge_movie_models["cls"][i] is not None:
+                    pr_ = 1.0 / (1.0 + np.exp(-cls_logits_flat[:, i]))
+                    med_ = float(feature_median[i].item())
+                    bin_ = (t_ > med_).astype(int)
+                    try:
+                        au_ = float(roc_auc_score(bin_, pr_))
+                    except ValueError:
+                        au_ = 0.5
+                    all_metrics[f"probe_eval/{split}/cls_{fname_}_auc"] = au_
+
+            if save_data is not None:
+                save_data["movie_reg_preds"] = reg_preds_NTF.astype(np.float32)
+                save_data["movie_cls_logits"] = cls_logits_NTF.astype(np.float32)
+                save_data["movie_targets"] = tgt_arr.astype(np.float32)
+                save_data["feature_names"] = np.array(feature_names)
+                # Predictions already in target units → bootstrap should not
+                # re-unnormalize. Store mean=0, std=1 so the bootstrap unnorm
+                # is a no-op.
+                save_data["feature_mean"] = np.zeros(n_features, dtype=np.float32)
+                save_data["feature_std"] = np.ones(n_features, dtype=np.float32)
+                save_data["feature_median"] = feature_median.numpy()
+        elif regression_probe is not None:
             logger.info("Evaluating movie-feature probes on %s...", split)
             movie_metrics = validation_loop(
                 loader, jepa, regression_probe, classification_probe,
