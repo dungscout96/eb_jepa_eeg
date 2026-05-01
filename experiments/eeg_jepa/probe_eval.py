@@ -739,6 +739,7 @@ def run(
             movie_metrics = validation_loop(
                 loader, jepa, regression_probe, classification_probe,
                 device, feature_stats, feature_median, feature_names,
+                keep_channels=keep_channels,
             )
             for k, v in movie_metrics.items():
                 all_metrics[f"probe_eval/{split}/{k.split('/', 1)[-1]}"] = v

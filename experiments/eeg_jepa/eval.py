@@ -21,6 +21,7 @@ def validation_loop(
     feature_stats,
     feature_median,
     feature_names,
+    keep_channels: bool = False,
 ):
     """Run validation and compute regression + classification metrics.
 
@@ -57,7 +58,7 @@ def validation_loop(
         cls_loss = classification_probe(eeg, features)
 
         # Predictions (from heads applied to frozen encoder output)
-        state = jepa.encode(eeg)  # [B, D, T, 1, 1]
+        state = jepa.encode(eeg, keep_channels=keep_channels)
         reg_pred = regression_probe.head(state)  # [B, T, n_features]
         cls_pred = classification_probe.head(state)  # [B, T, n_features]
 
