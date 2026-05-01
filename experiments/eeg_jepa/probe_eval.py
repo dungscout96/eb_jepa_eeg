@@ -37,7 +37,13 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from eb_jepa.architectures import EEGEncoderTokens, MaskedPredictor, MovieFeatureHead, Projector
+from eb_jepa.architectures import (
+    EEGEncoderTokens,
+    LinearMovieFeatureHead,
+    MaskedPredictor,
+    MovieFeatureHead,
+    Projector,
+)
 from eb_jepa.datasets.hbn import JEPAMovieDataset, _read_raw_windows
 from eb_jepa.jepa import MaskedJEPA, MaskedJEPAProbe
 from eb_jepa.logging import get_logger
@@ -381,6 +387,10 @@ def run(
     # C*D (5*64=320 with 5-component CorrCA). Recovers narrative + boosts
     # subject probes. Default False matches the long-standing baseline.
     keep_channels: bool = False,
+    # Single-linear movie-feature probe (no hidden ReLU). Default False
+    # preserves the 2-layer MovieFeatureHead behavior. Tests whether the
+    # MLP non-linearity / extra capacity is hurting per-window probing.
+    linear_movie_probe: bool = False,
     # W&B
     wandb_run_id: str = "",
     wandb_project: str = "eb_jepa",
@@ -601,8 +611,9 @@ def run(
         )
         cls_loss_fn = ClassificationLoss(feature_median.to(device))
 
-        reg_head = MovieFeatureHead(movie_head_in_dim, cfg.model.hdec, n_features)
-        cls_head = MovieFeatureHead(movie_head_in_dim, cfg.model.hdec, n_features)
+        head_cls = LinearMovieFeatureHead if linear_movie_probe else MovieFeatureHead
+        reg_head = head_cls(movie_head_in_dim, cfg.model.hdec, n_features)
+        cls_head = head_cls(movie_head_in_dim, cfg.model.hdec, n_features)
         regression_probe = MaskedJEPAProbe(
             jepa, reg_head, reg_loss_fn, keep_channels=keep_channels,
         ).to(device)

@@ -1021,6 +1021,28 @@ class MovieFeatureHead(nn.Module):
         return out.view(B, T, -1)  # [B, T, n_features]
 
 
+class LinearMovieFeatureHead(nn.Module):
+    """Single-linear movie-feature probe — strict subset of MovieFeatureHead.
+
+    Same I/O shape as MovieFeatureHead but no hidden layer / non-linearity.
+    Used to test whether MovieFeatureHead's 2-layer MLP is leaving signal
+    on the table vs a closed-form-style linear probe (PR #16).
+    """
+
+    def __init__(self, in_dim, hidden_dim, n_features):
+        # hidden_dim is accepted for API compatibility but unused.
+        del hidden_dim
+        super().__init__()
+        self.net = nn.Linear(in_dim, n_features)
+        self.apply(init_module_weights)
+
+    def forward(self, x):
+        B, D, T = x.shape[:3]
+        x = x.view(B, D, T).permute(0, 2, 1).reshape(B * T, D)
+        out = self.net(x)
+        return out.view(B, T, -1)
+
+
 class TemporalMovieFeatureHead(nn.Module):
     """MLP head with temporal context for predicting per-timestep movie features.
 
