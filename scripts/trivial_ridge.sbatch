@@ -1,10 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=trivial_ridge
 #SBATCH --account=bbnv-delta-gpu
-#SBATCH --partition=cpu
+#SBATCH --partition=gpuA40x4
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
+#SBATCH --gpus-per-task=1
 #SBATCH --mem=64G
 #SBATCH --time=02:00:00
 #SBATCH --output=logs/trivial_ridge_%j.out
