@@ -66,13 +66,31 @@ def _bandpower(eeg: np.ndarray, sfreq: float) -> np.ndarray:
     return np.concatenate(out)  # [C*5]
 
 
-def _trivial_features(eeg: torch.Tensor, sfreq: float) -> np.ndarray:
-    """Compute trivial within-clip features. eeg: [n_windows, C, T]."""
+def _trivial_features(eeg: torch.Tensor, sfreq: float,
+                      chan_slice=None, pooled: bool = False) -> np.ndarray:
+    """Compute trivial within-clip features. eeg: [n_windows, C, T].
+
+    chan_slice: list of channel indices to keep (e.g., [0] for chan1_only).
+    pooled: if True, average stats across channels then tile back to keep
+            D = stats × C unchanged (mirrors the JEPA default-pool ablation).
+    """
+    if chan_slice is not None:
+        eeg = eeg[:, chan_slice, :]
     eeg_np = eeg.numpy()
     means = eeg_np.mean(axis=(0, 2))           # [C]
     stds = eeg_np.std(axis=(0, 2))             # [C]
     bp = _bandpower(eeg_np, sfreq)             # [C*5]
-    return np.concatenate([means, stds, bp])   # [C*7]
+
+    C = eeg_np.shape[1]
+    n_bands = len(BANDS)
+    bp_per_chan = bp.reshape(n_bands, C).T     # [C, n_bands]
+    stats_per_chan = np.concatenate(
+        [means[:, None], stds[:, None], bp_per_chan], axis=1
+    )  # [C, 7]
+    if pooled:
+        stats_pooled = stats_per_chan.mean(axis=0, keepdims=True)  # [1, 7]
+        stats_per_chan = np.broadcast_to(stats_pooled, (C, 7)).copy()
+    return stats_per_chan.reshape(-1)  # [C*7]
 
 
 def _jepa_features(eeg: torch.Tensor, jepa, device, keep_channels: bool) -> np.ndarray:
@@ -86,7 +104,8 @@ def _jepa_features(eeg: torch.Tensor, jepa, device, keep_channels: bool) -> np.n
 
 
 def _extract(dataset, n_passes, sfreq, seed, group_by_rec: bool = False,
-             jepa=None, device=None, keep_channels: bool = False):
+             jepa=None, device=None, keep_channels: bool = False,
+             chan_slice=None, pooled: bool = False):
     """Iterate dataset n_passes times; collect features + labels.
 
     Features: trivial mean+std+log-band stats (default) or JEPA per-clip
@@ -102,7 +121,7 @@ def _extract(dataset, n_passes, sfreq, seed, group_by_rec: bool = False,
     def _feat(eeg):
         if use_jepa:
             return _jepa_features(eeg, jepa, device, keep_channels)
-        return _trivial_features(eeg, sfreq)
+        return _trivial_features(eeg, sfreq, chan_slice=chan_slice, pooled=pooled)
 
     rng = torch.Generator().manual_seed(seed)
     n_rec = len(dataset)
@@ -223,6 +242,12 @@ def run(
     # handcrafted trivial stats. Requires a checkpoint.
     checkpoint: str = "",
     keep_channels: bool = False,
+    # Channel routing for trivial features:
+    #   chan_slice: comma-separated channel indices (post-CorrCA) to keep
+    #               (e.g. "0" for component 1 only).
+    #   pooled: if True, average stats across channels then tile to keep D.
+    chan_slice: str = "",
+    pooled: bool = False,
 ):
     setup_seed(seed)
     overrides = {
@@ -339,17 +364,23 @@ def run(
             shuffle_label, feature_names, seed,
         )
 
+    chan_slice_list = (
+        [int(x) for x in chan_slice.split(",") if x.strip() != ""]
+        if chan_slice else None
+    )
+
     if time_aligned_K > 0:
         logger.info("Extracting time-aligned clips (K=%d per recording)...", time_aligned_K)
         X_train, Y_train = _extract_time_aligned(train_set, time_aligned_K, sfreq)
         X_val, Y_val = _extract_time_aligned(eval_sets["val"], time_aligned_K, sfreq)
         X_test, Y_test = _extract_time_aligned(eval_sets["test"], time_aligned_K, sfreq)
     else:
-        logger.info("Extracting train features (%d recordings × %d passes)...",
-                    len(train_set), n_passes)
+        logger.info("Extracting train features (%d recordings × %d passes; chan_slice=%s, pooled=%s)...",
+                    len(train_set), n_passes, chan_slice_list, pooled)
         X_train, Y_train = _extract(
             train_set, n_passes, sfreq, seed,
             jepa=jepa_model, device=jepa_device, keep_channels=keep_channels,
+            chan_slice=chan_slice_list, pooled=pooled,
         )
         logger.info("  X_train: %s, Y_train: %s", X_train.shape, Y_train.shape)
 
@@ -357,12 +388,14 @@ def run(
         X_val_grp, Y_val_grp = _extract(
             eval_sets["val"], n_passes, sfreq, seed + 1, group_by_rec=True,
             jepa=jepa_model, device=jepa_device, keep_channels=keep_channels,
+            chan_slice=chan_slice_list, pooled=pooled,
         )
         logger.info("  X_val:   %s, Y_val:   %s", X_val_grp.shape, Y_val_grp.shape)
         logger.info("Extracting test features...")
         X_test_grp, Y_test_grp = _extract(
             eval_sets["test"], n_passes, sfreq, seed + 2, group_by_rec=True,
             jepa=jepa_model, device=jepa_device, keep_channels=keep_channels,
+            chan_slice=chan_slice_list, pooled=pooled,
         )
         logger.info("  X_test:  %s, Y_test:  %s", X_test_grp.shape, Y_test_grp.shape)
         # Flatten for Ridge fit/eval (n_rec * n_passes, ...)

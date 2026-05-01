@@ -4,10 +4,12 @@
 # Ridge regression, n_passes=20). 2 baselines × 5 seeds = 10 jobs.
 set -euo pipefail
 
-# chan1_only requires a pre-built 1-component corrca filter file; skip by default
 BASELINES=(
     trivial_ridge_corrca35
     trivial_ridge_raw903
+    trivial_ridge_chan1_only
+    trivial_ridge_corrca_pooled35
+    trivial_ridge_raw_pooled903
 )
 SEEDS=(7 13 42 1234 2025)
 

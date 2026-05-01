@@ -40,7 +40,7 @@ PRED_DIR="${OUT_DIR}/predictions/${BASELINE}_seed${SEED}"
 OUT_JSON="${OUT_DIR}/${BASELINE}_seed${SEED}.json"
 mkdir -p "$PRED_DIR"
 
-# Pick CorrCA on/off and chan-slice based on baseline name
+# Pick CorrCA on/off + channel-routing options based on baseline name
 CORRCA_ARG=""
 EXTRA_PY="--n_windows=4 --window_size_seconds=2 --norm_mode=per_recording"
 case "$BASELINE" in
@@ -48,11 +48,17 @@ case "$BASELINE" in
         CORRCA_ARG="--corrca_filters=corrca_filters.npz"
         ;;
     trivial_ridge_chan1_only)
-        # Use a dedicated 1-component CorrCA filter file (must exist on Delta).
-        CORRCA_ARG="--corrca_filters=corrca_filters_chan1.npz"
+        CORRCA_ARG="--corrca_filters=corrca_filters.npz"
+        EXTRA_PY="$EXTRA_PY --chan_slice=0"
+        ;;
+    trivial_ridge_corrca_pooled35)
+        CORRCA_ARG="--corrca_filters=corrca_filters.npz"
+        EXTRA_PY="$EXTRA_PY --pooled"
         ;;
     trivial_ridge_raw903)
-        # No CorrCA → 129 raw channels
+        ;;
+    trivial_ridge_raw_pooled903)
+        EXTRA_PY="$EXTRA_PY --pooled"
         ;;
     *) echo "Unknown BASELINE=$BASELINE"; exit 2;;
 esac
