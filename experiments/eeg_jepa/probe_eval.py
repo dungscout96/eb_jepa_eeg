@@ -32,6 +32,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from omegaconf import OmegaConf
+from scipy.stats import pearsonr
 from sklearn.metrics import balanced_accuracy_score, roc_auc_score
 from torch.optim import Adam
 from torch.utils.data import DataLoader
