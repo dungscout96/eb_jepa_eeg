@@ -42,28 +42,33 @@ non-narrative channels.
 
 ## Result on the existing exp6 baseline (`nw4_ws2`, 5 enc × 5 probe seeds)
 
+Procedure matches the original `docs/significance_analysis_2026-04-29.md`:
+each encoder's predictions averaged across 5 probe seeds first, then
+recording-level bootstrap with B=2000 resamples, then 1-sample t-test on
+the 5 encoder-bootstrap means against chance.
+
 `reg_narrative_event_score_corr` on test split — three significance lenses:
 
-| Pool | View 2 (per-enc-seed mean t-test, n=5) | View 3 (recording bootstrap, B=1000, ensemble of 5 probe seeds) |
+| Pool | View 2 (per-enc-seed mean t-test, n=5) | View 3 (bootstrap B=2000, ensemble of 5 probe seeds) |
 |---|---|---|
 | Default | −0.009 ± 0.011, p=0.14 ✗ | −0.020 ± 0.045, p=0.38 ✗ |
-| **`--keep_channels`** | **+0.061 ± 0.014, p=6.7e-4 ✓** | **+0.061 ± 0.022, p=3.5e-3 ✓** |
+| **`--keep_channels`** | **+0.061 ± 0.014, p=6.7e-4 ✓** | **+0.062 ± 0.021, p=2.7e-3 ✓** |
 
 The other previously-failing baseline metric, `cls_position_in_movie_auc`,
 also crosses the bootstrap-t-test threshold:
 
-| Pool | View 3 |
+| Pool | View 3 (B=2000) |
 |---|---|
 | Default | +0.512 ± 0.012, p=0.080 ✗ |
-| `--keep_channels` | +0.636 ± 0.009, p=5.6e-6 ✓ |
+| `--keep_channels` | +0.636 ± 0.009, p=5.2e-6 ✓ |
 
 Other probes either improve or hold:
 
-| Probe (test, View 3 bootstrap) | Default | `--keep_channels` | Δ |
+| Probe (test, View 3 bootstrap B=2000) | Default | `--keep_channels` | Δ |
 |---|---:|---:|---:|
-| `reg_position_in_movie_corr` | +0.088 | +0.209 | +0.121 |
-| `reg_luminance_mean_corr` | +0.137 | +0.186 | +0.049 |
-| `reg_contrast_rms_corr` | +0.030 | +0.102 | +0.072 |
+| `reg_position_in_movie_corr` | +0.088 | +0.212 | +0.124 |
+| `reg_luminance_mean_corr` | +0.137 | +0.187 | +0.050 |
+| `reg_contrast_rms_corr` | +0.030 | +0.101 | +0.071 |
 | `subject/age_reg/corr` | +0.370 | +0.504 | +0.134 |
 | `subject/sex/auc` | +0.619 | +0.713 | +0.094 |
 
