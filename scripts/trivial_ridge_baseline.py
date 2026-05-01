@@ -93,12 +93,18 @@ def _trivial_features(eeg: torch.Tensor, sfreq: float,
     return stats_per_chan.reshape(-1)  # [C*7]
 
 
-def _jepa_features(eeg: torch.Tensor, jepa, device, keep_channels: bool) -> np.ndarray:
-    """Encode a clip with JEPA → mean across windows → [D] vector."""
-    # eeg [nw,C,T]; jepa.encode expects [B, nw, C, T].
+def _jepa_features(eeg: torch.Tensor, encoder, device, keep_channels: bool) -> np.ndarray:
+    """Encode a clip with the JEPA context encoder → mean across windows → [D].
+
+    Uses ``encoder.encode_tokens`` + ``pool_to_windows`` directly — same path
+    as ``MaskedJEPA.encode`` but without needing to build the predictor/
+    target_encoder/mask_collator wrappers.
+    """
+    # eeg [nw,C,T]; encoder expects [B, nw, C, T].
     with torch.no_grad():
         x = eeg.unsqueeze(0).to(device)
-        state = jepa.encode(x, keep_channels=keep_channels)  # [1, D, nw, 1, 1]
+        tokens = encoder.encode_tokens(x, mask=None)
+        state = encoder.pool_to_windows(tokens, keep_channels=keep_channels)
         emb = state.squeeze(0).mean(dim=(1, 2, 3)).cpu().numpy()  # [D]
     return emb
 
@@ -293,27 +299,14 @@ def run(
     # When --checkpoint is set, _extract uses encoder embeddings (mean over
     # windows) instead of trivial mean+std+log-band stats.
     # ----------------------------------------------------------------
-    jepa_model = None
+    jepa_encoder = None
     jepa_device = None
     if checkpoint:
-        import copy
-        from eb_jepa.architectures import (
-            EEGEncoderTokens, MaskedPredictor,
-        )
-        from eb_jepa.jepa import MaskedJEPA
+        from eb_jepa.architectures import EEGEncoderTokens
         from eb_jepa.training_utils import setup_device
-        from eb_jepa.masking import MultiBlockMaskCollator
         jepa_device = setup_device("auto")
         sd_dict = torch.load(checkpoint, map_location=jepa_device, weights_only=False)
         sd = sd_dict.get("model_state_dict", sd_dict)
-        # Discover predictor bottleneck dim from the saved state dict
-        try:
-            _pred_dim = int(sd["predictor.input_proj.weight"].shape[0])
-        except KeyError:
-            try:
-                _pred_dim = int(sd["predictor.output_proj.weight"].shape[1])
-            except KeyError:
-                _pred_dim = None
         encoder = EEGEncoderTokens(
             n_chans=train_set.n_chans,
             n_times=train_set.n_times,
@@ -328,31 +321,16 @@ def run(
             chs_info=train_set.get_chs_info(),
             mlp_dim_ratio=cfg.model.get("mlp_dim_ratio", 2.66),
         ).to(jepa_device)
-        target_encoder = copy.deepcopy(encoder)
-        predictor = MaskedPredictor(
-            encoder.embed_dim,
-            depth=cfg.model.predictor_depth,
-            heads=cfg.model.predictor_heads,
-            head_dim=cfg.model.predictor_head_dim,
-            embed_dim=_pred_dim if _pred_dim else cfg.model.encoder_embed_dim,
-        ).to(jepa_device)
-        masking_cfg = cfg.masking
-        mask_collator = MultiBlockMaskCollator(
-            n_chans=train_set.n_chans,
-            n_patches_per_window=encoder.n_patches_per_window,
-            mask_config=masking_cfg,
-        )
-        from eb_jepa.losses import VCLoss
-        jepa_model = MaskedJEPA(
-            encoder, target_encoder, predictor, mask_collator,
-            VCLoss(std_coeff=0.0, cov_coeff=0.0),
-            n_pred_masks_short=masking_cfg.get("n_pred_masks_short", 2),
-            n_pred_masks_long=masking_cfg.get("n_pred_masks_long", 2),
-        ).to(jepa_device)
-        missing, unexpected = jepa_model.load_state_dict(sd, strict=False)
-        jepa_model.eval()
+        # Strip "context_encoder." prefix from JEPA state dict.
+        ce_sd = {k[len("context_encoder."):]: v
+                 for k, v in sd.items() if k.startswith("context_encoder.")}
+        missing, unexpected = encoder.load_state_dict(ce_sd, strict=False)
+        encoder.eval()
+        for p in encoder.parameters():
+            p.requires_grad_(False)
+        jepa_encoder = encoder
         logger.info(
-            "Loaded JEPA from %s (missing=%d, unexpected=%d, keep_channels=%s)",
+            "Loaded JEPA context encoder from %s (missing=%d, unexpected=%d, keep_channels=%s)",
             checkpoint, len(missing), len(unexpected), keep_channels,
         )
 
@@ -379,7 +357,7 @@ def run(
                     len(train_set), n_passes, chan_slice_list, pooled)
         X_train, Y_train = _extract(
             train_set, n_passes, sfreq, seed,
-            jepa=jepa_model, device=jepa_device, keep_channels=keep_channels,
+            jepa=jepa_encoder, device=jepa_device, keep_channels=keep_channels,
             chan_slice=chan_slice_list, pooled=pooled,
         )
         logger.info("  X_train: %s, Y_train: %s", X_train.shape, Y_train.shape)
@@ -387,14 +365,14 @@ def run(
         logger.info("Extracting val features...")
         X_val_grp, Y_val_grp = _extract(
             eval_sets["val"], n_passes, sfreq, seed + 1, group_by_rec=True,
-            jepa=jepa_model, device=jepa_device, keep_channels=keep_channels,
+            jepa=jepa_encoder, device=jepa_device, keep_channels=keep_channels,
             chan_slice=chan_slice_list, pooled=pooled,
         )
         logger.info("  X_val:   %s, Y_val:   %s", X_val_grp.shape, Y_val_grp.shape)
         logger.info("Extracting test features...")
         X_test_grp, Y_test_grp = _extract(
             eval_sets["test"], n_passes, sfreq, seed + 2, group_by_rec=True,
-            jepa=jepa_model, device=jepa_device, keep_channels=keep_channels,
+            jepa=jepa_encoder, device=jepa_device, keep_channels=keep_channels,
             chan_slice=chan_slice_list, pooled=pooled,
         )
         logger.info("  X_test:  %s, Y_test:  %s", X_test_grp.shape, Y_test_grp.shape)
