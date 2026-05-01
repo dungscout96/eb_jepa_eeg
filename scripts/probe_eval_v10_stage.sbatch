@@ -17,6 +17,8 @@
 #
 # Required env: CKPT, NW, WS, BATCH_SIZE, PROBE_SEED, EXP_TAG, STAGE.
 # STAGE in {context_enc, target_enc, patches, target_patches}.
+# Optional env: KEEP_CHANNELS=1 → enable lane #1 per-channel probe
+# (probe head input dim becomes C*D instead of D).
 # ---------------------------------------------------------------
 
 set -euo pipefail
@@ -63,6 +65,13 @@ fi
 
 PRED_DIR="/projects/bbnv/kkokate/eb_jepa_eeg/predictions/v10_stage/${EXP_TAG}"
 
+KEEP_CH_FLAG=""
+WANDB_TAG_SUFFIX=""
+if [ "${KEEP_CHANNELS:-0}" = "1" ]; then
+    KEEP_CH_FLAG="--keep_channels"
+    WANDB_TAG_SUFFIX="_perch"
+fi
+
 PYTHONPATH=. "$ISSUE8_VENV_PY" experiments/eeg_jepa/probe_eval.py \
     --checkpoint="${CKPT}" \
     --n_windows="${NW}" \
@@ -73,8 +82,9 @@ PYTHONPATH=. "$ISSUE8_VENV_PY" experiments/eeg_jepa/probe_eval.py \
     --norm_mode=per_recording \
     --corrca_filters=corrca_filters.npz \
     --probe_stage="${STAGE}" \
+    ${KEEP_CH_FLAG} \
     --seed="${PROBE_SEED}" \
     --save_predictions_dir="${PRED_DIR}" \
-    --wandb_group="v10stage_${STAGE}"
+    --wandb_group="v10stage_${STAGE}${WANDB_TAG_SUFFIX}"
 
-echo "v10 stage-diag ${EXP_TAG} (${STAGE}) complete!"
+echo "v10 stage-diag ${EXP_TAG} (${STAGE} keep_channels=${KEEP_CHANNELS:-0}) complete!"

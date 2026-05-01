@@ -344,24 +344,29 @@ class MaskedJEPA(nn.Module):
         return total_loss, loss_dict
 
     @torch.no_grad()
-    def encode(self, eeg: torch.Tensor, stage: str = None) -> torch.Tensor:
+    def encode(self, eeg: torch.Tensor, stage: str = None,
+               keep_channels: bool = None) -> torch.Tensor:
         """Encode EEG without masking (for probes).
 
         Args:
             eeg: [B, T, C, W]
             stage: Which representation to expose. If None, falls back to
                 ``self._probe_stage`` (set by probe_eval) or ``"context_enc"``.
-                Options:
-                  - ``"context_enc"`` (default): full forward through context encoder.
-                  - ``"target_enc"``: full forward through EMA target encoder.
-                  - ``"patches"``: pre-transformer patch + position embeddings (context encoder).
-                  - ``"target_patches"``: pre-transformer patch + position embeddings (target encoder).
+                Options: ``context_enc`` (default), ``target_enc``,
+                ``patches``, ``target_patches``.
+            keep_channels: If True, ``pool_to_windows`` keeps the CorrCA
+                channel axis (concatenated into the feature dim →
+                [B, C*D, T, 1, 1]) instead of mean-pooling it. Falls back
+                to ``self._keep_channels`` or ``False``. Used for v10 lane
+                #1 diagnostic — see docs/v10_stage_diagnostic.md.
 
         Returns:
-            [B, D, T, 1, 1] pooled per-window representations
+            [B, D, T, 1, 1] (default) or [B, C*D, T, 1, 1] (keep_channels=True).
         """
         if stage is None:
             stage = getattr(self, "_probe_stage", "context_enc")
+        if keep_channels is None:
+            keep_channels = getattr(self, "_keep_channels", False)
         if stage == "target_enc":
             encoder = self.target_encoder
             tokens = encoder.encode_tokens(eeg, mask=None)
@@ -376,7 +381,7 @@ class MaskedJEPA(nn.Module):
             tokens, _ = encoder.tokenize(eeg)
         else:
             raise ValueError(f"Unknown probe stage: {stage!r}")
-        return encoder.pool_to_windows(tokens)
+        return encoder.pool_to_windows(tokens, keep_channels=keep_channels)
 
 
 class MaskedJEPANoEMA(nn.Module):

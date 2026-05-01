@@ -867,17 +867,24 @@ class EEGEncoderTokens(nn.Module):
         tokens = self.transformer(tokens)
         return tokens
 
-    def pool_to_windows(self, tokens: torch.Tensor) -> torch.Tensor:
+    def pool_to_windows(self, tokens: torch.Tensor,
+                        keep_channels: bool = False) -> torch.Tensor:
         """Pool full (unmasked) token sequence to per-window representations.
 
-        Reshapes [B, C*T*P, D] → [B, C, T, P, D], mean-pools over C and P
-        per window → [B, T, D], then formats as [B, D, T, 1, 1] for probes.
+        Reshapes [B, C*T*P, D] → [B, C, T, P, D], mean-pools over P (and
+        optionally C) per window. With ``keep_channels=False`` (default,
+        production behavior), pools over both C and P → [B, D, T, 1, 1].
+        With ``keep_channels=True`` (v10 lane #1 diagnostic), pools only
+        over P and concatenates the channel axis into the feature dim →
+        [B, C*D, T, 1, 1] so probe heads can route per-CorrCA-channel
+        information.
 
         Args:
             tokens: [B, C*T*P, embed_dim] — must be full (unmasked) token sequence
+            keep_channels: if True, return [B, C*embed_dim, T, 1, 1].
 
         Returns:
-            [B, embed_dim, T, 1, 1]
+            [B, embed_dim, T, 1, 1] or [B, C*embed_dim, T, 1, 1].
         """
         B = tokens.shape[0]
         C = self.n_chans
@@ -887,9 +894,15 @@ class EEGEncoderTokens(nn.Module):
 
         # Reshape: [B, C, T, P, D]
         x = tokens.view(B, C, T, P, D)
-        # Mean pool over channels and patches: [B, T, D]
-        x = x.mean(dim=(1, 3))
-        # Format for MovieFeatureHead: [B, D, T, 1, 1]
+        if keep_channels:
+            # Mean pool over patches only: [B, C, T, D]
+            x = x.mean(dim=3)
+            # Concatenate channel into feature axis: [B, T, C*D]
+            x = x.permute(0, 2, 1, 3).reshape(B, T, C * D)
+        else:
+            # Mean pool over channels and patches: [B, T, D]
+            x = x.mean(dim=(1, 3))
+        # Format for MovieFeatureHead: [B, feature_dim, T, 1, 1]
         x = x.permute(0, 2, 1).unsqueeze(-1).unsqueeze(-1)
         return x
 

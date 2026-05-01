@@ -46,8 +46,13 @@ CFG_RE = re.compile(
     r"Cfg:\s*ckpt=\S+\s+nw=(\d+)\s+ws=(\d+)\s+bs=(\d+)\s+probe_seed=(\d+)\s+"
     r"stage=(\w+)\s+tag=(\S+)"
 )
-# tag pattern: <prefix>_enc<seed>_p<seed>_<stage>
-TAG_RE = re.compile(r"^(?P<prefix>.+?)_enc(?P<enc>\d+)_p(?P<probe>\d+)_(?P<stage>\w+)$")
+# tag pattern: <prefix>_enc<seed>_p<seed>_<stage>[_perch]
+# The optional _perch suffix marks lane #1 keep-channels runs and is folded
+# into the stage label so per-channel runs report as e.g. "context_enc_perch".
+TAG_RE = re.compile(
+    r"^(?P<prefix>.+?)_enc(?P<enc>\d+)_p(?P<probe>\d+)_"
+    r"(?P<stage>(?:context_enc|target_enc|patches|target_patches)(?:_perch)?)$"
+)
 
 
 def _extract_metric(text: str, split: str, key: str):

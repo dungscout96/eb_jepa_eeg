@@ -381,6 +381,12 @@ def run(
     # (pre-transformer patch + position embeddings, context encoder),
     # target_patches (pre-transformer, target encoder).
     probe_stage: str = "context_enc",
+    # v10 lane #1: keep CorrCA channels separate at the probe boundary.
+    # When True, pool_to_windows pools only over patches → [B, C*D, T, 1, 1].
+    # Movie-feature probe head input dim grows from D to C*D (5*64=320 with
+    # 5-component CorrCA). Subject and movie-id probes auto-resize from the
+    # embedding shape.
+    keep_channels: bool = False,
     # W&B
     wandb_run_id: str = "",
     wandb_project: str = "eb_jepa",
@@ -581,13 +587,19 @@ def run(
         p.requires_grad_(False)
     jepa.eval()
 
-    # Stage-aware probing: MaskedJEPA.encode reads this attribute when stage
-    # is not passed explicitly (e.g. inside MaskedJEPAProbe.forward).
+    # Stage-aware probing: MaskedJEPA.encode reads these attributes when not
+    # passed explicitly (e.g. inside MaskedJEPAProbe.forward).
     valid_stages = {"context_enc", "target_enc", "patches", "target_patches"}
     if probe_stage not in valid_stages:
         raise ValueError(f"probe_stage={probe_stage!r} not in {sorted(valid_stages)}")
     jepa._probe_stage = probe_stage
-    logger.info("Probe stage: %s", probe_stage)
+    jepa._keep_channels = bool(keep_channels)
+    # When keeping channels, the movie-feature probe head input dim grows by C.
+    movie_head_in_dim = embed_dim * (n_chans if keep_channels else 1)
+    logger.info(
+        "Probe stage: %s | keep_channels=%s | movie_head_in_dim=%d",
+        probe_stage, keep_channels, movie_head_in_dim,
+    )
 
     # ------------------------------------------------------------------
     # Movie-feature probes (per-clip, same as online probes during training)
@@ -600,8 +612,8 @@ def run(
         )
         cls_loss_fn = ClassificationLoss(feature_median.to(device))
 
-        reg_head = MovieFeatureHead(embed_dim, cfg.model.hdec, n_features)
-        cls_head = MovieFeatureHead(embed_dim, cfg.model.hdec, n_features)
+        reg_head = MovieFeatureHead(movie_head_in_dim, cfg.model.hdec, n_features)
+        cls_head = MovieFeatureHead(movie_head_in_dim, cfg.model.hdec, n_features)
         regression_probe = MaskedJEPAProbe(jepa, reg_head, reg_loss_fn).to(device)
         classification_probe = MaskedJEPAProbe(jepa, cls_head, cls_loss_fn).to(device)
 
