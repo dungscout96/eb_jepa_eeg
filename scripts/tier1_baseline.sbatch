@@ -78,7 +78,8 @@ fi
 # Exp-6-matching hyperparams:
 #   n_windows=4, window_size_seconds=2, per_recording norm,
 #   CorrCA-5 for raw_corrca + random_init + exp6, off for psd_band.
-PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/tier1_baselines.py \
+# Use conda env directly (avoids uv's auto-sync pulling broken torchaudio).
+PYTHONPATH=. /u/kkokate/.conda/envs/eb_jepa/bin/python experiments/eeg_jepa/tier1_baselines.py \
     --baseline="${BASELINE}" \
     --seed="${SEED}" \
     --n_windows=4 \
