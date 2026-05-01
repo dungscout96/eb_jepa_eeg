@@ -402,6 +402,9 @@ def run(
     input_batchnorm: bool = False,
     # L2 sweep grid for ridge probe (CLIP-style 7-point geometric).
     ridge_l2_grid: str = "1e-6,1e-4,1e-2,1,1e2,1e4,1e6",
+    # Number of passes through train_loader when gathering Ridge features.
+    # Matches the trivial-Ridge / per-clip-Ridge protocol (n_passes=20).
+    ridge_n_passes: int = 20,
     # W&B
     wandb_run_id: str = "",
     wandb_project: str = "eb_jepa",
@@ -632,21 +635,28 @@ def run(
             l2_grid = [float(x) for x in ridge_l2_grid.split(",")]
             logger.info("Ridge probe: per-feature L2 sweep over %s", l2_grid)
 
-            def _gather_per_window(loader_):
+            def _gather_per_window(loader_, n_passes=1):
                 xs, ys = [], []
-                for eeg_, feats_, _ in tqdm(loader_, desc="Ridge encode", leave=False):
-                    eeg_ = eeg_.to(device)
-                    with torch.no_grad():
-                        st = jepa.encode(eeg_, keep_channels=keep_channels)  # [B, D, T, 1, 1]
-                    B_, D_, T_, _, _ = st.shape
-                    xs.append(st.view(B_, D_, T_).permute(0, 2, 1).reshape(B_ * T_, D_).cpu().numpy())
-                    ys.append(feats_.reshape(-1, n_features).numpy())
+                for p_ in range(n_passes):
+                    for eeg_, feats_, _ in tqdm(
+                        loader_, desc=f"Ridge encode pass {p_+1}/{n_passes}", leave=False,
+                    ):
+                        eeg_ = eeg_.to(device)
+                        with torch.no_grad():
+                            st = jepa.encode(eeg_, keep_channels=keep_channels)  # [B, D, T, 1, 1]
+                        B_, D_, T_, _, _ = st.shape
+                        xs.append(
+                            st.view(B_, D_, T_).permute(0, 2, 1)
+                            .reshape(B_ * T_, D_).cpu().numpy()
+                        )
+                        ys.append(feats_.reshape(-1, n_features).numpy())
                 return np.concatenate(xs), np.concatenate(ys)
 
-            logger.info("Encoding train set for Ridge...")
-            X_tr, Y_tr = _gather_per_window(train_loader)
-            logger.info("Encoding val set for Ridge...")
-            X_val_r, Y_val_r = _gather_per_window(eval_loaders["val"])
+            logger.info("Encoding train set for Ridge (n_passes=%d)...", ridge_n_passes)
+            X_tr, Y_tr = _gather_per_window(train_loader, n_passes=ridge_n_passes)
+            logger.info("Encoding val set for Ridge (n_passes=%d)...", ridge_n_passes)
+            X_val_r, Y_val_r = _gather_per_window(eval_loaders["val"], n_passes=ridge_n_passes)
+            logger.info("X_tr: %s  X_val: %s", X_tr.shape, X_val_r.shape)
 
             mu = X_tr.mean(axis=0, keepdims=True) if input_batchnorm else 0.0
             sd = X_tr.std(axis=0, keepdims=True).clip(min=1e-8) if input_batchnorm else 1.0
