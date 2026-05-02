@@ -28,7 +28,7 @@ import torch
 from omegaconf import OmegaConf
 from scipy.signal import butter, filtfilt, welch
 from scipy.stats import pearsonr
-from sklearn.linear_model import Ridge
+from sklearn.linear_model import LogisticRegression, Ridge
 from torch.utils.data import DataLoader
 
 from eb_jepa.datasets.hbn import (
@@ -425,6 +425,8 @@ def run(
     feature_y_stds = {}
     val_pred_norm = np.zeros((X_val_n.shape[0], len(feature_names)), dtype=np.float32)
     test_pred_norm = np.zeros((X_test_n.shape[0], len(feature_names)), dtype=np.float32)
+    val_cls_logits = np.zeros((X_val_n.shape[0], len(feature_names)), dtype=np.float32)
+    test_cls_logits = np.zeros((X_test_n.shape[0], len(feature_names)), dtype=np.float32)
     for i, fname_ in enumerate(feature_names):
         y_tr = Y_train[:, i]
         y_va = Y_val[:, i]
@@ -448,6 +450,17 @@ def run(
         metrics[f"val/reg_{fname_}_corr"] = float(c_va)
         metrics[f"test/reg_{fname_}_corr"] = float(c_te)
 
+        # Classification head: median-split LogisticRegression with C=1.0
+        # (matches Ridge alpha=1.0 in regularization scale).
+        med_ = float(np.median(y_tr))
+        y_tr_bin = (y_tr > med_).astype(int)
+        if len(np.unique(y_tr_bin)) >= 2:
+            cls_m = LogisticRegression(C=1.0, solver="lbfgs", max_iter=1000)
+            cls_m.fit(X_train_n, y_tr_bin)
+            # decision_function = log-odds (logit); bootstrap recovers prob via sigmoid.
+            val_cls_logits[:, i] = cls_m.decision_function(X_val_n).astype(np.float32)
+            test_cls_logits[:, i] = cls_m.decision_function(X_test_n).astype(np.float32)
+
     # Optional npz dump in the bootstrap_probe_eval.py schema, when we used
     # group_by_rec for eval. preds shape = (n_rec, n_passes, F) → matches the
     # expected (N_rec, T, F) layout the bootstrap helpers index along axis 0.
@@ -463,12 +476,13 @@ def run(
         )
         # NB: bootstrap unnormalizes preds via reg_preds * (f_std + 1e-8) + f_mean,
         # so we save the *normalized* predictions (matches probe_eval.py schema).
-        for split, pn, Y_grp, X_grp in (
-            ("val", val_pred_norm, Y_val_grp, X_val_grp),
-            ("test", test_pred_norm, Y_test_grp, X_test_grp),
+        for split, pn, cls_lo, Y_grp, X_grp in (
+            ("val", val_pred_norm, val_cls_logits, Y_val_grp, X_val_grp),
+            ("test", test_pred_norm, test_cls_logits, Y_test_grp, X_test_grp),
         ):
             n_rec, n_p, _ = X_grp.shape
             reg_preds = pn.reshape(n_rec, n_p, n_features)
+            cls_logits_NTF = cls_lo.reshape(n_rec, n_p, n_features)
             reg_targets = Y_grp.reshape(n_rec, n_p, n_features)
             # Compute median over training labels for cls compatibility
             f_median = np.array(
@@ -478,7 +492,7 @@ def run(
             np.savez_compressed(
                 save_dir / f"{split}_seed{seed}.npz",
                 movie_reg_preds=reg_preds,
-                movie_cls_logits=np.zeros_like(reg_preds, dtype=np.float32),
+                movie_cls_logits=cls_logits_NTF,
                 movie_targets=reg_targets,
                 feature_names=np.array(feature_names),
                 feature_mean=f_mean,
