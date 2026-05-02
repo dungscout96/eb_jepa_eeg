@@ -188,6 +188,8 @@ def run(
     preprocessed = cfg.data.get("preprocessed", False)
     preprocessed_dir = resolve_preprocessed_dir(cfg.data.get("preprocessed_dir", None))
     feature_names = list(cfg.data.get("feature_names", JEPAMovieDataset.DEFAULT_FEATURES))
+    task_cfg = cfg.data.get("task", "ThePresent")
+    task = list(task_cfg) if not isinstance(task_cfg, str) else task_cfg
     global NUMERIC_FEATURES
     NUMERIC_FEATURES = feature_names
 
@@ -195,6 +197,7 @@ def run(
         split="train",
         n_windows=cfg.data.n_windows,
         window_size_seconds=cfg.data.window_size_seconds,
+        task=task,
         temporal_stride=temporal_stride,
         feature_names=feature_names,
         cfg=cfg.data,
@@ -205,6 +208,7 @@ def run(
         split="val",
         n_windows=cfg.data.n_windows,
         window_size_seconds=cfg.data.window_size_seconds,
+        task=task,
         temporal_stride=temporal_stride,
         feature_names=feature_names,
         eeg_norm_stats=train_set.get_eeg_norm_stats(),
@@ -593,6 +597,7 @@ def run(
         split="test",
         n_windows=cfg.data.n_windows,
         window_size_seconds=cfg.data.window_size_seconds,
+        task=task,
         temporal_stride=temporal_stride,
         feature_names=feature_names,
         eeg_norm_stats=train_set.get_eeg_norm_stats(),
