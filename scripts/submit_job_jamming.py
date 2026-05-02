@@ -50,7 +50,7 @@ job = Job(
     branch="",  # skip neurolab branch management; handled manually above
     env_vars={
         "WANDB_API_KEY": os.environ.get("WANDB_API_KEY", ""),
-        "WANDB_PROJECT": "eb_jepa",
+        "WANDB_ENTITY": "sccn", "WANDB_PROJECT": "eb_jepa",
         # Use the preprocessed data cache if available on jamming.
         # Remove or update this if the cache path differs on the workstation.
         "HBN_PREPROCESS_DIR": "/mnt/v1/dtyoung/data/eb_jepa_eeg/hbn_preprocessed",

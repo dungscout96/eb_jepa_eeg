@@ -52,7 +52,7 @@ def build_job():
         gpus=1,
         env_vars={
             "HBN_PREPROCESS_DIR": "/projects/bbnv/kkokate/hbn_preprocessed",
-            "WANDB_PROJECT": "eb_jepa",
+            "WANDB_ENTITY": "sccn", "WANDB_PROJECT": "eb_jepa",
         },
     )
 

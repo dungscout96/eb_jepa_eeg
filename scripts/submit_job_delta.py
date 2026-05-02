@@ -39,7 +39,7 @@ job = Job(
     branch="",
     env_vars={
         "WANDB_API_KEY": os.environ.get("WANDB_API_KEY", ""),
-        "WANDB_PROJECT": "eb_jepa",
+        "WANDB_ENTITY": "sccn", "WANDB_PROJECT": "eb_jepa",
         "HBN_PREPROCESS_DIR": "/projects/bbnv/kkokate/hbn_preprocessed",
     },
 )

@@ -60,6 +60,7 @@ conda activate eb_jepa
 if [ -f "$HOME/.wandb_key" ]; then
     export WANDB_API_KEY=$(cat "$HOME/.wandb_key")
 fi
+export WANDB_ENTITY="${WANDB_ENTITY:-sccn}"
 export WANDB_PROJECT="${WANDB_PROJECT:-eb_jepa}"
 
 # Build flag args (booleans need explicit --flag=True/False for fire)

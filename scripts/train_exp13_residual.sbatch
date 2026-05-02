@@ -43,6 +43,7 @@ conda activate eb_jepa
 if [ -f "$HOME/.wandb_key" ]; then
     export WANDB_API_KEY=$(cat "$HOME/.wandb_key")
 fi
+export WANDB_ENTITY="${WANDB_ENTITY:-sccn}"
 export WANDB_PROJECT="${WANDB_PROJECT:-eb_jepa}"
 
 EXP_ID="exp13_std${STD_COEFF}_pd${PRED_DIM}_seed${SEED}"

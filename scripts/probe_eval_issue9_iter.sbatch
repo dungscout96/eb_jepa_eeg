@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=issue8E
+#SBATCH --job-name=issue9_probe
 #SBATCH --account=bbnv-delta-gpu
 #SBATCH --partition=gpuA40x4
 #SBATCH --nodes=1
@@ -8,14 +8,9 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --mem=64G
 #SBATCH --time=01:30:00
-#SBATCH --output=logs/issue8E_%j.out
-#SBATCH --error=logs/issue8E_%j.err
-# ---------------------------------------------------------------
-# Issue #8 Phase E — single probe-eval at a fixed (encoder, probe-seed)
-# pair. Operates on the latest.pth.tar produced by Phase D.
-#
-# Required env: CKPT, NW, WS, BATCH_SIZE, PROBE_SEED, EXP_TAG.
-# ---------------------------------------------------------------
+#SBATCH --output=logs/issue9probe_%j.out
+#SBATCH --error=logs/issue9probe_%j.err
+# Required env: CKPT, EXP_TAG, PROBE_SEED, ITER_TAG.
 
 set -euo pipefail
 
@@ -23,19 +18,21 @@ export HBN_PREPROCESS_DIR="${HBN_PREPROCESS_DIR:-/projects/bbnv/kkokate/hbn_prep
 export UV_LINK_MODE=copy
 
 : "${CKPT:?need CKPT}"
-: "${NW:?need NW}"
-: "${WS:?need WS}"
-: "${BATCH_SIZE:?need BATCH_SIZE}"
-: "${PROBE_SEED:?need PROBE_SEED}"
 : "${EXP_TAG:?need EXP_TAG}"
+: "${PROBE_SEED:?need PROBE_SEED}"
+: "${ITER_TAG:?need ITER_TAG}"
 
-if [ ! -f "$CKPT" ]; then
-    echo "ERROR: CKPT not found: $CKPT"
-    exit 2
-fi
+NW="${NW:-4}"
+WS="${WS:-2}"
+BATCH_SIZE="${BATCH_SIZE:-64}"
 
-echo "Job ID: $SLURM_JOB_ID  Node: $SLURM_NODELIST"
-echo "Cfg: ckpt=${CKPT}  nw=${NW} ws=${WS} bs=${BATCH_SIZE} probe_seed=${PROBE_SEED} tag=${EXP_TAG}"
+[ -f "$CKPT" ] || { echo "ERROR: CKPT not found: $CKPT"; exit 2; }
+
+PRED_DIR="/projects/bbnv/kkokate/eb_jepa_eeg/predictions/issue9_${ITER_TAG}/${EXP_TAG}"
+mkdir -p "$PRED_DIR"
+
+echo "Job ID: $SLURM_JOB_ID  Iter: ${ITER_TAG}  Tag: ${EXP_TAG}  ProbeSeed: ${PROBE_SEED}"
+echo "Predictions: ${PRED_DIR}"
 
 cd "$SLURM_SUBMIT_DIR"
 
@@ -60,6 +57,7 @@ PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/probe_eval.py \
     --norm_mode=per_recording \
     --corrca_filters=corrca_filters.npz \
     --seed="${PROBE_SEED}" \
-    --wandb_group="issue8E_${EXP_TAG}"
+    --save_predictions_dir="${PRED_DIR}" \
+    --wandb_group="issue9_${ITER_TAG}_probe_${EXP_TAG}"
 
-echo "Phase E ${EXP_TAG} complete!"
+echo "Issue #9 ${ITER_TAG} probe ${EXP_TAG} complete!"

@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=issue8E
+#SBATCH --job-name=issue9B
 #SBATCH --account=bbnv-delta-gpu
 #SBATCH --partition=gpuA40x4
 #SBATCH --nodes=1
@@ -8,11 +8,12 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --mem=64G
 #SBATCH --time=01:30:00
-#SBATCH --output=logs/issue8E_%j.out
-#SBATCH --error=logs/issue8E_%j.err
+#SBATCH --output=logs/issue9B_%j.out
+#SBATCH --error=logs/issue9B_%j.err
 # ---------------------------------------------------------------
-# Issue #8 Phase E — single probe-eval at a fixed (encoder, probe-seed)
-# pair. Operates on the latest.pth.tar produced by Phase D.
+# Issue #9 Phase B — probe-eval at a fixed (encoder, probe-seed) pair.
+# Operates on the latest.pth.tar produced by Phase A. Saves per-recording
+# predictions for V3 bootstrap CIs.
 #
 # Required env: CKPT, NW, WS, BATCH_SIZE, PROBE_SEED, EXP_TAG.
 # ---------------------------------------------------------------
@@ -34,8 +35,12 @@ if [ ! -f "$CKPT" ]; then
     exit 2
 fi
 
+PRED_DIR="/projects/bbnv/kkokate/eb_jepa_eeg/predictions/issue9_vcloff/${EXP_TAG}"
+mkdir -p "$PRED_DIR"
+
 echo "Job ID: $SLURM_JOB_ID  Node: $SLURM_NODELIST"
 echo "Cfg: ckpt=${CKPT}  nw=${NW} ws=${WS} bs=${BATCH_SIZE} probe_seed=${PROBE_SEED} tag=${EXP_TAG}"
+echo "Predictions dir: ${PRED_DIR}"
 
 cd "$SLURM_SUBMIT_DIR"
 
@@ -60,6 +65,7 @@ PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/probe_eval.py \
     --norm_mode=per_recording \
     --corrca_filters=corrca_filters.npz \
     --seed="${PROBE_SEED}" \
-    --wandb_group="issue8E_${EXP_TAG}"
+    --save_predictions_dir="${PRED_DIR}" \
+    --wandb_group="issue9B_${EXP_TAG}"
 
-echo "Phase E ${EXP_TAG} complete!"
+echo "Issue #9 Phase B ${EXP_TAG} complete!"

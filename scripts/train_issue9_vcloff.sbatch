@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=issue8D
+#SBATCH --job-name=issue9A
 #SBATCH --account=bbnv-delta-gpu
 #SBATCH --partition=gpuA40x4
 #SBATCH --nodes=1
@@ -8,15 +8,18 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --mem=64G
 #SBATCH --time=08:00:00
-#SBATCH --output=logs/issue8D_%j.out
-#SBATCH --error=logs/issue8D_%j.err
+#SBATCH --output=logs/issue9A_%j.out
+#SBATCH --error=logs/issue9A_%j.err
 # ---------------------------------------------------------------
-# Issue #8 Phase D — encoder pretrainings WITHOUT broken early-stop.
-# Always trains the full epoch budget (patience=0). Saves latest.pth.tar
-# every epoch; probe eval (Phase E) consumes that.
+# Issue #9 Phase A — VCLoss ablation. Same Exp 6 stack but with
+#   --loss.std_coeff and --loss.cov_coeff env-driven (default 0/0 = OFF).
+# Default LR = 5e-4 (Exp 6 / Phase D baseline). Paired with Phase D nw4_ws2
+# seeds {42, 123, 456, 789, 2025} for a clean Δ on VCLoss removal.
 #
-# Required env: NW, WS, SEED, BATCH_SIZE, USE_CORRCA (0|1),
-#               LR, WARMUP, EPOCHS, EXP_TAG.
+# Required env: NW, WS, SEED, BATCH_SIZE, USE_CORRCA, EXP_TAG.
+# Optional env: LR (default 5e-4), WARMUP (default 5), EPOCHS (default 100),
+#               STD_COEFF (default 0.0), COV_COEFF (default 0.0),
+#               PRED_LOSS (default smooth_l1).
 # ---------------------------------------------------------------
 
 set -euo pipefail
@@ -29,13 +32,20 @@ export UV_LINK_MODE=copy
 : "${SEED:?need SEED}"
 : "${BATCH_SIZE:?need BATCH_SIZE}"
 : "${USE_CORRCA:?need USE_CORRCA (0 or 1)}"
-: "${LR:?need LR}"
-: "${WARMUP:?need WARMUP}"
-: "${EPOCHS:=100}"
 : "${EXP_TAG:?need EXP_TAG}"
 
+LR="${LR:-5e-4}"
+WARMUP="${WARMUP:-5}"
+EPOCHS="${EPOCHS:-100}"
+STD_COEFF="${STD_COEFF:-0.0}"
+COV_COEFF="${COV_COEFF:-0.0}"
+PRED_LOSS="${PRED_LOSS:-smooth_l1}"
+
 echo "Job ID: $SLURM_JOB_ID  Node: $SLURM_NODELIST"
-echo "Cfg: nw=${NW} ws=${WS} seed=${SEED} bs=${BATCH_SIZE} corrca=${USE_CORRCA} lr=${LR} warmup=${WARMUP} epochs=${EPOCHS} tag=${EXP_TAG}"
+echo "Cfg: nw=${NW} ws=${WS} seed=${SEED} bs=${BATCH_SIZE} corrca=${USE_CORRCA}"
+echo "      lr=${LR} warmup=${WARMUP} epochs=${EPOCHS}"
+echo "      std=${STD_COEFF} cov=${COV_COEFF} pred_loss=${PRED_LOSS}"
+echo "      tag=${EXP_TAG}"
 
 cd "$SLURM_SUBMIT_DIR"
 
@@ -55,7 +65,7 @@ if [ "${USE_CORRCA}" = "1" ]; then
     CORRCA_TRAIN_ARG="--data.corrca_filters=corrca_filters.npz"
 fi
 
-EXP_DIR="/projects/bbnv/kkokate/eb_jepa_eeg/checkpoints/issue8/${EXP_TAG}"
+EXP_DIR="/projects/bbnv/kkokate/eb_jepa_eeg/checkpoints/issue9/${EXP_TAG}"
 mkdir -p "$EXP_DIR"
 
 PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py \
@@ -74,14 +84,14 @@ PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py \
     --data.window_size_seconds="${WS}" \
     --data.norm_mode=per_recording \
     ${CORRCA_TRAIN_ARG} \
-    --loss.std_coeff=0.25 \
-    --loss.cov_coeff=0.25 \
-    --loss.pred_loss_type=smooth_l1 \
-    --logging.wandb_group="issue8D_${EXP_TAG}"
+    --loss.std_coeff="${STD_COEFF}" \
+    --loss.cov_coeff="${COV_COEFF}" \
+    --loss.pred_loss_type="${PRED_LOSS}" \
+    --logging.wandb_group="issue9A_${EXP_TAG}"
 
 CKPT="${EXP_DIR}/latest.pth.tar"
 if [ ! -f "$CKPT" ]; then
     echo "ERROR: no latest.pth.tar at $CKPT"
     exit 1
 fi
-echo "Phase D ${EXP_TAG} complete!  ckpt=${CKPT}"
+echo "Issue #9 Phase A ${EXP_TAG} complete!  ckpt=${CKPT}"

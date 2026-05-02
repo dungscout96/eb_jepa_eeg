@@ -25,6 +25,7 @@ See scripts/eval_phase1_probes_delta.py to submit all Phase 1 checkpoints.
 
 import copy
 import math
+import os
 from pathlib import Path
 
 import fire
@@ -861,13 +862,16 @@ def run(
     # ------------------------------------------------------------------
     try:
         import wandb
+        wandb_entity = os.environ.get("WANDB_ENTITY", "sccn")
         if wandb_run_id:
             wandb_run = wandb.init(
-                project=wandb_project, id=wandb_run_id, resume="must",
+                entity=wandb_entity, project=wandb_project,
+                id=wandb_run_id, resume="must",
             )
         else:
             ckpt_name = checkpoint_path.parent.name
             wandb_run = wandb.init(
+                entity=wandb_entity,
                 project=wandb_project,
                 group=wandb_group,
                 name=f"probe_eval_{ckpt_name}",

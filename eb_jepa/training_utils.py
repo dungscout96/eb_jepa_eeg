@@ -87,6 +87,7 @@ def setup_wandb(
             os.environ["WANDB_RESUME"] = "allow"
             wandb_config = {
                 "project": project,
+                "entity": os.environ.get("WANDB_ENTITY", "sccn"),
                 "dir": str(run_dir),
                 "config": config,
             }
@@ -104,6 +105,7 @@ def setup_wandb(
         # This prevents overwriting existing run metadata on W&B
         wandb_config = {
             "project": project,
+            "entity": os.environ.get("WANDB_ENTITY", "sccn"),
             "dir": str(run_dir),
             "id": existing_run_id,
             "resume": "must",  # "must" = fail if run doesn't exist (safer than "allow")
@@ -122,9 +124,11 @@ def setup_wandb(
             logger.warning(f"W&B run {existing_run_id} not found, creating new run")
             run_id_file.unlink()  # Remove stale run ID file
 
-    # NEW RUN: Pass all configuration
+    # NEW RUN: Pass all configuration. Default entity is sccn (lab account)
+    # unless WANDB_ENTITY is already exported in the environment.
     wandb_config = {
         "project": project,
+        "entity": os.environ.get("WANDB_ENTITY", "sccn"),
         "dir": str(run_dir),
         "config": config,
     }
