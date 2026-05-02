@@ -191,6 +191,13 @@ def run(
     global NUMERIC_FEATURES
     NUMERIC_FEATURES = feature_names
 
+    # Lever 1: when the stim-aligned InfoNCE auxiliary is active, the dataloader
+    # must emit (rec_idx, movie_id, position_bucket). Auto-enable so callers
+    # only need to set --loss.stim_nce_coeff=...
+    if float(cfg.loss.get("stim_nce_coeff", 0.0)) > 0 and not cfg.data.get("return_stim_meta", False):
+        OmegaConf.update(cfg, "data.return_stim_meta", True, force_add=True)
+        logger.info("Auto-enabled data.return_stim_meta=True (loss.stim_nce_coeff > 0)")
+
     train_set = JEPAMovieDataset(
         split="train",
         n_windows=cfg.data.n_windows,
@@ -304,16 +311,64 @@ def run(
             coeff=sigreg_cfg.get("coeff", 0.1),
         )
     elif cfg.loss.std_coeff > 0 or cfg.loss.cov_coeff > 0:
-        projector = Projector(f"{embed_dim}-{embed_dim * 4}-{embed_dim * 4}") if use_proj else None
-        regularizer = VCLoss(cfg.loss.std_coeff, cfg.loss.cov_coeff, proj=projector)
+        proj_spec = cfg.loss.get("proj_spec", None)
+        if use_proj:
+            spec = proj_spec if proj_spec else f"{embed_dim}-{embed_dim * 4}-{embed_dim * 4}"
+            projector = Projector(spec)
+        else:
+            projector = None
+        detach_enc = cfg.loss.get("detach_encoder", False)
+        regularizer = VCLoss(cfg.loss.std_coeff, cfg.loss.cov_coeff,
+                             proj=projector, detach_encoder=detach_enc)
 
     # Prediction loss type: "mse" (default) or "smooth_l1" (Huber, used in V-JEPA)
     pred_loss_type = cfg.loss.get("pred_loss_type", "mse")
+
+    # Direction C: envelope-auxiliary regression on per-window pooled features.
+    env_coeff = float(cfg.loss.get("env_coeff", 0.0))
+    env_aux_head = None
+    if env_coeff > 0:
+        from eb_jepa.architectures import EnvelopeAuxHead
+        env_aux_hidden = int(cfg.model.get("env_aux_hidden", 64))
+        env_aux_head = EnvelopeAuxHead(
+            embed_dim=embed_dim, n_features=n_features, hidden=env_aux_hidden,
+        )
+
+    # Optional iBOT-lite: global mean-pooled DINO objective on context vs target tokens.
+    dino_coeff = float(cfg.loss.get("dino_coeff", 0.0))
+    dino_head = dino_target_head = dino_loss_fn = None
+    if dino_coeff > 0 and use_ema:
+        from eb_jepa.dino_head import DINOHead, DINOLoss
+        dino_K = int(cfg.model.get("dino_K", 4096))
+        dino_hidden = int(cfg.model.get("dino_hidden", 2048))
+        dino_bottleneck = int(cfg.model.get("dino_bottleneck", 256))
+        dino_head = DINOHead(in_dim=embed_dim, hidden_dim=dino_hidden,
+                             bottleneck_dim=dino_bottleneck, K=dino_K)
+        dino_target_head = DINOHead(in_dim=embed_dim, hidden_dim=dino_hidden,
+                                    bottleneck_dim=dino_bottleneck, K=dino_K)
+        dino_target_head.load_state_dict(dino_head.state_dict())
+        dino_loss_fn = DINOLoss(K=dino_K,
+                                t_s=float(cfg.loss.get("dino_t_s", 0.1)),
+                                t_t=float(cfg.loss.get("dino_t_t", 0.04)),
+                                m_c=float(cfg.loss.get("dino_m_c", 0.9)))
+
+    # Lever 1: cross-subject stim-aligned InfoNCE auxiliary loss.
+    stim_nce_coeff = float(cfg.loss.get("stim_nce_coeff", 0.0))
+    stim_nce_loss = None
+    if stim_nce_coeff > 0:
+        from eb_jepa.losses import CrossSubjectStimNCELoss
+        stim_nce_loss = CrossSubjectStimNCELoss(
+            tau=float(cfg.loss.get("stim_nce_tau", 0.1))
+        )
 
     if use_ema:
         jepa = MaskedJEPA(
             encoder, target_encoder, predictor, mask_collator, regularizer,
             pred_loss_type=pred_loss_type,
+            dino_head=dino_head, dino_target_head=dino_target_head,
+            dino_loss_fn=dino_loss_fn, dino_coeff=dino_coeff,
+            env_aux_head=env_aux_head, env_coeff=env_coeff,
+            stim_nce_loss=stim_nce_loss, stim_nce_coeff=stim_nce_coeff,
         ).to(device)
     else:
         jepa = MaskedJEPANoEMA(
@@ -375,6 +430,10 @@ def run(
     jepa_params = list(jepa.context_encoder.parameters()) + list(jepa.predictor.parameters())
     if jepa.regularizer is not None:
         jepa_params += [p for p in jepa.regularizer.parameters() if p.requires_grad]
+    if getattr(jepa, "dino_head", None) is not None:
+        jepa_params += [p for p in jepa.dino_head.parameters() if p.requires_grad]
+    if getattr(jepa, "env_aux_head", None) is not None:
+        jepa_params += [p for p in jepa.env_aux_head.parameters() if p.requires_grad]
     optimizer = Adam(jepa_params, lr=cfg.optim.lr)
     probe_optimizer = Adam(
         list(regression_probe.head.parameters())
@@ -454,14 +513,25 @@ def run(
             disable=cfg.logging.get("tqdm_silent", False),
         )
 
-        for eeg, features, probe_labels in pbar:
+        for batch in pbar:
+            # Backwards-compatible unpacking: dataset returns 3-tuple by default,
+            # 4-tuple (with stim_meta) when return_stim_meta=True (Lever 1).
+            if len(batch) == 4:
+                eeg, features, probe_labels, stim_meta = batch
+                stim_meta = stim_meta.to(device)
+            else:
+                eeg, features, probe_labels = batch
+                stim_meta = None
             eeg = eeg.to(device)
             features = features.to(device)  # [B, T, n_features]
             # probe_labels: [B] float (NaN where no subject metadata) — stays on CPU
 
             # --- Masked JEPA pretraining ---
             optimizer.zero_grad()
-            jepa_loss, loss_dict = jepa(eeg)
+            # Pass per-window features as env_targets when envelope-aux is active;
+            # MaskedJEPA.forward only consumes them when env_coeff > 0.
+            # Pass stim_meta when Lever-1 InfoNCE auxiliary is active.
+            jepa_loss, loss_dict = jepa(eeg, env_targets=features, stim_meta=stim_meta)
             jepa_loss.backward()
             torch.nn.utils.clip_grad_norm_(
                 list(jepa.context_encoder.parameters())

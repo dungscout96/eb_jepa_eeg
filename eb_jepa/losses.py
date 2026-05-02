@@ -29,16 +29,19 @@ class SquareLossSeq(nn.Module):
 class VCLoss(nn.Module):
     """Variance-Covariance loss attracting means to zero and covariance to identity."""
 
-    def __init__(self, std_coeff, cov_coeff, proj=None):
+    def __init__(self, std_coeff, cov_coeff, proj=None, detach_encoder=False):
         super().__init__()
         self.std_coeff = std_coeff
         self.cov_coeff = cov_coeff
         self.proj = nn.Identity() if proj is None else proj
         self.std_loss_fn = HingeStdLoss(std_margin=1.0)
         self.cov_loss_fn = CovarianceLoss()
+        self.detach_encoder = detach_encoder
 
     def forward(self, x, actions=None):
         x = x.transpose(0, 1).flatten(1).transpose(0, 1)  # [B*T*H*W, C]
+        if self.detach_encoder:
+            x = x.detach()
         fx = self.proj(x)  # [B*T*H*W, C']
 
         std_loss = self.std_loss_fn(fx)
@@ -438,3 +441,68 @@ class SIGRegLoss(nn.Module):
         sigreg = epps_pulley(proj).mean()
         weighted = self.coeff * sigreg
         return weighted, sigreg, {"sigreg_loss": sigreg.item()}
+
+
+class CrossSubjectStimNCELoss(nn.Module):
+    """Cross-subject stimulus-aligned InfoNCE.
+
+    Pulls clip embeddings together when they share (movie_id, position_bucket)
+    across DIFFERENT recordings (= different subjects). Pushes apart clips at
+    different stim-times. Adds a positive gradient toward stim-driven
+    structure that the masked-prediction loss alone does not provide.
+
+    Reference: CPC (van den Oord, Li, Vinyals 2018, arXiv:1807.03748);
+    cross-subject construction follows Cheng et al. 2020 (arXiv:2007.04871).
+
+    The forward expects an L2-normalisable global clip embedding of shape
+    [B, D] and a meta tensor [B, 3] holding (rec_idx, movie_id, pos_bucket)
+    as integer ids. Anchors with no positive in the batch are excluded so
+    the loss is robust to small or skewed batches.
+    """
+
+    def __init__(self, tau: float = 0.1):
+        super().__init__()
+        self.tau = float(tau)
+
+    def forward(self, z: torch.Tensor, meta: torch.Tensor) -> tuple:
+        if z.ndim != 2:
+            raise ValueError(f"z must be [B, D], got {tuple(z.shape)}")
+        if meta.ndim != 2 or meta.shape[1] != 3:
+            raise ValueError(
+                f"meta must be [B, 3] with (rec, movie, pos_bucket), got {tuple(meta.shape)}"
+            )
+
+        B = z.size(0)
+        z = F.normalize(z, dim=-1)
+        sim = (z @ z.T) / self.tau  # [B, B]
+
+        rec, mov, pos = meta[:, 0], meta[:, 1], meta[:, 2]
+        same_stim = (mov[:, None] == mov[None, :]) & (pos[:, None] == pos[None, :])
+        diff_rec = rec[:, None] != rec[None, :]
+        pos_mask = same_stim & diff_rec  # [B, B]
+
+        eye = torch.eye(B, dtype=torch.bool, device=z.device)
+        sim = sim.masked_fill(eye, float("-inf"))
+        log_p = sim - torch.logsumexp(sim, dim=-1, keepdim=True)  # [B, B]
+
+        pos_count = pos_mask.float().sum(dim=-1)  # [B]
+        valid = pos_count > 0
+        if valid.sum() == 0:
+            zero = z.new_zeros(())
+            return zero, zero, {
+                "stim_nce_loss": 0.0,
+                "stim_nce_n_anchors": 0,
+                "stim_nce_pos_per_anchor": 0.0,
+            }
+
+        # torch.where avoids -inf * 0 = NaN at the self-diagonal entries; the
+        # diagonal of log_p was set to -inf via masked_fill above.
+        masked_log_p = torch.where(pos_mask, log_p, torch.zeros_like(log_p))
+        per_anchor = -masked_log_p.sum(dim=-1) / pos_count.clamp(min=1)
+        loss = per_anchor[valid].mean()
+        info = {
+            "stim_nce_loss": loss.item(),
+            "stim_nce_n_anchors": int(valid.sum().item()),
+            "stim_nce_pos_per_anchor": float(pos_count[valid].mean().item()),
+        }
+        return loss, loss.detach(), info

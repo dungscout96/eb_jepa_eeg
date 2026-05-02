@@ -28,6 +28,11 @@ data:
   max_recording_overshoot_s: 60.0
   trial_stop_offset_s: 0.1
   visual_processing_delay_s: 0.3
+  # Lever 1 (cross-subject stim-aligned InfoNCE) requires the dataloader to
+  # emit per-clip (rec_idx, movie_id, position_bucket). Auto-enabled at runtime
+  # when loss.stim_nce_coeff > 0; can be set explicitly here for diagnostics.
+  return_stim_meta: false
+  stim_position_bucket_size: 4.0   # seconds per stim-time bucket
 
 model:
   # REVE encoder architecture (n_chans auto-detected from data)
@@ -73,6 +78,12 @@ loss:
     num_slices: 256   # Number of random projection directions
     coeff: 0.1        # SIGReg loss weight (lambda)
   pred_loss_type: mse  # Prediction loss: "mse" or "smooth_l1" (Huber, used in V-JEPA)
+  # Lever 1: cross-subject stim-aligned InfoNCE auxiliary loss (issue10).
+  # When > 0, requires data.return_stim_meta=true. tau follows CPC default 0.1.
+  stim_nce_coeff: 0.0
+  stim_nce_tau: 0.1
+  # Direction C: envelope/stim auxiliary regression head (legacy, separate path).
+  env_coeff: 0.0
 
 optim:
   epochs: 100

@@ -258,7 +258,8 @@ class MaskedJEPA(nn.Module):
     def __init__(self, context_encoder, target_encoder, predictor, mask_collator, regularizer=None,
                  pred_loss_type="mse",
                  dino_head=None, dino_target_head=None, dino_loss_fn=None, dino_coeff: float = 0.0,
-                 env_aux_head=None, env_coeff: float = 0.0):
+                 env_aux_head=None, env_coeff: float = 0.0,
+                 stim_nce_loss=None, stim_nce_coeff: float = 0.0):
         super().__init__()
         self.context_encoder = context_encoder
         self.target_encoder = target_encoder
@@ -277,6 +278,10 @@ class MaskedJEPA(nn.Module):
         self.env_aux_head = env_aux_head
         self.env_coeff = env_coeff
 
+        # Lever 1: cross-subject stim-aligned InfoNCE auxiliary loss.
+        self.stim_nce_loss = stim_nce_loss
+        self.stim_nce_coeff = float(stim_nce_coeff)
+
         # Freeze target encoder
         for p in self.target_encoder.parameters():
             p.requires_grad = False
@@ -293,7 +298,12 @@ class MaskedJEPA(nn.Module):
             for p_ctx, p_tgt in zip(self.dino_head.parameters(), self.dino_target_head.parameters()):
                 p_tgt.data.lerp_(p_ctx.data, 1.0 - momentum)
 
-    def forward(self, eeg: torch.Tensor, env_targets: torch.Tensor = None) -> tuple[torch.Tensor, dict]:
+    def forward(
+        self,
+        eeg: torch.Tensor,
+        env_targets: torch.Tensor = None,
+        stim_meta: torch.Tensor = None,
+    ) -> tuple[torch.Tensor, dict]:
         """Forward pass: mask, encode, predict, compute loss.
 
         Args:
@@ -301,6 +311,9 @@ class MaskedJEPA(nn.Module):
             env_targets: [B, T, n_features] optional per-window stimulus targets for
                          envelope-auxiliary regression (Direction C). Required when
                          self.env_coeff > 0.
+            stim_meta: [B, 3] long tensor of (rec_idx, movie_id, position_bucket) for
+                         the cross-subject stim-aligned InfoNCE auxiliary loss
+                         (Lever 1). Required when self.stim_nce_coeff > 0.
 
         Returns:
             (total_loss, loss_dict) where loss_dict contains individual loss components
@@ -387,7 +400,28 @@ class MaskedJEPA(nn.Module):
             env_loss = F.smooth_l1_loss(env_pred, env_targets.to(device))
             loss_dict["env_loss"] = env_loss.item()
 
-        total_loss = pred_loss + reg_loss + self.dino_coeff * dino_loss + self.env_coeff * env_loss
+        # 11. Lever 1: cross-subject stim-aligned InfoNCE — optional
+        stim_nce_loss = torch.tensor(0.0, device=device)
+        if self.stim_nce_coeff > 0 and self.stim_nce_loss is not None:
+            if stim_meta is None:
+                raise ValueError(
+                    "stim_meta required when stim_nce_coeff > 0; "
+                    "pass return_stim_meta=True to JEPAMovieDataset."
+                )
+            # Re-encode full sequence (with grad) and pool to a per-clip global
+            # embedding [B, D]. Mean over all C·T·P tokens — same as DINO global.
+            full_tokens = self.context_encoder.encode_tokens(eeg, mask=None)
+            z_clip = full_tokens.mean(dim=1)  # [B, D]
+            stim_nce_loss, _, stim_info = self.stim_nce_loss(z_clip, stim_meta.to(device))
+            loss_dict.update(stim_info)
+
+        total_loss = (
+            pred_loss
+            + reg_loss
+            + self.dino_coeff * dino_loss
+            + self.env_coeff * env_loss
+            + self.stim_nce_coeff * stim_nce_loss
+        )
         loss_dict["total_loss"] = total_loss.item()
 
         return total_loss, loss_dict

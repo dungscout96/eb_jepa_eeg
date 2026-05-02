@@ -741,6 +741,7 @@ class HBNMovieDataset(Dataset):
                     subj_meta = _extract_recording_metadata(window_meta_df)
                 except Exception:
                     subj_meta = {}
+                subj_meta["task"] = t  # movie name; used for cross-subject stim alignment
 
                 self._fif_paths.append(fif_path)
                 self._crop_inds.append(crop_inds)
@@ -847,6 +848,17 @@ class JEPAMovieDataset(HBNMovieDataset):
         self.feature_names = feature_names or self.DEFAULT_FEATURES
         self._norm_mode = cfg.get("norm_mode", "global") if not isinstance(cfg, dict) else cfg.get("norm_mode", "global")
         self._add_envelope = cfg.get("add_envelope", False) if not isinstance(cfg, dict) else cfg.get("add_envelope", False)
+        # Cross-subject stim-aligned InfoNCE support: returning per-clip
+        # (rec_idx, movie_id, position_bucket) lets the loss build same-stim
+        # positives across recordings within a batch.
+        self._return_stim_meta = bool(
+            cfg.get("return_stim_meta", False) if not isinstance(cfg, dict)
+            else cfg.get("return_stim_meta", False)
+        )
+        self._stim_position_bucket_size = float(
+            cfg.get("stim_position_bucket_size", 4.0) if not isinstance(cfg, dict)
+            else cfg.get("stim_position_bucket_size", 4.0)
+        )
         # CorrCA spatial filters: project 129 channels → k stimulus-driven components
         corrca_path = cfg.get("corrca_filters", None) if not isinstance(cfg, dict) else cfg.get("corrca_filters", None)
         self._corrca_W = None
@@ -902,6 +914,13 @@ class JEPAMovieDataset(HBNMovieDataset):
         self._crop_inds = filtered_crops
         self._recording_metadata = filtered_metadata
         del self.labels  # labels are now in feature_recordings
+
+        # Stim-alignment auxiliary indexing: build task→id and per-recording task_id.
+        unique_tasks = sorted({m.get("task", "_unknown") for m in self._recording_metadata})
+        self._task_to_id: dict[str, int] = {t: i for i, t in enumerate(unique_tasks)}
+        self._task_id_per_recording = [
+            self._task_to_id[m.get("task", "_unknown")] for m in self._recording_metadata
+        ]
 
         # Derive binary probe labels from subject metadata (age / sex).
         # Falls back to all-NaN if metadata is not available; the sanity
@@ -1067,7 +1086,22 @@ class JEPAMovieDataset(HBNMovieDataset):
         # NaN means metadata was unavailable for this recording.
         probe_label = torch.tensor(self._probe_labels[idx], dtype=torch.float32)
 
-        return eeg, feats[indices], probe_label
+        if not self._return_stim_meta:
+            return eeg, feats[indices], probe_label
+
+        # Cross-subject stim-alignment metadata: (rec_idx, movie_id, pos_bucket).
+        # Position bucket = floor(mean position_in_movie of clip / bucket_size).
+        # 'position_in_movie' is in seconds inside the feature tensor.
+        feat_idx_pos = self.feature_names.index("position_in_movie") \
+            if "position_in_movie" in self.feature_names else None
+        if feat_idx_pos is None:
+            pos_bucket = 0
+        else:
+            mean_pos = float(feats[indices, feat_idx_pos].mean().item())
+            pos_bucket = int(mean_pos // max(self._stim_position_bucket_size, 1e-6))
+        movie_id = int(self._task_id_per_recording[idx])
+        stim_meta = torch.tensor([int(idx), movie_id, pos_bucket], dtype=torch.long)
+        return eeg, feats[indices], probe_label, stim_meta
 
     @staticmethod
     def _append_lowfreq_envelope(eeg: torch.Tensor) -> torch.Tensor:
