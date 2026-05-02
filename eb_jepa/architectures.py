@@ -867,17 +867,22 @@ class EEGEncoderTokens(nn.Module):
         tokens = self.transformer(tokens)
         return tokens
 
-    def pool_to_windows(self, tokens: torch.Tensor) -> torch.Tensor:
+    def pool_to_windows(self, tokens: torch.Tensor,
+                        keep_channels: bool = False) -> torch.Tensor:
         """Pool full (unmasked) token sequence to per-window representations.
 
-        Reshapes [B, C*T*P, D] → [B, C, T, P, D], mean-pools over C and P
-        per window → [B, T, D], then formats as [B, D, T, 1, 1] for probes.
+        Reshapes [B, C*T*P, D] → [B, C, T, P, D] then mean-pools over patches
+        and (by default) channels. With ``keep_channels=True`` the channel
+        axis is concatenated into the feature dim instead of averaged, giving
+        probes per-CorrCA-channel resolution. With 5-component CorrCA that's
+        the difference between a 64-D and a 320-D probe input.
 
         Args:
             tokens: [B, C*T*P, embed_dim] — must be full (unmasked) token sequence
+            keep_channels: if True, return [B, C*embed_dim, T, 1, 1].
 
         Returns:
-            [B, embed_dim, T, 1, 1]
+            [B, embed_dim, T, 1, 1] or [B, C*embed_dim, T, 1, 1].
         """
         B = tokens.shape[0]
         C = self.n_chans
@@ -885,13 +890,13 @@ class EEGEncoderTokens(nn.Module):
         P = self.n_patches_per_window
         D = self.embed_dim
 
-        # Reshape: [B, C, T, P, D]
         x = tokens.view(B, C, T, P, D)
-        # Mean pool over channels and patches: [B, T, D]
-        x = x.mean(dim=(1, 3))
-        # Format for MovieFeatureHead: [B, D, T, 1, 1]
-        x = x.permute(0, 2, 1).unsqueeze(-1).unsqueeze(-1)
-        return x
+        if keep_channels:
+            x = x.mean(dim=3)                              # [B, C, T, D]
+            x = x.permute(0, 2, 1, 3).reshape(B, T, C * D) # [B, T, C*D]
+        else:
+            x = x.mean(dim=(1, 3))                         # [B, T, D]
+        return x.permute(0, 2, 1).unsqueeze(-1).unsqueeze(-1)
 
 
 class MaskedPredictor(nn.Module):

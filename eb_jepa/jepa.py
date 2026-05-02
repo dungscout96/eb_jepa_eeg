@@ -344,17 +344,24 @@ class MaskedJEPA(nn.Module):
         return total_loss, loss_dict
 
     @torch.no_grad()
-    def encode(self, eeg: torch.Tensor) -> torch.Tensor:
+    def encode(self, eeg: torch.Tensor,
+               keep_channels: bool = False) -> torch.Tensor:
         """Encode EEG without masking (for probes).
 
         Args:
             eeg: [B, T, C, W]
+            keep_channels: if True, ``pool_to_windows`` keeps the CorrCA
+                channel axis (concatenated into the feature dim →
+                [B, C*D, T, 1, 1]) instead of averaging it. See
+                ``EEGEncoderTokens.pool_to_windows``.
 
         Returns:
-            [B, D, T, 1, 1] pooled per-window representations
+            [B, D, T, 1, 1] (default) or [B, C*D, T, 1, 1] (keep_channels=True).
         """
         tokens = self.context_encoder.encode_tokens(eeg, mask=None)
-        return self.context_encoder.pool_to_windows(tokens)
+        return self.context_encoder.pool_to_windows(
+            tokens, keep_channels=keep_channels,
+        )
 
 
 class MaskedJEPANoEMA(nn.Module):
@@ -432,9 +439,12 @@ class MaskedJEPANoEMA(nn.Module):
         return total_loss, loss_dict
 
     @torch.no_grad()
-    def encode(self, eeg: torch.Tensor) -> torch.Tensor:
+    def encode(self, eeg: torch.Tensor,
+               keep_channels: bool = False) -> torch.Tensor:
         tokens = self.context_encoder.encode_tokens(eeg, mask=None)
-        return self.context_encoder.pool_to_windows(tokens)
+        return self.context_encoder.pool_to_windows(
+            tokens, keep_channels=keep_channels,
+        )
 
     def update_target_encoder(self, momentum: float):
         """No-op — no EMA in this architecture."""
@@ -445,18 +455,19 @@ class MaskedJEPAProbe(nn.Module):
     """Probe for MaskedJEPA: trains a head on frozen encoder representations.
 
     Similar to JEPAProbe but works with MaskedJEPA's token-based encoder.
+    Pass ``keep_channels=True`` to expose per-CorrCA-channel state to the
+    probe head (probe input dim grows from D to C*D).
     """
 
-    def __init__(self, masked_jepa, head, hcost):
+    def __init__(self, masked_jepa, head, hcost, keep_channels: bool = False):
         super().__init__()
         self.masked_jepa = masked_jepa
         self.head = head
         self.hcost = hcost
+        self.keep_channels = keep_channels
 
     def forward(self, eeg, targets):
-        """Forward pass: encode with frozen MaskedJEPA, apply head, compute loss."""
         with torch.no_grad():
-            # Encode without masking, pool to [B, D, T, 1, 1]
-            state = self.masked_jepa.encode(eeg)
+            state = self.masked_jepa.encode(eeg, keep_channels=self.keep_channels)
         output = self.head(state.detach())
         return self.hcost(output, targets)
