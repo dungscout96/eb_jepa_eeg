@@ -526,7 +526,7 @@ def run(
                 )
                 from sklearn.linear_model import LogisticRegression as _SkLR_mid
                 mid = _SkLR_mid(
-                    C=1.0, solver="lbfgs", max_iter=2000, multi_class="multinomial",
+                    C=1.0, solver="lbfgs", max_iter=2000,
                 ).fit(X_train_clip, bin_train)
                 # decision_function = (n, n_classes) for multinomial
                 logits_clip = mid.decision_function(X_clip).astype(np.float32)
