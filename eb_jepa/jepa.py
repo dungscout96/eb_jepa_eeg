@@ -317,13 +317,39 @@ class MaskedJEPA(nn.Module):
         predictions = self.predictor(ctx_tokens, ctx_pos, tgt_pos)  # [B, n_pred, D]
 
         # 7. Prediction loss between predictions and target representations
+        tgt_detached = tgt_representations.detach()
         if self.pred_loss_type == "smooth_l1":
-            pred_loss = F.smooth_l1_loss(predictions, tgt_representations.detach())
+            pred_loss = F.smooth_l1_loss(predictions, tgt_detached)
         else:
-            pred_loss = F.mse_loss(predictions, tgt_representations.detach())
+            pred_loss = F.mse_loss(predictions, tgt_detached)
+
+        # 7b. Diagnostic metrics — distinguish "predictor learning" from
+        # "targets expanding under VC regularizer" (see issue: rising raw
+        # pred_loss while downstream regression improves).
+        with torch.no_grad():
+            # Cosine similarity per token, averaged — scale-invariant
+            # measure of prediction quality.
+            pred_target_cosim = F.cosine_similarity(
+                predictions, tgt_detached, dim=-1
+            ).mean()
+            # Per-dim variance of targets, averaged across dims. Tracks
+            # how much the EMA target distribution is expanding.
+            tgt_flat = tgt_detached.reshape(-1, tgt_detached.shape[-1])
+            target_var = tgt_flat.var(dim=0).mean()
+            pred_flat = predictions.reshape(-1, predictions.shape[-1])
+            pred_var = pred_flat.var(dim=0).mean()
+            # Normalized pred loss: scale-corrected MSE. Should fall even
+            # when raw pred_loss rises if the predictor is genuinely learning.
+            pred_loss_norm = pred_loss.detach() / target_var.clamp_min(1e-8)
 
         # 8. Regularizer loss (optional, on context representations)
-        loss_dict = {"pred_loss": pred_loss.item()}
+        loss_dict = {
+            "pred_loss": pred_loss.item(),
+            "pred_target_cosim": pred_target_cosim.item(),
+            "target_var": target_var.item(),
+            "pred_var": pred_var.item(),
+            "pred_loss_norm": pred_loss_norm.item(),
+        }
         reg_loss = torch.tensor(0.0, device=device)
         if self.regularizer is not None:
             from eb_jepa.losses import SIGRegLoss
@@ -420,8 +446,26 @@ class MaskedJEPANoEMA(nn.Module):
         else:
             pred_loss = F.mse_loss(predictions, tgt_representations)
 
+        # 7b. Diagnostic metrics (see MaskedJEPA.forward for rationale).
+        with torch.no_grad():
+            tgt_d = tgt_representations.detach()
+            pred_target_cosim = F.cosine_similarity(
+                predictions.detach(), tgt_d, dim=-1
+            ).mean()
+            tgt_flat = tgt_d.reshape(-1, tgt_d.shape[-1])
+            pred_flat = predictions.detach().reshape(-1, predictions.shape[-1])
+            target_var = tgt_flat.var(dim=0).mean()
+            pred_var = pred_flat.var(dim=0).mean()
+            pred_loss_norm = pred_loss.detach() / target_var.clamp_min(1e-8)
+
         # 8. SIGReg on mean-pooled encoder embeddings [B, D] to avoid OOM
-        loss_dict = {"pred_loss": pred_loss.item()}
+        loss_dict = {
+            "pred_loss": pred_loss.item(),
+            "pred_target_cosim": pred_target_cosim.item(),
+            "target_var": target_var.item(),
+            "pred_var": pred_var.item(),
+            "pred_loss_norm": pred_loss_norm.item(),
+        }
         reg_loss = torch.tensor(0.0, device=device)
         if self.regularizer is not None:
             from eb_jepa.losses import SIGRegLoss
