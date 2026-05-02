@@ -36,10 +36,8 @@ echo "Job ID: $SLURM_JOB_ID  Node: $SLURM_NODELIST  Tag: $EXP_TAG"
 cd "$SLURM_SUBMIT_DIR"
 mkdir -p logs "$EXP_DIR"
 
-module reset
-module load miniforge3-python
-eval "$(conda shell.bash hook)"
-conda activate eb_jepa
+# dtyoung Delta env: uv-managed .venv (no conda env). uv lives in ~/.local/bin.
+export PATH="$HOME/.local/bin:$PATH"
 
 if [ -f "$HOME/.wandb_key" ]; then
     export WANDB_API_KEY=$(cat "$HOME/.wandb_key")
