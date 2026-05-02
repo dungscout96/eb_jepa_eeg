@@ -35,10 +35,15 @@ mkdir -p logs
 
 submit_one() {
     local tag=$1; shift
+    # Remaining args are KEY=VALUE pairs to forward into the job env.
+    local extra
+    extra=$(IFS=,; echo "$*")
     for ps in "${PROBE_SEEDS[@]}"; do
-        sbatch \
-            --export=ALL,CKPT="$CKPT",NW="$NW",WS="$WS",BATCH_SIZE="$BATCH_SIZE",PROBE_SEED="$ps",EXP_TAG="$tag","$@" \
-            scripts/probe_eval_phase1.sbatch
+        local export_str="ALL,CKPT=${CKPT},NW=${NW},WS=${WS},BATCH_SIZE=${BATCH_SIZE},PROBE_SEED=${ps},EXP_TAG=${tag}"
+        if [ -n "$extra" ]; then
+            export_str="${export_str},${extra}"
+        fi
+        sbatch --export="$export_str" scripts/probe_eval_phase1.sbatch
     done
 }
 
