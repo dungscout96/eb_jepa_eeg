@@ -64,6 +64,7 @@ PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py \
     --data.batch_size=64 \
     --data.n_windows=4 \
     --data.window_size_seconds=2 \
+    --data.task=ThePresent \
     --data.norm_mode=per_recording \
     --data.corrca_filters=corrca_filters.npz \
     --loss.std_coeff=0.25 \
