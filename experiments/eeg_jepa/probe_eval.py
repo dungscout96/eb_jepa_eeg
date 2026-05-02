@@ -60,7 +60,7 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 def _embed_all_clips(dataset, jepa, device, batch_size, num_workers,
-                     max_clips_per_rec=4):
+                     max_clips_per_rec=4, keep_channels=False):
     """Encode a few clips per recording, return per-recording mean embeddings.
 
     Sub-samples up to ``max_clips_per_rec`` evenly spaced clips per recording
@@ -107,8 +107,10 @@ def _embed_all_clips(dataset, jepa, device, batch_size, num_workers,
             eeg = eeg.unsqueeze(0).to(device)  # [1, n_windows, C, T]
 
             with torch.no_grad():
-                tokens = jepa.context_encoder.encode_tokens(eeg, mask=None)
-                emb = tokens.mean(dim=1)  # [1, D]
+                # Stage-aware: jepa.encode → [1, D, T, 1, 1] (or [1, C*D, T, 1, 1]
+                # when keep_channels), then mean over T windows.
+                state = jepa.encode(eeg, keep_channels=keep_channels)
+                emb = state.squeeze(-1).squeeze(-1).mean(dim=2)  # [1, D] or [1, C*D]
             clip_embs.append(emb.squeeze(0).cpu())
 
         if clip_embs:
@@ -267,12 +269,13 @@ def _eval_reg_probe(probe, embs, labels, device, y_mean, y_std):
 # Movie identity probe helpers
 # ---------------------------------------------------------------------------
 
-def _embed_clips_with_position(loader, jepa, device, pos_feature_idx):
+def _embed_clips_with_position(loader, jepa, device, pos_feature_idx,
+                               keep_channels=False):
     """Encode all clips in a DataLoader, return embeddings and positions.
 
     Returns
     -------
-    embs : np.ndarray [N_clips, D]
+    embs : np.ndarray [N_clips, D]  (or [N_clips, C*D] when keep_channels)
     positions : np.ndarray [N_clips]  — position_in_movie value per clip
     """
     jepa.eval()
@@ -281,8 +284,8 @@ def _embed_clips_with_position(loader, jepa, device, pos_feature_idx):
     for eeg, features, _ in loader:
         eeg = eeg.to(device)
         with torch.no_grad():
-            tokens = jepa.context_encoder.encode_tokens(eeg, mask=None)
-            emb = tokens.mean(dim=1)  # [B, D]
+            state = jepa.encode(eeg, keep_channels=keep_channels)  # [B, D, T, 1, 1]
+            emb = state.squeeze(-1).squeeze(-1).mean(dim=2)  # [B, D] or [B, C*D]
         all_embs.append(emb.cpu().numpy())
         # position_in_movie: mean over n_windows dimension
         pos = features[:, :, pos_feature_idx].mean(dim=1).numpy()  # [B]
@@ -373,6 +376,11 @@ def run(
     shuffle_position_within_rec: bool = False,
     # Prediction dump (for post-hoc bootstrap CIs over recordings)
     save_predictions_dir: str = "",
+    # Per-CorrCA-channel probing: when True, pool_to_windows pools only
+    # over patches → [B, C*D, T, 1, 1]. Probe head input grows from D to
+    # C*D (5*64=320 with 5-component CorrCA). Recovers narrative + boosts
+    # subject probes. Default False matches the long-standing baseline.
+    keep_channels: bool = False,
     # W&B
     wandb_run_id: str = "",
     wandb_project: str = "eb_jepa",
@@ -573,6 +581,15 @@ def run(
         p.requires_grad_(False)
     jepa.eval()
 
+    # Movie-feature probe-head input dim grows from D to C*D when channels
+    # are preserved at the pool boundary; subject + movie-id probes auto-
+    # resize from the embedding tensor shape.
+    movie_head_in_dim = embed_dim * (n_chans if keep_channels else 1)
+    logger.info(
+        "Probe input dim: %d (keep_channels=%s, embed_dim=%d, n_chans=%d)",
+        movie_head_in_dim, keep_channels, embed_dim, n_chans,
+    )
+
     # ------------------------------------------------------------------
     # Movie-feature probes (per-clip, same as online probes during training)
     # ------------------------------------------------------------------
@@ -584,10 +601,14 @@ def run(
         )
         cls_loss_fn = ClassificationLoss(feature_median.to(device))
 
-        reg_head = MovieFeatureHead(embed_dim, cfg.model.hdec, n_features)
-        cls_head = MovieFeatureHead(embed_dim, cfg.model.hdec, n_features)
-        regression_probe = MaskedJEPAProbe(jepa, reg_head, reg_loss_fn).to(device)
-        classification_probe = MaskedJEPAProbe(jepa, cls_head, cls_loss_fn).to(device)
+        reg_head = MovieFeatureHead(movie_head_in_dim, cfg.model.hdec, n_features)
+        cls_head = MovieFeatureHead(movie_head_in_dim, cfg.model.hdec, n_features)
+        regression_probe = MaskedJEPAProbe(
+            jepa, reg_head, reg_loss_fn, keep_channels=keep_channels,
+        ).to(device)
+        classification_probe = MaskedJEPAProbe(
+            jepa, cls_head, cls_loss_fn, keep_channels=keep_channels,
+        ).to(device)
 
         movie_probe_opt = Adam(
             list(regression_probe.head.parameters())
@@ -631,7 +652,10 @@ def run(
 
     if has_metadata:
         logger.info("Embedding train recordings for subject-trait probes...")
-        train_embs, train_meta = _embed_all_clips(train_set, jepa, device, batch_size, num_workers)
+        train_embs, train_meta = _embed_all_clips(
+            train_set, jepa, device, batch_size, num_workers,
+            keep_channels=keep_channels,
+        )
         train_labels_dict = _extract_subject_labels(train_meta)
         # Capture train median age so eval splits use the same threshold
         train_ages = np.array([float(m["age"]) for m in train_meta if "age" in m])
@@ -670,7 +694,7 @@ def run(
     if pos_idx is not None:
         logger.info("Encoding train clips for movie identity probe (%d bins)...", n_bins)
         train_clip_embs, train_positions = _embed_clips_with_position(
-            train_loader, jepa, device, pos_idx
+            train_loader, jepa, device, pos_idx, keep_channels=keep_channels,
         )
         logger.info("  %d clips, position range [%.1f, %.1f]",
                      len(train_clip_embs), train_positions.min(), train_positions.max())
@@ -717,7 +741,7 @@ def run(
                 with torch.no_grad():
                     for eeg, features, _ in loader:
                         eeg = eeg.to(device)
-                        state = jepa.encode(eeg)
+                        state = jepa.encode(eeg, keep_channels=keep_channels)
                         reg_p.append(regression_probe.head(state).cpu().numpy())
                         cls_p.append(classification_probe.head(state).cpu().numpy())
                         tgt.append(features.numpy())
@@ -733,7 +757,7 @@ def run(
         if movie_id_probe is not None:
             logger.info("Evaluating movie identity probe on %s...", split)
             eval_clip_embs, eval_positions = _embed_clips_with_position(
-                loader, jepa, device, pos_idx
+                loader, jepa, device, pos_idx, keep_channels=keep_channels,
             )
             mid_metrics = _eval_movie_id_probe(
                 movie_id_probe, eval_clip_embs, eval_positions, device, movie_id_bin_edges
@@ -753,7 +777,8 @@ def run(
         if subject_probes:
             logger.info("Embedding %s recordings for subject-trait probes...", split)
             eval_embs, eval_meta = _embed_all_clips(
-                eval_sets[split], jepa, device, batch_size, num_workers
+                eval_sets[split], jepa, device, batch_size, num_workers,
+                keep_channels=keep_channels,
             )
             eval_labels_dict = _extract_subject_labels(eval_meta, median_age=_train_median_age)
             logger.info("  %d recordings", len(eval_embs))
