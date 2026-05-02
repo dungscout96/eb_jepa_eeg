@@ -60,7 +60,7 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 def _embed_all_clips(dataset, jepa, device, batch_size, num_workers,
-                     max_clips_per_rec=4):
+                     max_clips_per_rec=4, *, encode_kwargs=None):
     """Encode a few clips per recording, return per-recording mean embeddings.
 
     Sub-samples up to ``max_clips_per_rec`` evenly spaced clips per recording
@@ -73,6 +73,7 @@ def _embed_all_clips(dataset, jepa, device, batch_size, num_workers,
     metadata   : list[dict]  per-recording metadata (age, sex, ...)
     """
     jepa.eval()
+    encode_kwargs = encode_kwargs or {}
     all_embs = []
     all_meta = []
 
@@ -107,8 +108,10 @@ def _embed_all_clips(dataset, jepa, device, batch_size, num_workers,
             eeg = eeg.unsqueeze(0).to(device)  # [1, n_windows, C, T]
 
             with torch.no_grad():
-                tokens = jepa.context_encoder.encode_tokens(eeg, mask=None)
-                emb = tokens.mean(dim=1)  # [1, D]
+                # Use jepa.encode so diagnostic flags (probe_layer, use_teacher,
+                # keep_channels, select_channel, prepred) propagate to subject probes.
+                state = jepa.encode(eeg, **encode_kwargs)  # [1, D_out, T, 1, 1]
+                emb = state.squeeze(-1).squeeze(-1).mean(dim=2)  # [1, D_out] mean over T
             clip_embs.append(emb.squeeze(0).cpu())
 
         if clip_embs:
@@ -290,7 +293,8 @@ def _eval_reg_probe(probe, embs, labels, device, y_mean, y_std):
 # Movie identity probe helpers
 # ---------------------------------------------------------------------------
 
-def _embed_clips_with_position(loader, jepa, device, pos_feature_idx):
+def _embed_clips_with_position(loader, jepa, device, pos_feature_idx, *,
+                               encode_kwargs=None):
     """Encode all clips in a DataLoader, return embeddings and positions.
 
     Returns
@@ -299,13 +303,14 @@ def _embed_clips_with_position(loader, jepa, device, pos_feature_idx):
     positions : np.ndarray [N_clips]  — position_in_movie value per clip
     """
     jepa.eval()
+    encode_kwargs = encode_kwargs or {}
     all_embs = []
     all_pos = []
     for eeg, features, _ in loader:
         eeg = eeg.to(device)
         with torch.no_grad():
-            tokens = jepa.context_encoder.encode_tokens(eeg, mask=None)
-            emb = tokens.mean(dim=1)  # [B, D]
+            state = jepa.encode(eeg, **encode_kwargs)  # [B, D_out, T, 1, 1]
+            emb = state.squeeze(-1).squeeze(-1).mean(dim=2)  # [B, D_out]
         all_embs.append(emb.cpu().numpy())
         # position_in_movie: mean over n_windows dimension
         pos = features[:, :, pos_feature_idx].mean(dim=1).numpy()  # [B]
@@ -398,6 +403,13 @@ def run(
     corrca_filters: str = "",
     # Run modes
     subject_only: bool = False,
+    # Phase-1 diagnostics — tap a specific encoder depth / channel / tower.
+    # All default to identity behavior, so existing checkpoints reproduce prior numbers.
+    probe_layer: str = "final",       # "patch_embed" | "block{i}" | "final"
+    use_teacher: bool = False,        # probe the EMA target encoder instead of student
+    keep_channels: bool = False,      # concat encoder channel axis into feature dim (PR #15 semantics)
+    probe_channel: int = -1,          # 0..C-1 to single-channel attribute; -1 = off
+    prepred: bool = False,            # project final-layer tokens through predictor.input_proj
     # W&B
     wandb_run_id: str = "",
     wandb_project: str = "eb_jepa",
@@ -570,7 +582,22 @@ def run(
     # VCLoss saves regularizer.proj.* keys; SIGRegLoss has no learnable params
     regularizer = None
     if any(k.startswith("regularizer.") for k in _ckpt_sd):
-        projector = Projector(f"{embed_dim}-{embed_dim * 4}-{embed_dim * 4}")
+        # Auto-infer projector spec from checkpoint to handle non-default specs
+        # (e.g. bottleneck like 64-32-8). Linear layers are 2-D weights at
+        # regularizer.proj.net.{i}.weight; collect in module order.
+        import re as _re
+        _linear = []
+        for _k, _v in _ckpt_sd.items():
+            _m = _re.match(r"regularizer\.proj\.net\.(\d+)\.weight$", _k)
+            if _m and _v.ndim == 2:
+                _linear.append((int(_m.group(1)), tuple(_v.shape)))  # (idx, (out,in))
+        _linear.sort()
+        if _linear:
+            _dims = [_linear[0][1][1]] + [out for _, (out, _) in _linear]
+            spec = "-".join(str(d) for d in _dims)
+        else:
+            spec = f"{embed_dim}-{embed_dim * 4}-{embed_dim * 4}"
+        projector = Projector(spec)
         regularizer = VCLoss(cfg.loss.std_coeff, cfg.loss.cov_coeff, proj=projector)
 
     jepa = MaskedJEPA(
@@ -585,6 +612,62 @@ def run(
     jepa.eval()
 
     # ------------------------------------------------------------------
+    # Phase-1 diagnostic flag validation + feature-dim resolution
+    # ------------------------------------------------------------------
+    select_channel = probe_channel if probe_channel >= 0 else None
+    if select_channel is not None and keep_channels:
+        raise ValueError("--probe_channel and --keep_channels are mutually exclusive")
+    if prepred and probe_layer != "final":
+        raise ValueError("--prepred requires --probe_layer=final")
+    if use_teacher:
+        # Sanity: target encoder must have weights (not identity from cold init)
+        if not any(k.startswith("target_encoder.") for k in _ckpt_sd):
+            raise ValueError(
+                "Checkpoint has no target_encoder weights — was this trained with EMA?"
+            )
+
+    # Validate probe_layer string and derive a usable identifier
+    if probe_layer.startswith("block"):
+        try:
+            _layer_idx = int(probe_layer[len("block"):])
+        except ValueError as e:
+            raise ValueError(f"Bad --probe_layer={probe_layer!r}") from e
+        if not (0 <= _layer_idx < _depth):
+            raise ValueError(f"block{_layer_idx} out of range; encoder depth={_depth}")
+    elif probe_layer not in ("patch_embed", "final"):
+        raise ValueError(f"Bad --probe_layer={probe_layer!r}")
+
+    encode_kwargs = dict(
+        probe_layer=probe_layer,
+        use_teacher=use_teacher,
+        keep_channels=keep_channels,
+        select_channel=select_channel,
+        prepred=prepred,
+    )
+
+    # Resolve probe-head input dim:
+    #   - prepred: predictor_dim
+    #   - keep_channels: C * embed_dim
+    #   - else: embed_dim (independent of layer/teacher/single-channel)
+    if prepred:
+        if _pred_dim is None:
+            raise ValueError("--prepred set but checkpoint has no predictor input_proj")
+        head_in_dim = _pred_dim
+    elif keep_channels:
+        head_in_dim = n_chans * embed_dim
+    else:
+        head_in_dim = embed_dim
+
+    if any([probe_layer != "final", use_teacher, keep_channels,
+            select_channel is not None, prepred]):
+        logger.info(
+            "Phase-1 diagnostic: layer=%s teacher=%s keep_channels=%s "
+            "channel=%s prepred=%s  →  head_in_dim=%d",
+            probe_layer, use_teacher, keep_channels,
+            select_channel, prepred, head_in_dim,
+        )
+
+    # ------------------------------------------------------------------
     # Movie-feature probes (per-clip, same as online probes during training)
     # ------------------------------------------------------------------
     regression_probe = classification_probe = None
@@ -596,10 +679,14 @@ def run(
         cls_loss_fn = ClassificationLoss(feature_median.to(device))
 
         movie_hidden = movie_probe_hidden_dim if movie_probe_hidden_dim > 0 else cfg.model.hdec
-        reg_head = MovieFeatureHead(embed_dim, movie_hidden, n_features)
-        cls_head = MovieFeatureHead(embed_dim, movie_hidden, n_features)
-        regression_probe = MaskedJEPAProbe(jepa, reg_head, reg_loss_fn).to(device)
-        classification_probe = MaskedJEPAProbe(jepa, cls_head, cls_loss_fn).to(device)
+        reg_head = MovieFeatureHead(head_in_dim, movie_hidden, n_features)
+        cls_head = MovieFeatureHead(head_in_dim, movie_hidden, n_features)
+        regression_probe = MaskedJEPAProbe(
+            jepa, reg_head, reg_loss_fn, **encode_kwargs,
+        ).to(device)
+        classification_probe = MaskedJEPAProbe(
+            jepa, cls_head, cls_loss_fn, **encode_kwargs,
+        ).to(device)
 
         movie_probe_opt = Adam(
             list(regression_probe.head.parameters())
@@ -643,7 +730,10 @@ def run(
 
     if has_metadata:
         logger.info("Embedding train recordings for subject-trait probes...")
-        train_embs, train_meta = _embed_all_clips(train_set, jepa, device, batch_size, num_workers)
+        train_embs, train_meta = _embed_all_clips(
+            train_set, jepa, device, batch_size, num_workers,
+            encode_kwargs=encode_kwargs,
+        )
         train_labels_dict = _extract_subject_labels(train_meta)
         # Capture train median age so eval splits use the same threshold
         train_ages = np.array([float(m["age"]) for m in train_meta if "age" in m])
@@ -684,7 +774,8 @@ def run(
     if pos_idx is not None:
         logger.info("Encoding train clips for movie identity probe (%d bins)...", n_bins)
         train_clip_embs, train_positions = _embed_clips_with_position(
-            train_loader, jepa, device, pos_idx
+            train_loader, jepa, device, pos_idx,
+            encode_kwargs=encode_kwargs,
         )
         logger.info("  %d clips, position range [%.1f, %.1f]",
                      len(train_clip_embs), train_positions.min(), train_positions.max())
@@ -721,7 +812,8 @@ def run(
         if movie_id_probe is not None:
             logger.info("Evaluating movie identity probe on %s...", split)
             eval_clip_embs, eval_positions = _embed_clips_with_position(
-                loader, jepa, device, pos_idx
+                loader, jepa, device, pos_idx,
+                encode_kwargs=encode_kwargs,
             )
             mid_metrics = _eval_movie_id_probe(
                 movie_id_probe, eval_clip_embs, eval_positions, device, movie_id_bin_edges
@@ -733,7 +825,8 @@ def run(
         if subject_probes:
             logger.info("Embedding %s recordings for subject-trait probes...", split)
             eval_embs, eval_meta = _embed_all_clips(
-                eval_sets[split], jepa, device, batch_size, num_workers
+                eval_sets[split], jepa, device, batch_size, num_workers,
+                encode_kwargs=encode_kwargs,
             )
             eval_labels_dict = _extract_subject_labels(eval_meta, median_age=_train_median_age)
             logger.info("  %d recordings", len(eval_embs))
@@ -791,6 +884,11 @@ def run(
                     ),
                     "splits": splits,
                     "probe_label": train_set.probe_label_name,
+                    "probe_layer": probe_layer,
+                    "use_teacher": use_teacher,
+                    "keep_channels": keep_channels,
+                    "probe_channel": probe_channel,
+                    "prepred": prepred,
                 },
             )
         wandb_run.log(all_metrics)

@@ -1,3 +1,5 @@
+from typing import Optional
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -254,7 +256,9 @@ class MaskedJEPA(nn.Module):
     """
 
     def __init__(self, context_encoder, target_encoder, predictor, mask_collator, regularizer=None,
-                 pred_loss_type="mse"):
+                 pred_loss_type="mse",
+                 dino_head=None, dino_target_head=None, dino_loss_fn=None, dino_coeff: float = 0.0,
+                 env_aux_head=None, env_coeff: float = 0.0):
         super().__init__()
         self.context_encoder = context_encoder
         self.target_encoder = target_encoder
@@ -263,21 +267,40 @@ class MaskedJEPA(nn.Module):
         self.regularizer = regularizer
         self.pred_loss_type = pred_loss_type
 
+        # Optional iBOT-lite global DINO objective on pooled tokens.
+        self.dino_head = dino_head
+        self.dino_target_head = dino_target_head
+        self.dino_loss_fn = dino_loss_fn
+        self.dino_coeff = dino_coeff
+
+        # Direction C: optional envelope-auxiliary regression on per-window features.
+        self.env_aux_head = env_aux_head
+        self.env_coeff = env_coeff
+
         # Freeze target encoder
         for p in self.target_encoder.parameters():
             p.requires_grad = False
+        if self.dino_target_head is not None:
+            for p in self.dino_target_head.parameters():
+                p.requires_grad = False
 
     @torch.no_grad()
     def update_target_encoder(self, momentum: float):
-        """EMA update of target encoder from context encoder."""
+        """EMA update of target encoder + (optional) target DINO head."""
         for p_ctx, p_tgt in zip(self.context_encoder.parameters(), self.target_encoder.parameters()):
             p_tgt.data.lerp_(p_ctx.data, 1.0 - momentum)
+        if self.dino_head is not None and self.dino_target_head is not None:
+            for p_ctx, p_tgt in zip(self.dino_head.parameters(), self.dino_target_head.parameters()):
+                p_tgt.data.lerp_(p_ctx.data, 1.0 - momentum)
 
-    def forward(self, eeg: torch.Tensor) -> tuple[torch.Tensor, dict]:
+    def forward(self, eeg: torch.Tensor, env_targets: torch.Tensor = None) -> tuple[torch.Tensor, dict]:
         """Forward pass: mask, encode, predict, compute loss.
 
         Args:
             eeg: [B, T, C, W] raw EEG
+            env_targets: [B, T, n_features] optional per-window stimulus targets for
+                         envelope-auxiliary regression (Direction C). Required when
+                         self.env_coeff > 0.
 
         Returns:
             (total_loss, loss_dict) where loss_dict contains individual loss components
@@ -338,23 +361,78 @@ class MaskedJEPA(nn.Module):
             loss_dict["reg_loss"] = reg_loss.item()
             loss_dict.update(reg_dict)
 
-        total_loss = pred_loss + reg_loss
+        # 9. iBOT-lite global DINO loss (optional)
+        dino_loss = torch.tensor(0.0, device=device)
+        if self.dino_coeff > 0 and self.dino_head is not None:
+            # Mean-pool over visible context tokens → student global rep [B, D]
+            student_global = ctx_tokens.mean(dim=1)
+            # Mean-pool over all target tokens (teacher branch is no_grad'd above)
+            teacher_global = tgt_tokens.mean(dim=1)
+            student_logits = self.dino_head(student_global)
+            with torch.no_grad():
+                teacher_logits = self.dino_target_head(teacher_global)
+            dino_loss = self.dino_loss_fn(student_logits, teacher_logits)
+            loss_dict["dino_loss"] = dino_loss.item()
+
+        # 10. Envelope-auxiliary regression (Direction C) — optional
+        env_loss = torch.tensor(0.0, device=device)
+        if self.env_coeff > 0 and self.env_aux_head is not None and env_targets is not None:
+            # Re-encode the FULL eeg through context encoder (with grad) to get
+            # per-window pooled features. This adds ~1.3x train cost but keeps
+            # the masked-prediction branch independent.
+            full_tokens = self.context_encoder.encode_tokens(eeg, mask=None)  # [B, C*T*P, D]
+            pooled = self.context_encoder.pool_to_windows(full_tokens)  # [B, D, T, 1, 1]
+            pooled = pooled.squeeze(-1).squeeze(-1).transpose(1, 2)  # [B, T, D]
+            env_pred = self.env_aux_head(pooled)  # [B, T, n_features]
+            env_loss = F.smooth_l1_loss(env_pred, env_targets.to(device))
+            loss_dict["env_loss"] = env_loss.item()
+
+        total_loss = pred_loss + reg_loss + self.dino_coeff * dino_loss + self.env_coeff * env_loss
         loss_dict["total_loss"] = total_loss.item()
 
         return total_loss, loss_dict
 
     @torch.no_grad()
-    def encode(self, eeg: torch.Tensor) -> torch.Tensor:
+    def encode(
+        self,
+        eeg: torch.Tensor,
+        *,
+        probe_layer: str = "final",
+        use_teacher: bool = False,
+        keep_channels: bool = False,
+        select_channel: Optional[int] = None,
+        prepred: bool = False,
+    ) -> torch.Tensor:
         """Encode EEG without masking (for probes).
 
         Args:
             eeg: [B, T, C, W]
+            probe_layer: depth tap — "patch_embed", "block{i}", or "final".
+            use_teacher: if True, run through the EMA target encoder instead of
+                context encoder (Phase-1 diagnostic).
+            keep_channels: pass through to pool_to_windows.
+            select_channel: pass through to pool_to_windows.
+            prepred: if True, project final-layer encoder tokens through
+                ``self.predictor.input_proj`` to inspect the bottleneck space.
+                Only valid with probe_layer == "final".
 
         Returns:
-            [B, D, T, 1, 1] pooled per-window representations
+            [B, D_out, T, 1, 1] pooled per-window representations.
         """
-        tokens = self.context_encoder.encode_tokens(eeg, mask=None)
-        return self.context_encoder.pool_to_windows(tokens)
+        encoder = self.target_encoder if use_teacher else self.context_encoder
+        tokens = encoder.encode_at_layer(eeg, layer=probe_layer)
+        if prepred:
+            if probe_layer != "final":
+                raise ValueError("prepred=True requires probe_layer='final'")
+            input_proj = getattr(self.predictor, "input_proj", None)
+            if input_proj is None or not isinstance(input_proj, nn.Module):
+                raise RuntimeError(
+                    "Predictor has no input_proj — bottleneck is identity for this checkpoint"
+                )
+            tokens = input_proj(tokens)
+        return encoder.pool_to_windows(
+            tokens, keep_channels=keep_channels, select_channel=select_channel
+        )
 
 
 class MaskedJEPANoEMA(nn.Module):
@@ -432,9 +510,31 @@ class MaskedJEPANoEMA(nn.Module):
         return total_loss, loss_dict
 
     @torch.no_grad()
-    def encode(self, eeg: torch.Tensor) -> torch.Tensor:
-        tokens = self.context_encoder.encode_tokens(eeg, mask=None)
-        return self.context_encoder.pool_to_windows(tokens)
+    def encode(
+        self,
+        eeg: torch.Tensor,
+        *,
+        probe_layer: str = "final",
+        use_teacher: bool = False,
+        keep_channels: bool = False,
+        select_channel: Optional[int] = None,
+        prepred: bool = False,
+    ) -> torch.Tensor:
+        if use_teacher:
+            raise ValueError("MaskedJEPANoEMA has no teacher encoder")
+        tokens = self.context_encoder.encode_at_layer(eeg, layer=probe_layer)
+        if prepred:
+            if probe_layer != "final":
+                raise ValueError("prepred=True requires probe_layer='final'")
+            input_proj = getattr(self.predictor, "input_proj", None)
+            if input_proj is None or not isinstance(input_proj, nn.Module):
+                raise RuntimeError(
+                    "Predictor has no input_proj — bottleneck is identity for this checkpoint"
+                )
+            tokens = input_proj(tokens)
+        return self.context_encoder.pool_to_windows(
+            tokens, keep_channels=keep_channels, select_channel=select_channel
+        )
 
     def update_target_encoder(self, momentum: float):
         """No-op — no EMA in this architecture."""
@@ -479,17 +579,34 @@ class MaskedJEPAProbe(nn.Module):
 
     def __init__(self, masked_jepa, head, hcost, *,
                  corrca_residual: bool = False,
-                 corrca_residual_dim: int = 100):
+                 corrca_residual_dim: int = 100,
+                 probe_layer: str = "final",
+                 use_teacher: bool = False,
+                 keep_channels: bool = False,
+                 select_channel: Optional[int] = None,
+                 prepred: bool = False):
         super().__init__()
         self.masked_jepa = masked_jepa
         self.head = head
         self.hcost = hcost
         self.corrca_residual = bool(corrca_residual)
         self.corrca_residual_dim = int(corrca_residual_dim)
+        self.probe_layer = probe_layer
+        self.use_teacher = bool(use_teacher)
+        self.keep_channels = bool(keep_channels)
+        self.select_channel = select_channel
+        self.prepred = bool(prepred)
 
     def _features(self, eeg):
         with torch.no_grad():
-            state = self.masked_jepa.encode(eeg)  # [B, D_enc, T, 1, 1]
+            state = self.masked_jepa.encode(
+                eeg,
+                probe_layer=self.probe_layer,
+                use_teacher=self.use_teacher,
+                keep_channels=self.keep_channels,
+                select_channel=self.select_channel,
+                prepred=self.prepred,
+            )
             if self.corrca_residual:
                 res = extract_corrca_residual(eeg, self.corrca_residual_dim)
                 state = torch.cat([state, res], dim=1)

@@ -120,11 +120,18 @@ class REVETransformerBackbone(nn.Module):
                 ])
             )
 
-    def forward(self, x) -> torch.Tensor:
+    def forward(self, x, return_intermediates: bool = False):
+        if not return_intermediates:
+            for attn, ff in self.layers:
+                x = attn(x) + x
+                x = ff(x) + x
+            return x
+        intermediates = []
         for attn, ff in self.layers:
             x = attn(x) + x
             x = ff(x) + x
-        return x
+            intermediates.append(x)
+        return x, intermediates
 
 
 class FourierEmb4D(nn.Module):
@@ -395,6 +402,31 @@ class ResUNet(TemporalBatchMixin, nn.Module):
 
         out = self.head(d1)  # → out_d channels
         return out
+
+
+class EnvelopeAuxHead(nn.Module):
+    """Direction C: small temporal CNN on per-window encoder features.
+
+    Predicts per-window stimulus envelopes (luminance/contrast/position/narrative)
+    directly from the encoder's pooled per-window representation. Adds a target-
+    driven gradient that *demands* the encoder retain probe-readable structure,
+    in contrast to VC/DINO which reshape geometry without specifying targets.
+
+    Input:  [B, T, embed_dim] pooled-per-window encoder features
+    Output: [B, T, n_features] envelope predictions
+    """
+
+    def __init__(self, embed_dim: int, n_features: int, hidden: int = 64):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv1d(embed_dim, hidden, kernel_size=3, padding=1),
+            nn.GELU(),
+            nn.Conv1d(hidden, n_features, kernel_size=1),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [B, T, D] → conv expects [B, D, T]
+        return self.conv(x.transpose(1, 2)).transpose(1, 2)
 
 
 class Projector(nn.Module):
@@ -867,29 +899,97 @@ class EEGEncoderTokens(nn.Module):
         tokens = self.transformer(tokens)
         return tokens
 
-    def pool_to_windows(self, tokens: torch.Tensor) -> torch.Tensor:
+    def encode_at_layer(
+        self, eeg: torch.Tensor, layer: str = "final"
+    ) -> torch.Tensor:
+        """Diagnostic: return full (unmasked) token sequence at a specified depth.
+
+        Args:
+            eeg: [B, T, C, W] raw EEG.
+            layer: one of
+                - "patch_embed" — post-tokenize (with PE + LN), no transformer blocks.
+                - "block{i}"    — output of transformer block i (0-indexed),
+                                  i ∈ [0, depth-1].
+                - "final"       — full transformer output (== encode_tokens with mask=None).
+
+        Returns:
+            [B, C*T*P, embed_dim] full token sequence at the requested depth.
+        """
+        tokens, _ = self.tokenize(eeg)
+        if layer == "patch_embed":
+            return tokens
+        if layer == "final":
+            return self.transformer(tokens)
+        if layer.startswith("block"):
+            try:
+                idx = int(layer[len("block"):])
+            except ValueError:
+                raise ValueError(f"Unrecognized probe_layer: {layer!r}")
+            depth = len(self.transformer.layers)
+            if not (0 <= idx < depth):
+                raise ValueError(
+                    f"block{idx} out of range; encoder has depth={depth}"
+                )
+            _, intermediates = self.transformer(tokens, return_intermediates=True)
+            return intermediates[idx]
+        raise ValueError(f"Unrecognized probe_layer: {layer!r}")
+
+    def pool_to_windows(
+        self,
+        tokens: torch.Tensor,
+        keep_channels: bool = False,
+        select_channel: Optional[int] = None,
+    ) -> torch.Tensor:
         """Pool full (unmasked) token sequence to per-window representations.
 
-        Reshapes [B, C*T*P, D] → [B, C, T, P, D], mean-pools over C and P
-        per window → [B, T, D], then formats as [B, D, T, 1, 1] for probes.
+        Default behavior (``keep_channels=False``, ``select_channel=None``):
+        reshapes [B, C*T*P, D] → [B, C, T, P, D], mean-pools over C and P per
+        window → [B, T, D], formatted as [B, D, T, 1, 1] for the probe head.
+
+        When ``select_channel=k`` is set: pools over P only and keeps the k-th
+        encoder channel — the per-channel attribution diagnostic. Output shape
+        is still [B, D, T, 1, 1] so existing probe heads can consume it.
+
+        When ``keep_channels=True`` (and ``select_channel is None``): pools
+        over P only, concatenates the channel axis into the feature dim,
+        producing [B, C*D, T, 1, 1]. Matches PR #15's --keep_channels flag.
 
         Args:
             tokens: [B, C*T*P, embed_dim] — must be full (unmasked) token sequence
+            keep_channels: concat the channel axis into the feature dim.
+            select_channel: if given, slice this single encoder channel.
 
         Returns:
-            [B, embed_dim, T, 1, 1]
+            [B, D_out, T, 1, 1] where D_out is D, C*D, or D depending on flags.
         """
         B = tokens.shape[0]
         C = self.n_chans
         T = self.n_windows
         P = self.n_patches_per_window
-        D = self.embed_dim
+        # D is read from the tensor — may differ from self.embed_dim when the
+        # caller has projected through e.g. predictor.input_proj (Phase-1 prepred).
+        D = tokens.shape[-1]
 
         # Reshape: [B, C, T, P, D]
-        x = tokens.view(B, C, T, P, D)
-        # Mean pool over channels and patches: [B, T, D]
-        x = x.mean(dim=(1, 3))
-        # Format for MovieFeatureHead: [B, D, T, 1, 1]
+        x = tokens.reshape(B, C, T, P, D)
+
+        if select_channel is not None:
+            if not (0 <= select_channel < C):
+                raise ValueError(
+                    f"select_channel={select_channel} out of range; encoder has C={C}"
+                )
+            # [B, T, P, D] → mean over P → [B, T, D]
+            x = x[:, select_channel].mean(dim=2)
+        elif keep_channels:
+            # Mean over P only: [B, C, T, D]
+            x = x.mean(dim=3)
+            # Concat C into feature dim: [B, T, C*D]
+            x = x.permute(0, 2, 1, 3).reshape(B, T, C * D)
+        else:
+            # Mean pool over channels and patches: [B, T, D]
+            x = x.mean(dim=(1, 3))
+
+        # Format for MovieFeatureHead: [B, D_out, T, 1, 1]
         x = x.permute(0, 2, 1).unsqueeze(-1).unsqueeze(-1)
         return x
 
