@@ -48,9 +48,11 @@ def validation_loop(
     cls_loss_sum = 0.0
     n_batches = 0
 
-    for eeg, features, _ in tqdm(val_loader, desc="Validating", leave=False):
-        eeg = eeg.to(device)
-        features = features.to(device)  # [B, T, n_features]
+    for batch in tqdm(val_loader, desc="Validating", leave=False):
+        # Backwards-compatible: dataset returns 3- or 4-tuple
+        # (eeg, features, probe_label[, stim_meta]).
+        eeg = batch[0].to(device)
+        features = batch[1].to(device)  # [B, T, n_features]
 
         # Losses
         reg_loss = regression_probe(eeg, features)
