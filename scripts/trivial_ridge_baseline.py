@@ -489,8 +489,7 @@ def run(
                 [float(np.median(Y_train[:, i])) for i in range(n_features)],
                 dtype=np.float32,
             )
-            np.savez_compressed(
-                save_dir / f"{split}_seed{seed}.npz",
+            payload = dict(
                 movie_reg_preds=reg_preds,
                 movie_cls_logits=cls_logits_NTF,
                 movie_targets=reg_targets,
@@ -501,6 +500,110 @@ def run(
                 rec_ids=np.arange(n_rec),
                 seed=seed,
             )
+            # Movie-id probe: 20-bin position classifier on per-clip embedding.
+            try:
+                pos_idx_local = feature_names.index("position_in_movie")
+            except ValueError:
+                pos_idx_local = None
+            if pos_idx_local is not None:
+                # Per-clip embedding = mean over passes per recording then flatten;
+                # actually we want per-clip in the order the bootstrap expects.
+                # Use mean over n_passes per recording → 1 clip per rec. Bin by mean
+                # position over the n_passes for that rec.
+                X_clip = X_grp.mean(axis=1)            # [n_rec, D]
+                Y_pos_clip = Y_grp[:, :, pos_idx_local].mean(axis=1)  # [n_rec]
+                # Bin edges from training positions (recompute here from train targets)
+                pos_train = Y_train[:, pos_idx_local]
+                n_bins = 20
+                bin_edges = np.linspace(
+                    pos_train.min(), pos_train.max() + 1e-8, n_bins + 1,
+                )
+                # Train LogReg on training per-clip embedding (one rec = mean of n_passes)
+                X_train_clip = X_train.reshape(-1, X_train.shape[-1])
+                # Build bin labels for train/test from raw position
+                bin_train = np.clip(
+                    np.digitize(pos_train, bin_edges) - 1, 0, n_bins - 1,
+                )
+                from sklearn.linear_model import LogisticRegression as _SkLR_mid
+                mid = _SkLR_mid(
+                    C=1.0, solver="lbfgs", max_iter=2000, multi_class="multinomial",
+                ).fit(X_train_clip, bin_train)
+                # decision_function = (n, n_classes) for multinomial
+                logits_clip = mid.decision_function(X_clip).astype(np.float32)
+                payload["movie_id_logits"] = logits_clip
+                payload["movie_id_positions"] = Y_pos_clip.astype(np.float32)
+                payload["movie_id_bin_edges"] = bin_edges.astype(np.float32)
+
+            # Subject probes: per-recording embedding + Ridge/LogReg
+            try:
+                # Per-recording embedding = mean of all per-pass clips for that rec
+                X_rec_eval = X_grp.mean(axis=1)        # [n_rec, D]
+                # Pull subject metadata from the eval dataset for the matching split
+                eval_set = eval_sets[split]
+                ages, sexes = [], []
+                for r in range(n_rec):
+                    md = eval_set._recording_metadata[r]
+                    try:
+                        ages.append(float(md.get("age", float("nan"))))
+                    except (TypeError, ValueError):
+                        ages.append(float("nan"))
+                    sx = md.get("sex", md.get("gender", ""))
+                    if isinstance(sx, str):
+                        s_ = sx.strip().lower()
+                        sexes.append(1.0 if s_ in ("m", "male") else 0.0 if s_ in ("f", "female") else float("nan"))
+                    else:
+                        sexes.append(float("nan"))
+                ages_arr = np.array(ages, dtype=np.float32)
+                sex_arr = np.array(sexes, dtype=np.float32)
+                payload["subj_age_reg_labels"] = ages_arr
+                payload["subj_sex_labels"] = sex_arr
+                # Median age threshold from train
+                X_train_rec = X_train.reshape(-1, X_train.shape[-1])
+                # Build per-recording train embedding similarly
+                # X_train_rec is per-clip (already averaged via _extract); for per-rec we
+                # need to know which clips belong to which recording — _extract for train
+                # without group_by_rec returns interleaved order. For per-rec age/sex we
+                # use the val/test splits' per-rec embeddings only — train Ridge uses the
+                # per-clip features with the per-rec age/sex broadcast.
+                train_meta = train_set._recording_metadata
+                train_ages_raw = np.array(
+                    [float(m.get("age", float("nan"))) for m in train_meta],
+                    dtype=np.float32,
+                )
+                train_sex_raw = np.array(
+                    [1.0 if str(m.get("sex", "")).lower() in ("m","male") else
+                     0.0 if str(m.get("sex", "")).lower() in ("f","female") else float("nan")
+                     for m in train_meta],
+                    dtype=np.float32,
+                )
+                age_med = float(np.nanmedian(train_ages_raw[~np.isnan(train_ages_raw)]))
+                # n_passes broadcast per train recording
+                n_train_rec = len(train_meta)
+                n_pass_eff = X_train.shape[0] // n_train_rec
+                ages_train_full = np.tile(train_ages_raw, n_pass_eff)
+                sex_train_full = np.tile(train_sex_raw, n_pass_eff)
+                # Drop NaN rows for each probe
+                from sklearn.linear_model import Ridge as _SkR_subj, LogisticRegression as _SkLR_subj
+                vmask = ~np.isnan(ages_train_full)
+                if vmask.any():
+                    ym_, ys_ = float(ages_train_full[vmask].mean()), float(ages_train_full[vmask].std())
+                    pr = _SkR_subj(alpha=1.0).fit(X_train_rec[vmask], (ages_train_full[vmask] - ym_) / max(ys_, 1e-8))
+                    payload["subj_age_reg_pred_norm"] = pr.predict(X_rec_eval).astype(np.float32)
+                    payload["subj_age_reg_y_mean"] = ym_
+                    payload["subj_age_reg_y_std"] = ys_
+                    age_bin_train = (ages_train_full > age_med).astype(int)
+                    if len(np.unique(age_bin_train[vmask])) >= 2:
+                        plr = _SkLR_subj(C=1.0, solver="lbfgs", max_iter=1000).fit(X_train_rec[vmask], age_bin_train[vmask])
+                        payload["subj_age_cls_labels"] = (ages_arr > age_med).astype(np.float32)
+                        payload["subj_age_cls_logits"] = plr.decision_function(X_rec_eval).astype(np.float32)
+                vmask_s = ~np.isnan(sex_train_full)
+                if vmask_s.any() and len(np.unique(sex_train_full[vmask_s].astype(int))) >= 2:
+                    plr = _SkLR_subj(C=1.0, solver="lbfgs", max_iter=1000).fit(X_train_rec[vmask_s], sex_train_full[vmask_s].astype(int))
+                    payload["subj_sex_logits"] = plr.decision_function(X_rec_eval).astype(np.float32)
+            except Exception as ex:
+                logger.warning("subject probe block failed for %s seed=%d: %s", split, seed, ex)
+
+            np.savez_compressed(save_dir / f"{split}_seed{seed}.npz", **payload)
             logger.info("Wrote ridge predictions: %s", save_dir / f"{split}_seed{seed}.npz")
 
     if output_json:
