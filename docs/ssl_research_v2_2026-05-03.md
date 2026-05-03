@@ -1,0 +1,343 @@
+# SSL Research Memo — Living Doc
+
+Last updated: 2026-05-03
+Scope: this is the single rolling research memo for the EB-JEPA / EEG line. Update in place; do not branch into per-experiment memos. Constraint: **we are sticking with pure SSL, single-movie ("ThePresent"), JEPA-family objectives**. Anything that violates those three constraints (supervised stim heads, multi-movie scaling, non-JEPA backbones) is out of scope and tracked here only as a comparison reference.
+
+## 0. Empirical state (post v1 / v2 / v3 + LeJEPA)
+
+| Run | Aux loss | Sampler | Pool | Multi-movie | Probes (5-seed mean) | InfoNCE loss |
+|---|---|---|---|---|---|---|
+| Phase D (PR #15, baseline) | none | random | kc | no | lum +0.208 / cont +0.159 / pos +0.144 / narr +0.090 | n/a |
+| Lever 1 v1 (best-ckpt) | InfoNCE λ=0.5 | random | mean | no | lum +0.225 / cont +0.178 / pos +0.183 / narr +0.107 | flat at 4.14 (= log(B−1), chance) |
+| Lever 1 v2 | InfoNCE λ=2.0 | structured K=4 | kc | no | (timed out / superseded by v3) | flat at 4.14 |
+| Lever 1 v3 (latest-ckpt, val-fix) | InfoNCE λ=0.5 | structured | kc | yes (3 movies) | lum +0.223 / cont +0.166 / pos +0.176 / narr +0.088 | flat at 4.14 |
+| LeJEPA (no EMA, SIGReg=0.1) | none (replaced VC) | random | kc | no | worse than baseline on all | n/a; pred_loss → 0.002 = collapse |
+
+Paired t-test, V3 vs Phase D (5 seeds, matched protocol):
+| metric | Δ | t | p |
+|---|---|---|---|
+| narr | −0.0018 | −0.16 | 0.884 |
+| pos | +0.0327 | +2.30 | 0.083 |
+| lum | +0.0156 | +2.19 | 0.094 |
+| cont | +0.0079 | +1.09 | 0.338 |
+
+**Headline empirical conclusions** (these are facts, not hypotheses):
+
+1. **The InfoNCE family is dead on our setup.** Three independent variants (vanilla, structured K=4 cross-subject sampler, multi-movie) all left `stim_nce_loss` flat at chance for 100 epochs. The auxiliary never learned, regardless of pooling, pair construction, or stimulus diversity.
+2. **The v1 "win" was checkpoint cherry-picking, not the aux loss.** v1's gains (pos +0.040 paired-t p=0.012, lum +0.017 p=0.003) used `best.pth.tar` selected on a noisy online probe. v3 with the same encoder objective but `latest.pth.tar` produced no significant lift over Phase D on any of the four stimulus probes.
+3. **Multi-movie does not help at our scale.** v3 trained on 3 movies (ThePresent + DespicableMe + Diary, after val-fix) and recovered Phase D, not better. Either the per-movie data is already at task-effective ceiling for 5-channel CorrCA, or our backbone + objective cannot exploit additional stimulus diversity.
+4. **EMA was protecting the encoder, not blocking it.** LeJEPA (no EMA, SIGReg only) collapsed pred_loss to 0.002 in 10 epochs and trashed every probe. The EMA target is load-bearing for our objective at this scale.
+5. **Probes peak at epoch 30–80 then decline.** This is the single most important unresolved phenomenon. The encoder *acquires* stimulus-locked features, then *unlearns* them under continued JEPA training. The training signal is in active tension with the features the probes care about.
+6. **Pred_loss noise floor sits at 1.18–1.4** for the entire run. This is the irreducible mixture of subject DC drift + impedance noise + actually-stimulus-modulated voltage. The dominant variance in the prediction target is not what we want the encoder to capture.
+
+## 1. Diagnoses (post-experiment)
+
+### 1.1 Why InfoNCE-on-CorrCA is structurally dead — confirmed
+
+The CL-SSTER (Yuan et al., NeuroImage 2024, arXiv:2402.14213) hypothesis is now the simplest model that fits all three v1/v2/v3 outcomes:
+
+- CorrCA finds linear filters `W ∈ R^(129×K)` maximizing inter-subject correlation per-timepoint. By construction, after CorrCA, `W·x_{subj_i,t} ≈ W·x_{subj_j,t}` for any pair `(i, j)` — the cross-subject-shared subspace is already extracted.
+- An InfoNCE head with positives `(subj_i, t) vs (subj_j, t)` and negatives `(subj_k, t')` is asking the encoder to discriminate residuals that CorrCA *already minimized*. The optimum on the easy CorrCA-aligned subspace is reached at initialization, gradient signal vanishes, the loss flatlines at chance.
+- This is the Robinson et al. 2021 (arXiv:2106.11230) "shortcut suppression" argument applied: when an upstream feature already saturates the contrastive objective, the encoder cannot learn anything new from it.
+- CL-SSTER never composes CorrCA + contrast — they put a CNN directly on raw 129-channel EEG with the contrastive loss on top, and that CNN learns its own spatial filter.
+
+**Consequence**: any further InfoNCE variant (different τ, different K, different pooling, different multi-movie mix) will fail by the same mechanism. We have empirically saturated this hypothesis class.
+
+### 1.2 Why probes peak then decline — the productive new puzzle
+
+This is the most actionable observation in the corpus. The encoder visibly acquires stimulus-locked features in epochs 30–80, then erodes them. Three candidate mechanisms, ordered by how cheaply they can be tested:
+
+**(a) VCLoss is rotating variance off the stimulus subspace.** With std_coeff=0.25 and cov_coeff=0.25 applied to the projector, the regularizer eventually flattens variance across all 64 dimensions. Once stimulus-locked dimensions saturate the std hinge, the only remaining gradient is on covariance, which decorrelates *every* pair of dimensions including the stim ones — pushing the encoder to redistribute variance into subject-stable noise dimensions where decorrelation is "cheap." This is consistent with the audio-MAE literature noting that VC-style regularizers under-perform on stimulus-locked tasks (see Audio-JEPA arXiv:2507.02915 sec 4.3, where they replace VC with batch-norm pre-projector to avoid the same redistribution).
+
+**(b) The smooth-L1 prediction target is dominated by subject-DC after epoch ~50.** Stimulus-locked components are ~10× smaller in voltage than slow drifts in the time domain. Once the encoder has captured the easy-to-predict DC, the remaining loss budget is on the parts of the signal that are subject-specific. The EMA target encoder is not noise-free — it carries forward whatever drift the online encoder learned — so the prediction objective rewards "predict subject A's slow drift from subject A's other patches", which is exactly the feature probes are blind to.
+
+**(c) Mask collator under-samples the stimulus-relevant patch positions.** With CorrCA → 5 channels, the spatial component of MultiBlockMaskCollator is degenerate (every block is 1 channel wide). Effectively we are doing temporal-only masking on patch-grid positions. If short and long mask types overlap on the same temporal regions across batches, the encoder over-fits the predictable temporal context and under-trains on rare patch positions, which may correlate with stimulus events.
+
+The cleanest discriminator: **save best-by-online-probe checkpoint** as a parallel artifact (in addition to `latest.pth.tar`), and compare downstream lifts. If best-by-probe consistently beats latest by 0.02–0.04 r, mechanism (a) or (b) is dominant and we should stop training earlier or change the loss. If best-by-probe ≈ latest, then probe-decline is illusory (just probe-head noise).
+
+This is the cheapest experiment in the entire grid and it is also a prerequisite for fairly evaluating any new objective. **Run this first.**
+
+### 1.3 Why LeJEPA collapsed — EMA is doing real work
+
+LeJEPA's design replaces `(EMA target + smooth-L1)` with `(no EMA + SIGReg + raw prediction loss)`. SIGReg is a Gaussianity-of-projections constraint that does not depend on a target. In our run, pred_loss collapsed to 0.002 in 10 epochs because nothing was preventing the encoder from outputting a constant per-position vector that the predictor learned to copy verbatim. SIGReg's variance-Gaussianity test is too weak a constraint at our scale to prevent this — it constrains *projections* of the embedding, not its rank.
+
+**Consequence**: any future "no-EMA" experiment must add a stronger anti-collapse term than SIGReg alone. Candidates: VICReg covariance + SIGReg (additive), or DINO-style centering + sharpening (no EMA but momentum-centered targets). Default for now: keep EMA.
+
+### 1.4 Why multi-movie did not help — likely a saturation issue, not a code issue
+
+V3 ran 3 movies (ThePresent + DespicableMe + Diary) with the val-bug-fix and produced numerically equivalent probes to single-movie. Two readings:
+
+- **Optimistic**: our 5-channel CorrCA bottleneck cannot encode movie-specific features beyond the few dimensions it already uses for ThePresent. Adding movies adds within-task data but no new representational dimension.
+- **Pessimistic**: the JEPA + VC + smooth-L1 objective is task-blind in a way that doesn't benefit from more stimulus diversity, only from objective quality.
+
+Either way the per-user constraint of "1 movie" is not the limiting factor on our results.
+
+## 2. Solution candidates within the SSL + JEPA + 1 movie envelope
+
+We have empirically eliminated InfoNCE auxiliaries. The remaining hypothesis classes that fit the constraint envelope are:
+
+**Note on checkpoint selection (settled policy, not a research cell)**: best-by-online-probe checkpointing is treated as a routine tool, not an experiment. Every training run saves `best_by_online_probe.pth.tar` alongside `latest.pth.tar`; downstream eval reports both, and the best-by-probe number is the headline metric for any cell below. The "probes peak at 30–80 then decline" observation in §0 / §1.2 is therefore not a blocker for any subsequent cell — it is handled at the artifact-saving layer. The mechanistic question (why the encoder unlearns) is still interesting for *understanding* the loss, but does not gate further experiments.
+
+### Cell B — cross-subject masked latent prediction (Brain-JEPA / PopT family)
+
+> **Naming clarification**: this is a JEPA-style masked **latent** prediction across the subject axis — the prediction target is the EMA-encoded embedding of subject A's tokens, *not* the raw voltage signal. It is not MAE-style reconstruction. All five JEPA invariants are preserved (shared encoder, EMA target, predictor in latent space, loss in embedding space, mask-and-predict structure); the only change is the mask geometry (mask all of subject A; predict from subject B at the same stim-time `t`). Brain-JEPA (arXiv:2409.19407, NeurIPS 2024 Spotlight) is the canonical reference and uses the same framing.
+
+**Hypothesis**: the cross-subject signal CorrCA aligns is dense (every dimension of `W·x` carries some shared content) but InfoNCE compresses it into a similarity score, throwing most of it away. Replace InfoNCE with **masked reconstruction across subjects**: at training time, given `(subj_i, subj_j, t)` watching the same movie clip, mask all of `subj_i`'s tokens, predict them from the visible tokens of `subj_j` at the same `t`. Smooth-L1 against EMA target, λ=0.5.
+
+This is the literal Brain-JEPA (arXiv:2409.19407, NeurIPS 2024 Spotlight) "Cross-ROI" mask geometry, transposed onto the subject axis. In Brain-JEPA's fMRI results, the spatiotemporal-mask variant gave +4–6 absolute points across every probe vs raw-signal MAE.
+
+PopT (arXiv:2406.03044, NeurIPS 2024) gives the iEEG analog: their "channel-wise discrimination" loss replaces a random subset of channels with the same channel from a different timepoint and asks the model to identify which channels were swapped. This is reconstruction-as-classification, also non-contrastive.
+
+**Why this beats InfoNCE structurally**:
+
+- Gradient signal is dense (one per masked token, not one per pair) — does not flat-line at chance.
+- Loss minimum requires encoding the cross-subject-shared signal; cannot be satisfied by the trivial CorrCA-aligned solution.
+- Compatible with our existing JEPA scaffolding (predictor, EMA target, smooth-L1).
+
+**Cost**: medium. New batch sampler (pair clips by `(movie, position_bucket)` like the v2 sampler did, K=2 for one cross-subject pair per anchor). New mask path: `subj_i` gets fully masked, `subj_j`'s tokens are concatenated as additional context tokens. Predictor sees `[ctx_j, mask_tokens_i]` and reconstructs the masked `i` positions. Both encoders are the same model; cross-subject mixing happens at the token level.
+
+**Predicted effect**: the dominant cell. Replaces the broken InfoNCE without abandoning cross-subject information. Brain-JEPA's published lift over MAE-style is consistent with the kind of headroom we need on narrative.
+
+### Cell C — STFT-magnitude patches (Audio-JEPA family)
+
+**Hypothesis**: the smooth-L1 noise floor at 1.18–1.4 is dominated by subject DC + slow drift in the time domain. Switching the patch input from `(channel, time)` voltage tiles to `(channel, frequency, time)` log-magnitude tiles puts the prediction target *in the band where stimulus information lives* (1–30 Hz) and removes the dominant nuisance variance.
+
+Audio-JEPA (arXiv:2507.02915, 2025) demonstrates the equivalent transformation in audio: mel-spectrogram patches match wav2vec 2.0 on AudioSet with <1/5 the data. WavJEPA (arXiv:2509.23238) is the counter-experiment — raw-waveform JEPA — and only wins on time-domain-natural tasks, not on tasks where signal lives in time-frequency. EEG stimulus information is unambiguously time-frequency.
+
+**Cost**: medium. New `STFTPatchifier` in `architectures.py`: STFT(window=128 = 640 ms, hop=32 = 160 ms), magnitude only, log-compressed, patches of `(4 freq × 8 time)`; channel axis unchanged. No model changes — REVE backbone is patch-agnostic. CorrCA still upstream.
+
+**Predicted effect**: pred_loss noise floor drops from 1.2 to ~0.5 (audio-MAE typical range). Probes-peak-then-decline phenomenon is *predicted to flatten* if mechanism (b) from §1.2 is correct, because the target is no longer DC-dominated. This makes Cell C also a discriminator for §1.2.
+
+### Cell D — temporal-shift regression auxiliary (PARS-family)
+
+**Hypothesis**: instead of either contrastive alignment *or* reconstruction, predict the relative temporal shift `Δ` between two clips from the same recording. PARS (Apple ML, arXiv:2511.11940, NeurIPS 2025 FM4Brain) report that this objective beats reconstruction-based pretraining on label-efficient EEG transfer.
+
+The mechanism: forcing the encoder to make `Δ` recoverable from a pair of embeddings *forces time to be a smooth coordinate*, which in turn forces the embedding to encode time-locked features (which is what stimulus-evoked components are) and *not* subject-stable trait features (which are constant across `Δ`).
+
+**Cost**: low. Add a small regression head on the concatenation of two pooled embeddings; sample pairs `(clip_a, clip_b)` from the same recording at uniformly random `Δ ∈ [−10, 10] s`; target is `Δ` itself, smoothed by L1. λ=0.3.
+
+**Predicted effect**: this is the cheapest "non-InfoNCE auxiliary" to test. Less powerful than Cell B in principle but trivially additive — can run alongside Cell B or Cell C as a second auxiliary.
+
+### Cell F — explicit regularization replaces non-learning InfoNCE (control)
+
+**Hypothesis** (from previous v2 §6, retained as a pure control): v1's lift was implicit gradient noise from a non-learning auxiliary head, not contrastive learning. Replacing the InfoNCE head with explicit regularization (FFN dropout 0.1, attention dropout 0.05, stochastic-depth 0.1, weight decay 0.1) should reproduce the v1 numbers exactly.
+
+**Cost**: trivial.
+
+**Predicted effect**: if Cell F matches v1's best-checkpoint numbers, we have closed the implicit-regularization explanation and *eliminated InfoNCE from the hypothesis space permanently*. Run this once and never revisit InfoNCE.
+
+### Cell H — LeJEPA + best-by-online-probe (or LeJEPA + EMA hybrid)
+
+**Hypothesis** (added post-forensics, §A6): LeJEPA was misdiagnosed. At epochs 65–68 it reached lum/cont/pos ≈ 0.27 r — competitive with Phase D peak — *before* late-stage collapse to pred_loss = 0.001. SIGReg=0.1 alone never moves past 0.40 and fails to prevent collapse, but the mid-training representation is strong. With best-by-online-probe selection (now standard policy), LeJEPA may be a viable Phase D peer at lower compute (no EMA bookkeeping).
+
+Two variants:
+
+- **H1 (cheap)**: LeJEPA exactly as run, but eval `best_by_online_probe.pth.tar` from the existing run (no retrain). Pure measurement-protocol fix.
+- **H2 (med)**: LeJEPA + EMA target *or* LeJEPA + (SIGReg=0.1 + cov_coeff=0.25) hybrid; tests whether a stronger anti-collapse term can keep the ep-65 representation past ep-100.
+
+**Cost**: H1 is free if the LeJEPA checkpoint history is available; H2 is one 5-seed re-train (~25 GPU-h).
+
+**Predicted effect**: H1 either matches Phase D (validates the misdiagnosis) or doesn't (closes the LeJEPA hypothesis). H2, if H1 succeeds, gives a strict superset of LeJEPA without the collapse.
+
+## 3. Ranked Phase 3 grid (under the SSL + JEPA + 1 movie envelope)
+
+All cells assume `best_by_online_probe.pth.tar` is the eval artifact (settled policy, see §2 note above). Cell E (VC cov_coeff decay) was deleted post-forensics: §A4 found Pearson r between Δvc_loss and Δprobe_corr is the *wrong sign* for the VC-erosion hypothesis, and §A1 showed the std hinge is dead by epoch 10 anyway — so any VC schedule has near-zero leverage.
+
+| # | Cell | What it tests | Cost | Predicted impact |
+|---|------|---------------|------|-------------------|
+| B | cross-subject masked **latent** prediction (Brain-JEPA / PopT) | §1.1 — replace InfoNCE with dense embedding-space target | med | best single-cell expected; replaces v1/v2/v3 |
+| C | STFT-magnitude patches (Audio-JEPA) | §1.2-b — kill DC-noise-floor in target | med | drops pred_loss; complementary to B |
+| D | PARS temporal-shift regression | non-InfoNCE auxiliary; complementary to B/C | low | low-risk additive lift |
+| H | LeJEPA + best-by-online-probe (H1) / LeJEPA + EMA (H2) | §A6 — LeJEPA was misdiagnosed; revive | low (H1) / med (H2) | possible Phase D peer at lower compute |
+| F | InfoNCE → explicit dropout/SD control | rules out implicit-reg explanation of v1 | trivial | settles InfoNCE post-mortem |
+
+**Recommendation (next course of action)**
+
+The literature survey + wandb forensics converge on **one decisive next step**: **launch Cell B — cross-subject masked reconstruction**, in the Brain-JEPA / PopT mold. The reasoning, in priority order:
+
+1. **The pred_loss objective is 99.5% of total training signal** (§A3). Any change that does not touch the prediction objective itself has near-zero leverage. Cell B touches the prediction objective directly — masking subject A's tokens and predicting them from subject B's at the same `t` is a different smooth-L1 target distribution, not a side regularizer.
+2. **InfoNCE-on-CorrCA is empirically dead** (§1.1, three independent failures). Brain-JEPA (arXiv:2409.19407 NeurIPS 2024 Spotlight) and PopT (arXiv:2406.03044 NeurIPS 2024) are the two published demonstrations that *cross-subject reconstruction works where cross-subject contrast fails on the same data*. Brain-JEPA reports +4–6 absolute points across every probe vs raw-signal MAE on UK-Biobank; PopT reports +6–12% on naturalistic-stimulus iEEG probes. We have published evidence at our scale and our objective family.
+3. **Gradient signal is dense**, not compressed into a similarity score; the loss has a meaningful non-chance floor; not subject to CorrCA double-dipping (since the target is reconstruction in token space, not separation in embedding space).
+4. **It re-uses the existing JEPA scaffolding** (predictor, EMA target, smooth-L1, mask collator), so the implementation is a sampler change + a forward-pass change, not a new model.
+
+**Cell B implementation outline** (for scaffolding):
+
+- Sampler: extend `StimAlignedBatchSampler` to emit *pairs* of clips at the same `(movie_id, position_bucket)` from two distinct recordings. K=2.
+- Forward path in `MaskedJEPA`: for the cross-subject branch, encode subject_A's clip and subject_B's clip; mask all of subject_A's tokens; concatenate subject_B's full token sequence as additional context; predictor reconstructs subject_A's masked tokens; smooth-L1 against EMA(subject_A's clip).
+- Loss: `λ_recon * cross_subject_recon_loss + standard_jepa_loss + VCLoss`. Start with λ_recon=0.5; sweep [0.25, 0.5, 1.0] in a 3-cell smoke if the first run is promising.
+- Branch: `kkokate/issue10-cell-b-cross-subject-recon` off current `kkokate/issue8-corrca-ablation-temporal-sweep`.
+- Smoke first (1 seed × 30 ep), then 5-seed full run if cross-subject loss decreases below its trivial floor.
+
+**Parallel low-cost track**: H1 (LeJEPA best-by-online-probe re-eval from existing checkpoint history) costs effectively zero and may resurrect a discarded result. Run it *while* Cell B is being scaffolded.
+
+**Defer**: C, D, F. C and D are the right next experiments *after* B has a clean number. F is the InfoNCE post-mortem and only matters if we ever want to publish the v1/v2/v3 negative result.
+
+The single-cell recommendation: **Cell B, with H1 as a free side-track.**
+
+## 4. Out-of-scope (tracked for completeness, not pursued)
+
+These directions appear in the literature and were considered but are excluded by the SSL + 1 movie + JEPA constraint:
+
+- **Supervised stimulus-feature MLP head co-trained with JEPA** (MindEye2 / MindFormer / MindLink, arXiv:2403.11207, arXiv:2405.17720). User position: "destroys the purpose of SSL." Tracked as the most likely external comparison if/when the SSL ceiling is hit.
+- **Multi-movie scaling beyond ~3 movies**. v3 already showed null at 3 movies; further movies are additional engineering with no expected lift under our objective.
+- **Non-JEPA backbones** (LaBraM tokenized codebook prediction, EEG2Rep signal-space prediction, raw-CNN CL-SSTER). Out by JEPA constraint, but CL-SSTER's design is the canonical demonstration that contrastive objectives need a *learnable* spatial frontend — the exact reason our InfoNCE-on-CorrCA failed.
+- **Replacing CorrCA with a learnable spatial frontend** within JEPA. Adjacent to scope; would interact with Cell B in unpredictable ways. Defer until Cell B has a clean baseline.
+
+## 5. References
+
+1. Yuan et al. (2024). *Contrastive Learning of Shared Spatiotemporal EEG Representations Across Individuals for Naturalistic Neuroscience* (CL-SSTER). arXiv:2402.14213; NeuroImage 2024. — Primary reference for CorrCA-double-dipping diagnosis.
+2. Robinson et al. (2021). *Can contrastive learning avoid shortcut solutions?* arXiv:2106.11230 (NeurIPS 2021). — Mechanistic basis for InfoNCE flatlining at chance.
+3. Dong, Li et al. (2024). *Brain-JEPA: Brain Dynamics Foundation Model with Gradient Positioning and Spatiotemporal Masking*. arXiv:2409.19407 (NeurIPS 2024 Spotlight). — Cell B prior art; Cross-ROI mask = our cross-subject mask.
+4. Chau et al. (2024). *Population Transformer (PopT): Learning Population-level Representations of Intracranial Activity*. arXiv:2406.03044 (NeurIPS 2024). — Cell B cross-channel discrimination variant; cleanest non-contrastive cross-electrode objective.
+5. Apple ML / Zippi et al. (2025). *Learning the Relative Composition of EEG Signals using Pairwise Relative Shift Pretraining (PARS)*. arXiv:2511.11940 (NeurIPS 2025 FM4Brain workshop). — Cell D prior art.
+6. Fei et al. (2025). *Audio-JEPA: Joint-Embedding Predictive Architecture for Audio Representation Learning*. arXiv:2507.02915. — Cell C prior art; mel-spectrogram patches match wav2vec 2.0 with 1/5 data.
+7. Kahve et al. (2025). *WavJEPA: Semantic Learning Unlocks Robust Audio Foundation Models for Raw Waveforms*. arXiv:2509.23238. — Counter-experiment for Cell C; bounds when raw vs spectrogram wins.
+8. Kuruppu, Wagh et al. (2025). *EEG Foundation Models: A Critical Review*. arXiv:2511.... (v3 Dec 2025). — Establishes that EEG-SSL ceiling is objective-limited not data-limited at our scale.
+9. Yang et al. (2024). *Scaling Law in Neural Data: Non-Invasive Speech Decoding with 175 Hours of EEG Data*. arXiv:2407.07595. — Per-subject scaling; we are at 3 min/subject end.
+10. Smith et al. (2021). *On the Origin of Implicit Regularization in SGD*. arXiv:2101.12176 (ICLR 2021). — Cell F mechanism: gradient-noise regularization from non-learning auxiliary.
+11. Zhang & Salakhutdinov (2024). *Normalization Layer Per-Example Gradients are Sufficient to Predict Gradient Noise Scale in Transformers*. arXiv:2411.00999 (NeurIPS 2024). — Quantitative basis for Cell F.
+
+## Appendix: Wandb regularizer forensics (2026-05-03)
+
+Pulled all available `sccn/eb_jepa` runs across `phaseD_nw4ws2_baseline` (5 seeds, std=0.25/cov=0.25), `issue10_lever1` (5 seeds same VC + InfoNCE λ=0.5), `issue10_lever1_v2/v3` (10 seeds), `issue10_lejepa` (1 seed), and `sweep_vicreg` (27 runs, varying std/cov). Phase D itself only logged aggregate `train/vc_loss`; all per-component decomposition below uses `issue10_lever1` (Lever 1 v1) as a proxy because it shares Phase D's std=0.25/cov=0.25 config and ran with the richer logging path. Companion plot: [`docs/regularizer_forensics_2026-05-03.png`](regularizer_forensics_2026-05-03.png).
+
+### A1. The std hinge is dead by epoch ~5–11
+
+`std_loss` (raw, unweighted, hinge margin = 1) trajectory across 5 Lever 1 v1 seeds:
+
+| seed | ep0 | ep<0.5 | ep<0.1 | ep<0.05 | ep<0.01 | argmin ep | min | last (ep99) |
+|---|---|---|---|---|---|---|---|---|
+| 42   | 0.611 | 1 | 4 | 5 | 6  | 27 | 0.0 | 0.0001 |
+| 123  | 0.608 | 1 | 3 | 4 | 7  | 12 | 0.0 | 0.0064 |
+| 456  | 0.615 | 1 | 5 | 5 | 9  | 41 | 0.0 | 0.0000 |
+| 789  | 0.614 | 1 | 3 | 4 | 11 | 11 | 0.0 | 0.0000 |
+| 2025 | 0.613 | 2 | 4 | 4 | 8  | 28 | 0.0 | 0.0014 |
+
+`std_loss` crosses below 0.01 within **6–11 epochs** in all 5 seeds. After that point the hinge is fully satisfied (the projector output's per-dim std is ≥ 1.0 on every batch) and the std term contributes ≈ zero gradient for the remaining 89+ epochs. **For ~90 % of training, `std_coeff` is doing nothing.**
+
+### A2. cov_loss never decreases below ~0.025; the "cov regularizer" is at a stable equilibrium with pred_loss
+
+`cov_loss` (off-diagonal squared covariance):
+
+| seed | ep0 | argmin ep | min | last (ep99) |
+|---|---|---|---|---|
+| 42   | 0.0043 | 0  | 0.0043 | 0.0268 |
+| 123  | 0.0037 | 0  | 0.0037 | 0.0251 |
+| 456  | 0.0040 | 0  | 0.0040 | 0.0287 |
+| 789  | 0.0025 | 0  | 0.0025 | 0.0276 |
+| 2025 | 0.0033 | 0  | 0.0033 | 0.0267 |
+
+The minimum is at **initialization** in 5/5 seeds. From there, `cov_loss` *increases* to ~0.025–0.030 and stays there. The encoder's projector dimensions become *more correlated* during training, not less — the covariance regularizer is fighting an uphill battle and losing, settling into a local equilibrium where the cov-decorrelation gradient is balanced by the pred_loss gradient that wants to align dimensions.
+
+### A3. Weighted decomposition: cov dominates the regularizer after ep ~10
+
+Across-seed mean of weighted contributions to `vc_loss`:
+
+| epoch | std_raw | cov_raw | 0.25·std (weighted) | 0.25·cov (weighted) | frac_cov_in_vc |
+|---|---|---|---|---|---|
+| 1   | 0.390  | 0.060 | 0.0976 | 0.0150 | 14 % |
+| 5   | 0.066  | 0.103 | 0.0164 | 0.0258 | 64 % |
+| 10  | 0.019  | 0.076 | 0.0049 | 0.0189 | 80 % |
+| 30  | 0.001  | 0.045 | 0.0004 | 0.0113 | 97 % |
+| 50  | 0.002  | 0.034 | 0.0004 | 0.0085 | 95 % |
+| 80  | 0.001  | 0.027 | 0.0003 | 0.0067 | 96 % |
+| 100 | ≈0     | 0.027 | ≈0     | 0.0067 | ~100 % |
+
+**By epoch ~30, std_coeff·std contributes < 1 % of `vc_loss`.** The regularizer is effectively cov-only for 70 % of training. Total `vc_loss` ≈ 0.0067 vs `pred_loss` ≈ 1.30 → **VC is 0.5 % of total training loss after epoch 30.** The encoder is ~99.5 % driven by smooth-L1 prediction.
+
+### A4. Probe-decline does NOT correlate strongly with regularizer trajectory in Phase D
+
+Pearson r between (Δ regularizer, peak→last) and (Δ probe, peak→last) across 5 seeds:
+
+| group | regularizer | probe | mean Δreg | mean Δprobe | Pearson r |
+|---|---|---|---|---|---|
+| Phase D | vc_loss  | position  |  +0.0025 | +0.124 | −0.28 |
+| Phase D | vc_loss  | luminance |  +0.0041 | +0.073 | −0.06 |
+| Phase D | vc_loss  | contrast  |  +0.0004 | +0.080 | +0.08 |
+| Phase D | vc_loss  | narrative |  +0.0040 | +0.075 | **−0.57** |
+| Lever1 v1 | std_loss | position  | −0.0015 | +0.074 | +0.87 |
+| Lever1 v1 | cov_loss | luminance | +0.0062 | +0.048 | **+0.93** |
+| Lever1 v1 | cov_loss | contrast  | +0.0036 | +0.051 | **+0.93** |
+| Lever1 v1 | pred_loss | position | −0.025  | +0.074 | +0.58 |
+
+The Phase D `vc_loss → probe-decline` correlations are mostly **negative or near-zero** (the regularizer continues to fall slightly while probes decline — the wrong sign for the "VC erosion → probe erosion" hypothesis). The Lever 1 v1 cov_loss correlations are strongly positive for lum/cont (within-seed variance), but the magnitudes of Δcov and Δprobe are decoupled (cov moves 0.006 while probes move 0.05–0.10).
+
+**Interpretation**: probe decline is **not primarily a regularizer phenomenon**. The most parsimonious explanation is online-probe-head noise (small head, ~30 SGD steps per probe round, noisy buffer) plus a small contribution from pred_loss continuing to optimize for subject-DC dimensions.
+
+### A5. Adding InfoNCE perturbs the regularizer trajectory by < 0.001 (vc_loss is identical)
+
+Phase D vs Lever 1 v1 (5 seeds each, mean across seeds):
+
+| group | vc_loss ep1 | ep50 | ep100 | min |
+|---|---|---|---|---|
+| Phase D    | 0.1538 | 0.0084 | 0.0062 | 0.0061 @ ep95 |
+| Lever1 v1  | 0.1540 | 0.0089 | 0.0071 | 0.0068 @ ep95 |
+
+The InfoNCE auxiliary head adds ≤ 0.001 to vc_loss across the entire run. **The implicit-regularization story for v1's lift (research memo §6 / Cell F) is empirically supported but quantitatively tiny** — the InfoNCE head is not perturbing the VC dynamics in any measurable way; if v1 lifted probes vs Phase D, it was through gradient-noise on parameter trajectories, not through changed regularizer pressure.
+
+### A6. LeJEPA: pred_loss collapses to 0.001; SIGReg flatlines at 0.40 — but probes peaked competitively first
+
+| metric | ep1 | ep5 | ep10 | ep50 | min |
+|---|---|---|---|---|---|
+| pred_loss | 0.873 | 0.164 | 0.043 | 0.003 | 0.001 @ ep86 |
+| sigreg_loss | 0.827 | 0.423 | 0.406 | 0.401 | 0.398 @ ep77 |
+
+SIGReg never moves past 0.40 — the constraint is too weak to prevent collapse. **However**, val probes peaked at competitive values *before* collapse:
+
+| probe | LeJEPA peak | LeJEPA peak ep | LeJEPA last (ep99) | Phase D peak (best seed) |
+|---|---|---|---|---|
+| position  | 0.291 | 68 | 0.042 | 0.298 |
+| luminance | 0.271 | 68 | 0.039 | 0.245 |
+| contrast  | 0.247 | 68 | 0.041 | 0.238 |
+| narrative | 0.065 | 65 | 0.010 | 0.103 |
+
+LeJEPA at ep ~65 is *competitive with Phase D best* on lum / cont / pos and only loses on narrative. **Under the now-settled best-by-online-probe policy, LeJEPA is not actually a failed experiment — it's a successful one truncated at ep65 by collapse.** A LeJEPA run with stronger anti-collapse (e.g. SIGReg + cov, or LeJEPA + EMA) is a viable line of work.
+
+### A7. stim_nce_loss flatline confirmed across all 15 InfoNCE runs
+
+log(B−1) = log(63) = 4.143 = chance. Across runs:
+
+| group | n | per-run mean of stim_nce_loss | std across epochs (per run, mean) |
+|---|---|---|---|
+| Lever1 v1 (random sampler, mean-pool) | 5 | 4.0947 | 0.0003 |
+| Lever1 v2 (structured K=4, kc-pool, λ=2.0) | 5 | 4.140 | ~0.005 |
+| Lever1 v3 (multi-movie + structured) | 5 | 4.140 | ~0.005 |
+
+The aux loss never moves measurably (all values within 0.005 of chance for 100 epochs in 15 runs). Eliminating the InfoNCE family is settled at a level of certainty that this whole grid won't change.
+
+### A8. sweep_vicreg: (std=0.25, cov=0.25) is a defensible local optimum
+
+Mean peak probe correlation (averaged over 4 stim probes) by (std, cov):
+
+| std_coeff | cov_coeff | n runs | mean peak | max |
+|---|---|---|---|---|
+| 0.25 | 0.25 | 10 | **0.138** | 0.230 |
+| 0.10 | 0.10 | 10 | 0.128 | 0.216 |
+| 1.00 | 1.00 | 7  | 0.122 | 0.177 |
+
+(std=0.25, cov=0.25) wins on the mean by a small margin. (0.10, 0.10) is within noise — i.e. *halving the regularizer doesn't hurt*, consistent with A1/A2 showing the regularizer is mostly inert. (1.0, 1.0) over-regularizes and hurts. The current default is fine; there is no headroom to find by tuning the VC coefficients further.
+
+### A9. Headline takeaways and impact on the research-memo cell ranking
+
+1. **The std-hinge term is dead by epoch ~10**, contributing ~zero gradient for ~90 % of training. The cov term is the only active regularizer after that, and it sits at a stable equilibrium ~0.025 that `pred_loss` resists pushing further down. **Total VC contribution to training loss after epoch 30 is ~0.5 %.** The regularizer is not "destroying" results — it is barely doing anything at all.
+2. **Probe peak-then-decline is NOT explained by regularizer drift in Phase D** (Pearson r mostly negative or near-zero). Most likely it is online-probe-head noise. Combined with the now-settled best-by-online-probe policy, the phenomenon is no longer a research blocker.
+3. **LeJEPA's "failure" was actually a competitive ep ~65 run that then collapsed.** Under best-by-online-probe selection, LeJEPA is not eliminated — it is a candidate for revival with stronger anti-collapse (e.g. SIGReg + cov hybrid, or restoring EMA).
+
+**Cell ranking impact:**
+
+- **Cell E (VC cov_coeff decay schedule) — DROPPED**. The data shows VC is contributing 0.5 % of total loss; scheduling it down further has minimal expected effect, and the cross-seed correlation between vc_loss decline and probe decline in Phase D is *negative or zero*, contradicting Cell E's underlying hypothesis. Removed from §2 and §3.
+- **Cell F (InfoNCE → explicit dropout/SD control) — KEEP but lowest priority**. A6 confirms that adding InfoNCE perturbs vc by < 0.001. The implicit-regularization story for v1 is plausible at the gradient-noise level but the lift from v1 was already shown to be checkpoint cherry-picking. Run F as a one-shot post-mortem only.
+- **Cell B (cross-subject masked reconstruction) — STRONGLY SUPPORTED**. With pred_loss being 99.5 % of total loss, any change to the prediction objective dominates any regularizer change. B replaces the prediction target with a cross-subject reconstruction target — directly attacking where 99.5 % of the gradient lives. This is now the unambiguous top recommendation.
+- **Cell C (STFT-magnitude patches) — STRONGLY SUPPORTED**. Same argument as B (changes the prediction target). Independent code path; can run in parallel with B.
+- **Cell D (PARS temporal-shift regression) — KEEP** as additive auxiliary on top of B/C.
+- **NEW (Cell H): LeJEPA + best-by-online-probe rerun**. LeJEPA actually peaked at competitive probes at ep ~65 before collapsing. Re-run LeJEPA with the best-by-online-probe artifact as the headline metric, OR add a hybrid SIGReg + cov anti-collapse term, OR simply early-stop LeJEPA at ~ep 60. Cheap discriminator that may revive a discarded result.
+
+Recommended top-of-grid update: **B, C, D, H, F. Drop E.**
+
+## Changelog
+
+- 2026-05-03 — Original v2 memo (12 references, 6 puzzles).
+- 2026-05-03 (rewrite) — Folded in Lever 1 v1/v2/v3 + LeJEPA empirical results. Eliminated InfoNCE family entirely. Reduced cells from 7 to 6, reranked under SSL + 1 movie + JEPA constraint envelope. Surfaced "probes peak then decline" as the new central puzzle. Cell A (best-by-probe checkpointing) added as universal prereq. Out-of-scope section made explicit. Single research doc going forward; previous research/phase/lever1 docs deleted.
+- 2026-05-03 (Cell A demoted) — Best-by-online-probe checkpointing reclassified from research cell to settled policy: all training runs save `best_by_online_probe.pth.tar` and downstream eval uses it as the headline artifact. Active grid is now B / C / D / E / F. B (cross-subject masked reconstruction) is the recommended first launch.
+- 2026-05-03 (regularizer forensics appendix) — Pulled W&B logs across Phase D, Lever 1 v1/v2/v3, LeJEPA, and sweep_vicreg. Findings: std hinge dead by ep ~10; cov_loss never below 0.025; VC = 0.5 % of training loss after ep 30; probe-decline NOT correlated with vc_loss in Phase D (Pearson r ≈ −0.06 to −0.57); InfoNCE perturbs vc by < 0.001 across all 15 runs; LeJEPA peaked at competitive probes (~0.27 r) at ep 65 before collapsing. Cell ranking updated: B/C/D strongly supported, E demoted (regularizer is barely doing anything anyway), F lowest-priority post-mortem, new Cell H (LeJEPA early-stop rerun) added. Companion plot at `docs/regularizer_forensics_2026-05-03.png`.
+- 2026-05-03 (Cell E dropped, Cell B promoted as decisive next step) — Cell E removed from §2 and §3 grid. Cell H added to §2. Active grid is now B / C / D / H / F. Recommendation block in §3 expanded into a 4-point literature+forensics-grounded case for Cell B (cross-subject masked reconstruction, Brain-JEPA / PopT mold) as the single next experiment, with H1 (LeJEPA best-by-online-probe re-eval from existing checkpoints) as a free side-track. Implementation outline added.
