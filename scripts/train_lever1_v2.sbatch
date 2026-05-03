@@ -37,7 +37,8 @@ STIM_COEFF="${STIM_COEFF:-2.0}"
 STIM_TAU="${STIM_TAU:-0.1}"
 STIM_BUCKET="${STIM_BUCKET:-0.025}"
 STIM_K="${STIM_K:-4}"
-TASKS="${TASKS:-ThePresent}"   # comma-separated: e.g. "ThePresent,DespicableMe"
+TASKS="${TASKS:-ThePresent}"   # use '+' as separator in sbatch --export (commas reserved)
+TASKS="${TASKS//+/,}"          # convert back to comma for the Python CLI
 
 echo "Cfg: seed=${SEED} tag=${EXP_TAG} nw=${NW} ws=${WS} bs=${BATCH_SIZE}"
 echo "     lr=${LR} epochs=${EPOCHS} stim_coeff=${STIM_COEFF} K=${STIM_K} bucket=${STIM_BUCKET}"
