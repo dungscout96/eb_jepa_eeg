@@ -27,7 +27,7 @@ SEEDS = [2025, 2026, 2027, 2028, 2029]
 def _eval_cmd(seed):
     return (
         "PYTHONPATH=. uv run --group eeg"
-        " python experiments/eeg_jepa/probe_eval.py"
+        " python -m eb_jepa.evaluation.probe_eval"
         f" --checkpoint={CHECKPOINT}"
         f" --corrca_filters={CORRCA}"
         " --norm_mode=per_recording"

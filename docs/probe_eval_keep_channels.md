@@ -77,7 +77,7 @@ Every probe is now significant under all three lenses.
 ## Usage
 
 ```bash
-PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/probe_eval.py \
+PYTHONPATH=. uv run --group eeg python -m eb_jepa.evaluation.probe_eval \
     --checkpoint=/path/to/latest.pth.tar \
     --norm_mode=per_recording \
     --corrca_filters=corrca_filters.npz \

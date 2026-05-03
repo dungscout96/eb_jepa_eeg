@@ -53,7 +53,7 @@ def _probe_cmd(nw, ws, bs, ckpt_rel):
     ckpt = f"{CKPT_BASE}/{ckpt_rel}"
     return (
         "PYTHONPATH=. uv run --group eeg"
-        " python experiments/eeg_jepa/probe_eval.py"
+        " python -m eb_jepa.evaluation.probe_eval"
         f" --checkpoint={ckpt}"
         " --norm_mode=per_recording"
         f" --n_windows={nw} --window_size_seconds={ws}"

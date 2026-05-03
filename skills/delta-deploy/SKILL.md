@@ -100,7 +100,7 @@ if [ ! -f "$CKPT" ]; then
     exit 1
 fi
 
-PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/probe_eval.py \
+PYTHONPATH=. uv run --group eeg python -m eb_jepa.evaluation.probe_eval \
     --checkpoint="$CKPT" \
     --splits=val,test \
     --norm_mode=per_recording \

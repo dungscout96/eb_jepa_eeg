@@ -93,7 +93,7 @@ CHECKPOINTS = [
 def _make_eval_cmd(nw, ws, bs, seed, ckpt_path, subject_only=False):
     cmd = (
         "PYTHONPATH=. uv run --group eeg"
-        " python experiments/eeg_jepa/probe_eval.py"
+        " python -m eb_jepa.evaluation.probe_eval"
         f" --checkpoint={ckpt_path}"
         f" --n_windows={nw}"
         f" --window_size_seconds={ws}"

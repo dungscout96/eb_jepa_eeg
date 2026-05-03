@@ -36,7 +36,7 @@ if [ -f "$HOME/.wandb_key" ]; then
 fi
 export WANDB_PROJECT="${WANDB_PROJECT:-eb_jepa}"
 
-PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/probe_eval.py \
+PYTHONPATH=. uv run --group eeg python -m eb_jepa.evaluation.probe_eval \
     --checkpoint="${CKPT}" \
     --n_windows=4 \
     --window_size_seconds=2 \

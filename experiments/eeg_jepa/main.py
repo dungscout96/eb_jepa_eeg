@@ -56,7 +56,7 @@ from eb_jepa.training_utils import (
     setup_seed,
     setup_wandb,
 )
-from experiments.eeg_jepa.eval import validation_loop
+from eb_jepa.evaluation import validation_loop
 
 logger = get_logger(__name__)
 

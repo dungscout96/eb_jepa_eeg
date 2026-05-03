@@ -34,7 +34,7 @@ CHECKPOINTS = [
 def _probe_cmd(nw, ws, bs, ckpt):
     return (
         "PYTHONPATH=. uv run --group eeg"
-        " python experiments/eeg_jepa/probe_eval.py"
+        " python -m eb_jepa.evaluation.probe_eval"
         f" --checkpoint={ckpt}"
         f" --corrca_filters={CORRCA}"
         " --norm_mode=per_recording"

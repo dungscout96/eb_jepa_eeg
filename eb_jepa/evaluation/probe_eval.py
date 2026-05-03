@@ -16,7 +16,7 @@ Two probe types:
 
 Usage
 -----
-PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/probe_eval.py \\
+uv run --group eeg python -m eb_jepa.evaluation.probe_eval \\
     --checkpoint=/abs/path/to/latest.pth.tar \\
     --n_windows=4 --window_size_seconds=4 --batch_size=32
 
@@ -45,7 +45,7 @@ from eb_jepa.losses import ClassificationLoss, RegressionLoss, VCLoss
 from eb_jepa.masking import MultiBlockMaskCollator
 from eb_jepa.paths import resolve_preprocessed_dir
 from eb_jepa.training_utils import load_checkpoint, load_config, setup_device, setup_seed
-from experiments.eeg_jepa.eval import validation_loop
+from eb_jepa.evaluation.validation_loop import validation_loop
 
 logger = get_logger(__name__)
 

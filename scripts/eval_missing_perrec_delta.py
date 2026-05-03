@@ -24,7 +24,7 @@ CHECKPOINT = (
 def build_job():
     cmd = (
         "PYTHONPATH=. uv run --group eeg"
-        " python experiments/eeg_jepa/probe_eval.py"
+        " python -m eb_jepa.evaluation.probe_eval"
         f" --checkpoint={CHECKPOINT}"
         " --norm_mode=per_recording"
         " --n_windows=4 --window_size_seconds=4"

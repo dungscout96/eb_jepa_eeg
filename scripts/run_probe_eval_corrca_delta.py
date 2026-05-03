@@ -30,7 +30,7 @@ def build_job():
     # must match or the encoder sees differently-normalized inputs at test time.
     cmd = (
         "PYTHONPATH=. uv run --group eeg"
-        " python experiments/eeg_jepa/probe_eval.py"
+        " python -m eb_jepa.evaluation.probe_eval"
         f" --checkpoint={CHECKPOINT}"
         f" --corrca_filters={CORRCA}"
         " --norm_mode=per_recording"

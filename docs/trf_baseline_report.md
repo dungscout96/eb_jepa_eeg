@@ -40,7 +40,7 @@ grid won, indicating any lower alpha overfits.
 Pooled samples ≈ 1M, equivalent to ~280 minutes of EEG, well beyond the
 literature TRF data scale (typically ~30 min/subject, single-subject).
 
-**Eval.** Mirrors `experiments/eeg_jepa/probe_eval.py`:
+**Eval.** Mirrors `eb_jepa/evaluation/probe_eval.py`:
 - Pearson r on continuous prediction time series (per-recording, mean across recs).
 - Window-matched: aggregate prediction inside 1-s, 2-s, or 16-s clips,
   pool clips across recordings, compute Pearson r and median-split bal_acc.

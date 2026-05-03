@@ -36,7 +36,7 @@ export WANDB_PROJECT="${WANDB_PROJECT:-eb_jepa}"
 GIT_BRANCH="${GIT_BRANCH:-main}"
 git fetch origin && git checkout "$GIT_BRANCH" && git pull --ff-only origin "$GIT_BRANCH"
 
-PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/probe_eval.py \
+PYTHONPATH=. uv run --group eeg python -m eb_jepa.evaluation.probe_eval \
     --checkpoint="${CKPT}" \
     --n_windows=4 \
     --window_size_seconds=2 \

@@ -11,7 +11,7 @@ noise* — the latter is what you'd want to compare to chance.
 
 Usage
 -----
-uv run --group eeg python scripts/bootstrap_probe_eval.py \\
+uv run --group eeg python -m eb_jepa.evaluation.bootstrap \\
     --predictions_dir=/path/to/saved_predictions \\
     --split=test --n_bootstrap=1000
 """
