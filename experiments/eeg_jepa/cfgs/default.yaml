@@ -32,7 +32,7 @@ data:
   # emit per-clip (rec_idx, movie_id, position_bucket). Auto-enabled at runtime
   # when loss.stim_nce_coeff > 0; can be set explicitly here for diagnostics.
   return_stim_meta: false
-  stim_position_bucket_size: 4.0   # seconds per stim-time bucket
+  stim_position_bucket_size: 0.025  # fractional position_in_movie (≈ 5s/bucket in 200s movie)
   # Lever 1 v2: structured cross-subject batch sampler.
   stim_aligned_sampler: false      # if true, build batches with K clips per stim-bucket
   stim_aligned_flat_index: false   # auto-enabled when stim_aligned_sampler=true
