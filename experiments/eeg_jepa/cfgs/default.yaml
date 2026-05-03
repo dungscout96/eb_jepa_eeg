@@ -37,6 +37,11 @@ data:
   stim_aligned_sampler: false      # if true, build batches with K clips per stim-bucket
   stim_aligned_flat_index: false   # auto-enabled when stim_aligned_sampler=true
   stim_aligned_K: 4                 # clips per (movie, position_bucket) bucket per batch
+  # Step-level sampling: number of batches per epoch. null = match
+  # n_flat_clips // batch_size (Phase D random-sampler density). Crucial — the
+  # earlier bucket-level loop capped this at n_eligible_buckets / (B/K), which
+  # under-sampled the encoder by ~3 orders of magnitude on our data.
+  stim_aligned_steps_per_epoch: null
 
 model:
   # REVE encoder architecture (n_chans auto-detected from data)

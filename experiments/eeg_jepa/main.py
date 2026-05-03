@@ -273,8 +273,13 @@ def run(
     if use_aligned_sampler:
         from eb_jepa.datasets.hbn import StimAlignedBatchSampler
         K = int(cfg.data.get("stim_aligned_K", 4))
+        steps_per_epoch_cfg = cfg.data.get("stim_aligned_steps_per_epoch", None)
+        steps_per_epoch = (
+            int(steps_per_epoch_cfg) if steps_per_epoch_cfg is not None else None
+        )
         train_sampler = StimAlignedBatchSampler(
             train_set, batch_size=cfg.data.batch_size, K=K,
+            steps_per_epoch=steps_per_epoch,
             seed=cfg.meta.get("seed", 0),
         )
         train_loader = DataLoader(

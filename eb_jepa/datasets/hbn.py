@@ -1227,12 +1227,20 @@ class HBNMovieProbeDataset(HBNMovieDataset):
 
 
 class StimAlignedBatchSampler(torch.utils.data.Sampler):
-    """Yields batches with K clips per (movie, position_bucket) bucket from K
-    distinct recordings.
+    """Step-level sampler: each batch is built by drawing ``batch_size/K`` buckets
+    (with replacement) and ``K`` distinct recordings per drawn bucket.
 
-    Designed for the cross-subject stim-aligned InfoNCE loss (Lever 1 v2):
-    every batch is structurally guaranteed to contain at least one same-stim
-    cross-subject positive per anchor, so the loss has dense gradient signal.
+    Each yielded batch is structurally guaranteed to contain ``batch_size/K``
+    same-stim cross-subject groups of size K. Designed for cross-subject
+    objectives (Lever 1 InfoNCE; Cell B masked latent prediction).
+
+    Step-level (not bucket-level) iteration matches CL-SSTER, MindEye2, and
+    Defossez et al. (Meta speech-from-EEG): the step is the unit of sampling,
+    and ``steps_per_epoch`` is set independently of bucket count. The earlier
+    bucket-level iteration capped step count at ``n_eligible_buckets / (B/K)``
+    per epoch, which under-sampled the encoder by ~3 orders of magnitude on our
+    data (~1 batch/epoch with B=64, K=2, 39 eligible buckets — vs a Phase D
+    random-sampler density of ~1,073 batches/epoch on 68k flat clips).
 
     Wraps a ``JEPAMovieDataset`` whose ``stim_aligned_flat_index=True`` so the
     flat indices yielded here decode to ``(rec_idx, clip_start)`` pairs in
@@ -1242,12 +1250,17 @@ class StimAlignedBatchSampler(torch.utils.data.Sampler):
     ----
     dataset : JEPAMovieDataset with stim_aligned_flat_index=True.
     batch_size : total clips per batch (must be divisible by K).
-    K : clips per bucket (= positives per anchor + 1).
-    drop_last : if True, drop trailing batches that don't fill batch_size.
-    seed : RNG seed; ``set_epoch`` advances it for shuffle-per-epoch.
+    K : clips per bucket (= positives per anchor + 1, or paired-clip count).
+    steps_per_epoch : number of batches yielded per epoch. ``None`` defaults to
+        ``len(dataset._flat_clips) // batch_size`` to match a random sampler's
+        per-epoch step density.
+    seed : RNG seed; ``set_epoch`` advances it for fresh sampling per epoch.
+    drop_last : retained for API compatibility; has no effect in step mode
+        because every yielded batch is exactly ``batch_size`` clips.
     """
 
     def __init__(self, dataset, batch_size: int, K: int = 4,
+                 steps_per_epoch: int | None = None,
                  drop_last: bool = True, seed: int = 0):
         self.dataset = dataset
         self.batch_size = int(batch_size)
@@ -1261,19 +1274,30 @@ class StimAlignedBatchSampler(torch.utils.data.Sampler):
             raise ValueError(
                 f"batch_size ({batch_size}) must be divisible by K ({K})"
             )
-        # Filter buckets with at least K distinct recordings.
+        # Filter buckets with at least K distinct recordings, and pre-index
+        # each eligible bucket by recording so per-step pair sampling is O(K).
         self.buckets: list[tuple[int, int]] = []
+        self._bucket_by_rec: dict[tuple[int, int], dict[int, list[int]]] = {}
         for key, flat_idxs in dataset._bucket_to_flat.items():
-            recs = {dataset._flat_clips[i][0] for i in flat_idxs}
-            if len(recs) >= self.K:
+            by_rec: dict[int, list[int]] = {}
+            for fi in flat_idxs:
+                rec = dataset._flat_clips[fi][0]
+                by_rec.setdefault(rec, []).append(fi)
+            if len(by_rec) >= self.K:
                 self.buckets.append(key)
+                self._bucket_by_rec[key] = by_rec
         if not self.buckets:
             raise RuntimeError("No bucket has >= K distinct recordings")
+
+        if steps_per_epoch is None:
+            steps_per_epoch = max(1, len(dataset._flat_clips) // self.batch_size)
+        self.steps_per_epoch = int(steps_per_epoch)
         self.epoch = 0
         self.seed = int(seed)
         logger.info(
-            "StimAlignedBatchSampler: %d eligible buckets (K=%d, batch_size=%d)",
-            len(self.buckets), self.K, self.batch_size,
+            "StimAlignedBatchSampler: %d eligible buckets (K=%d, batch_size=%d, "
+            "steps_per_epoch=%d)",
+            len(self.buckets), self.K, self.batch_size, self.steps_per_epoch,
         )
 
     def set_epoch(self, e: int) -> None:
@@ -1282,34 +1306,17 @@ class StimAlignedBatchSampler(torch.utils.data.Sampler):
     def __iter__(self):
         import random as _random
         rng = _random.Random(self.seed + self.epoch)
-        bucket_order = list(self.buckets)
-        rng.shuffle(bucket_order)
-        cur: list[int] = []
-        for bucket in bucket_order:
-            flat_idxs = self.dataset._bucket_to_flat[bucket]
-            # Group flat idxs by recording, then pick K distinct recordings.
-            by_rec: dict[int, list[int]] = {}
-            for fi in flat_idxs:
-                rec = self.dataset._flat_clips[fi][0]
-                by_rec.setdefault(rec, []).append(fi)
-            recs = list(by_rec.keys())
-            rng.shuffle(recs)
-            picked = []
-            for rec in recs[:self.K]:
-                picked.append(rng.choice(by_rec[rec]))
-            if len(picked) < self.K:
-                continue
-            cur.extend(picked)
-            while len(cur) >= self.batch_size:
-                yield cur[:self.batch_size]
-                cur = cur[self.batch_size:]
-        if cur and not self.drop_last:
-            yield cur
+        n_groups_per_batch = self.batch_size // self.K
+        for _ in range(self.steps_per_epoch):
+            batch: list[int] = []
+            for _ in range(n_groups_per_batch):
+                bucket = rng.choice(self.buckets)
+                by_rec = self._bucket_by_rec[bucket]
+                recs = list(by_rec.keys())
+                rng.shuffle(recs)
+                for rec in recs[:self.K]:
+                    batch.append(rng.choice(by_rec[rec]))
+            yield batch
 
     def __len__(self):
-        n_groups = len(self.buckets)
-        n_per_batch = self.batch_size // self.K
-        n_batches = n_groups // n_per_batch
-        if not self.drop_last and n_groups % n_per_batch:
-            n_batches += 1
-        return n_batches
+        return self.steps_per_epoch
