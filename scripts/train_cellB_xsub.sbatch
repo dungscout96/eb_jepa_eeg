@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --gpus-per-task=1
 #SBATCH --mem=64G
-#SBATCH --time=18:00:00
+#SBATCH --time=02:00:00
 #SBATCH --output=logs/cellB_%j.out
 #SBATCH --error=logs/cellB_%j.err
 # ---------------------------------------------------------------
@@ -37,12 +37,17 @@ EPOCHS="${EPOCHS:-100}"
 XSUB_COEFF="${XSUB_COEFF:-0.5}"
 XSUB_SYM="${XSUB_SYM:-true}"
 STIM_BUCKET="${STIM_BUCKET:-0.025}"
+# Phase D used the standard random sampler, which has __len__ ≈ 700 recordings
+# → ~11 batches/epoch with B=64. Match that density by default for apples-to-
+# apples comparison vs Phase D. Override with STEPS_PER_EPOCH=N.
+STEPS_PER_EPOCH="${STEPS_PER_EPOCH:-11}"
 TASKS="${TASKS:-ThePresent}"
 TASKS="${TASKS//+/,}"
 GROUP_TAG="${GROUP_TAG:-issue10_cellB_xsub}"
 
 echo "Cfg: seed=${SEED} tag=${EXP_TAG} nw=${NW} ws=${WS} bs=${BATCH_SIZE}"
 echo "     lr=${LR} epochs=${EPOCHS} xsub=${XSUB_COEFF} sym=${XSUB_SYM} bucket=${STIM_BUCKET}"
+echo "     steps_per_epoch=${STEPS_PER_EPOCH} (Phase D density = 11 by default)"
 
 cd "$SLURM_SUBMIT_DIR"
 module reset
@@ -77,6 +82,7 @@ PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py \
     --data.corrca_filters=corrca_filters.npz \
     --data.stim_position_bucket_size="${STIM_BUCKET}" \
     --data.tasks="${TASKS}" \
+    --data.stim_aligned_steps_per_epoch="${STEPS_PER_EPOCH}" \
     --loss.std_coeff=0.25 \
     --loss.cov_coeff=0.25 \
     --loss.pred_loss_type=smooth_l1 \
