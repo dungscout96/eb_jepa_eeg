@@ -12,9 +12,9 @@ MOCK_CHS_INFO = [{"ch_name": ch} for ch in [
     "F5", "F6", "FC5", "FC6",
 ]]
 
-def create_eeg_encoder(in_d=64, h_d=128, out_d=256, name="REVE", device="cpu"):
+def create_eeg_encoder(in_d=64, h_d=128, out_d=256, name="REVE", device="cpu", n_times=1000):
     """Helper function to create an EEGEncoder with mock channel info."""
-    encoder = EEGEncoder(in_d, h_d, out_d, name, chs_info=MOCK_CHS_INFO)
+    encoder = EEGEncoder(in_d, h_d, out_d, name, chs_info=MOCK_CHS_INFO, n_times=n_times)
     return encoder.to(device)
 
 def test_eeg_encoder_4d():
@@ -25,11 +25,11 @@ def test_eeg_encoder_4d():
     name = "REVE"  # Name of the Braindecode model to use
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    encoder = create_eeg_encoder(in_d, h_d, out_d, name, device=device)
+    time_steps = 1000
+    encoder = create_eeg_encoder(in_d, h_d, out_d, name, device=device, n_times=time_steps)
 
     # Create a sample input tensor with shape [B, 1, C, W]
     batch_size = 8
-    time_steps = 1000
     x = torch.randn(batch_size, 1, in_d, time_steps)
     x = x.to(device)
 
@@ -47,12 +47,12 @@ def test_eeg_encoder_5d():
     name = "REVE"  # Name of the Braindecode model to use
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    encoder = create_eeg_encoder(in_d, h_d, out_d, name, device=device)
+    time_steps = 1000
+    n_windows = 16
+    encoder = create_eeg_encoder(in_d, h_d, out_d, name, device=device, n_times=time_steps)
 
     # Create a sample input tensor with shape [B, 1, C, W]
     batch_size = 8
-    time_steps = 1000
-    n_windows = 16
     x = torch.randn(batch_size, 1, n_windows, in_d, time_steps)
     x = x.to(device)
 
