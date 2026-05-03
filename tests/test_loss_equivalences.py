@@ -14,8 +14,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from eb_jepa.losses import (
+    ClassificationLoss,
     CovarianceLoss,
     HingeStdLoss,
+    RegressionLoss,
     VCLoss,
     VICRegLoss,
 )
@@ -314,6 +316,45 @@ class TestVICRegLossRegression:
             f"Refactored total: {result['loss'].item():.8f} vs "
             f"Original total: {total_loss_orig.item():.8f}"
         )
+
+
+class TestProbeLosses:
+    """RegressionLoss and ClassificationLoss are the supervised probe losses
+    used by online training and by the post-training probe_eval pipeline.
+    Lifted to eb_jepa.losses so the eval module can import without depending
+    on experiments/."""
+
+    def test_regression_loss_zero_when_pred_matches_normalized_target(self):
+        mean = torch.tensor([2.0, -1.0])
+        std = torch.tensor([3.0, 0.5])
+        loss = RegressionLoss(mean, std)
+
+        target = torch.tensor([[[5.0, 0.5], [-1.0, -0.5]]])  # [1, T=2, F=2]
+        target_norm = (target - mean) / (std + 1e-8)
+
+        assert loss(target_norm, target).item() == pytest.approx(0.0, abs=1e-6)
+
+    def test_regression_loss_buffers_move_with_module(self):
+        loss = RegressionLoss(torch.zeros(2), torch.ones(2))
+        # Buffers should be registered (not just attributes)
+        assert "mean" in dict(loss.named_buffers())
+        assert "std" in dict(loss.named_buffers())
+
+    def test_classification_loss_uses_median_threshold(self):
+        median = torch.tensor([0.0, 5.0])
+        loss = ClassificationLoss(median)
+
+        # Target [10, 10] -> binary [1, 1] (10 > 0 and 10 > 5)
+        # Logits very large positive -> sigmoid ~ 1 -> BCE ~ 0
+        target = torch.tensor([[[10.0, 10.0]]])
+        big_pos_logits = torch.full_like(target, 50.0)
+        assert loss(big_pos_logits, target).item() == pytest.approx(0.0, abs=1e-6)
+
+        # Target [-10, 0] -> binary [0, 0] (neither exceeds median)
+        # Logits very large positive -> sigmoid ~ 1 -> BCE diverges
+        target_neg = torch.tensor([[[-10.0, 0.0]]])
+        loss_high = loss(big_pos_logits.clone(), target_neg)
+        assert loss_high.item() > 10.0
 
 
 if __name__ == "__main__":

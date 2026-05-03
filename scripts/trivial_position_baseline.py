@@ -36,7 +36,7 @@ from eb_jepa.datasets.hbn import (
 )
 from eb_jepa.logging import get_logger
 from eb_jepa.training_utils import load_config, setup_seed
-from experiments.eeg_jepa.main import resolve_preprocessed_dir
+from eb_jepa.paths import resolve_preprocessed_dir
 
 logger = get_logger(__name__)
 

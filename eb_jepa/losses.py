@@ -438,3 +438,37 @@ class SIGRegLoss(nn.Module):
         sigreg = epps_pulley(proj).mean()
         weighted = self.coeff * sigreg
         return weighted, sigreg, {"sigreg_loss": sigreg.item()}
+
+
+# ---------------------------------------------------------------------------
+# Movie-feature probe losses
+# Used by experiments/eeg_jepa/main.py online probes and by
+# eb_jepa.evaluation.probe_eval for the post-training evaluation pipeline.
+# ---------------------------------------------------------------------------
+
+
+class RegressionLoss(nn.Module):
+    """MSE loss with target z-normalization using training set statistics."""
+
+    def __init__(self, mean, std):
+        super().__init__()
+        self.register_buffer("mean", mean)  # [n_features]
+        self.register_buffer("std", std)    # [n_features]
+
+    def forward(self, pred, target):
+        # pred: [B, T, n_features], target: [B, T, n_features]
+        target_norm = (target - self.mean) / (self.std + 1e-8)
+        return F.mse_loss(pred, target_norm)
+
+
+class ClassificationLoss(nn.Module):
+    """BCE loss with median-based binary discretization of continuous targets."""
+
+    def __init__(self, median):
+        super().__init__()
+        self.register_buffer("median", median)  # [n_features]
+
+    def forward(self, pred, target):
+        # pred: [B, T, n_features] logits, target: [B, T, n_features] continuous
+        binary = (target > self.median).float()
+        return F.binary_cross_entropy_with_logits(pred, binary)

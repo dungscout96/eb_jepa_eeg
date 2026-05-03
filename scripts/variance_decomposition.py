@@ -79,7 +79,7 @@ def _build_and_load(checkpoint_path: Path, cfg_fname: str, n_windows: int,
     from eb_jepa.losses import VCLoss
     from eb_jepa.masking import MultiBlockMaskCollator
     from eb_jepa.training_utils import load_checkpoint, load_config
-    from experiments.eeg_jepa.main import resolve_preprocessed_dir
+    from eb_jepa.paths import resolve_preprocessed_dir
 
     ckpt_sd = torch.load(
         checkpoint_path, map_location="cpu", weights_only=False

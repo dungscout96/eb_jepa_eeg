@@ -33,8 +33,14 @@ from eb_jepa.architectures import (
 from eb_jepa.datasets.hbn import JEPAMovieDataset
 from eb_jepa.jepa import MaskedJEPA, MaskedJEPANoEMA, MaskedJEPAProbe
 from eb_jepa.logging import get_logger
-from eb_jepa.losses import VCLoss, SIGRegLoss
+from eb_jepa.losses import (
+    ClassificationLoss,
+    RegressionLoss,
+    SIGRegLoss,
+    VCLoss,
+)
 from eb_jepa.masking import MultiBlockMaskCollator
+from eb_jepa.paths import resolve_preprocessed_dir
 from eb_jepa.sanity_checks import SanityCheckHook
 from eb_jepa.training_utils import (
     get_default_dev_name,
@@ -55,56 +61,6 @@ from experiments.eeg_jepa.eval import validation_loop
 logger = get_logger(__name__)
 
 NUMERIC_FEATURES = None  # resolved from cfg.data.feature_names at runtime
-
-# Known preprocessed data locations (checked in order for auto-detection)
-_PREPROCESSED_DIRS = [
-    Path("/mnt/v1/dtyoung/data/eb_jepa_eeg/hbn_preprocessed"),
-    Path("/expanse/projects/nemar/dtyoung/.cache/eb_jepa_eeg/hbn_preprocessed"),
-    Path("/projects/bbnv/kkokate/hbn_preprocessed"),  # Delta
-]
-
-
-def resolve_preprocessed_dir(configured: str | None) -> Path | None:
-    """Return preprocessed_dir: use explicit config if set, else auto-detect."""
-    if configured:
-        return Path(configured)
-    for p in _PREPROCESSED_DIRS:
-        if p.exists():
-            logger.info("Auto-detected preprocessed_dir: %s", p)
-            return p
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Loss functions for movie-feature probes
-# ---------------------------------------------------------------------------
-
-
-class RegressionLoss(nn.Module):
-    """MSE loss with target z-normalization using training set statistics."""
-
-    def __init__(self, mean, std):
-        super().__init__()
-        self.register_buffer("mean", mean)  # [n_features]
-        self.register_buffer("std", std)    # [n_features]
-
-    def forward(self, pred, target):
-        # pred: [B, T, n_features], target: [B, T, n_features]
-        target_norm = (target - self.mean) / (self.std + 1e-8)
-        return F.mse_loss(pred, target_norm)
-
-
-class ClassificationLoss(nn.Module):
-    """BCE loss with median-based binary discretization of continuous targets."""
-
-    def __init__(self, median):
-        super().__init__()
-        self.register_buffer("median", median)  # [n_features]
-
-    def forward(self, pred, target):
-        # pred: [B, T, n_features] logits, target: [B, T, n_features] continuous
-        binary = (target > self.median).float()
-        return F.binary_cross_entropy_with_logits(pred, binary)
 
 
 # ---------------------------------------------------------------------------

@@ -41,16 +41,11 @@ from eb_jepa.architectures import EEGEncoderTokens, MaskedPredictor, MovieFeatur
 from eb_jepa.datasets.hbn import JEPAMovieDataset, _read_raw_windows
 from eb_jepa.jepa import MaskedJEPA, MaskedJEPAProbe
 from eb_jepa.logging import get_logger
-from eb_jepa.losses import VCLoss
+from eb_jepa.losses import ClassificationLoss, RegressionLoss, VCLoss
 from eb_jepa.masking import MultiBlockMaskCollator
+from eb_jepa.paths import resolve_preprocessed_dir
 from eb_jepa.training_utils import load_checkpoint, load_config, setup_device, setup_seed
 from experiments.eeg_jepa.eval import validation_loop
-from experiments.eeg_jepa.main import (
-    ClassificationLoss,
-    RegressionLoss,
-    _PREPROCESSED_DIRS,
-    resolve_preprocessed_dir,
-)
 
 logger = get_logger(__name__)
 

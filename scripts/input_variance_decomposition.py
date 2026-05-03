@@ -203,7 +203,7 @@ def _build_dataset(n_windows, window_size_seconds, split, norm_mode, corrca_path
                    cfg_fname, batch_size, num_workers):
     from eb_jepa.datasets.hbn import JEPAMovieDataset
     from eb_jepa.training_utils import load_config
-    from experiments.eeg_jepa.main import resolve_preprocessed_dir
+    from eb_jepa.paths import resolve_preprocessed_dir
 
     overrides = {
         "data.n_windows": n_windows,
