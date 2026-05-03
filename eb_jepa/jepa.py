@@ -487,7 +487,13 @@ class MaskedJEPANoEMA(nn.Module):
         self.regularizer = regularizer
         self.pred_loss_type = pred_loss_type
 
-    def forward(self, eeg: torch.Tensor) -> tuple[torch.Tensor, dict]:
+    def forward(
+        self,
+        eeg: torch.Tensor,
+        env_targets: torch.Tensor = None,  # accepted but ignored (no env head here)
+        stim_meta: torch.Tensor = None,    # accepted but ignored (no stim_nce here yet)
+    ) -> tuple[torch.Tensor, dict]:
+        del env_targets, stim_meta  # noqa: F841 — silence linter
         B = eeg.shape[0]
         device = eeg.device
 
