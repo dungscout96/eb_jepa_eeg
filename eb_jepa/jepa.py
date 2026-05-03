@@ -279,8 +279,12 @@ class MaskedJEPA(nn.Module):
         self.env_coeff = env_coeff
 
         # Lever 1: cross-subject stim-aligned InfoNCE auxiliary loss.
+        # When stim_nce_use_kc_pool=True (Lever 1 v2), the InfoNCE operates on
+        # the keep_channels-pooled embedding [B, C·D] rather than the global
+        # token mean [B, D] — preserves channel-specific stim signal.
         self.stim_nce_loss = stim_nce_loss
         self.stim_nce_coeff = float(stim_nce_coeff)
+        self.stim_nce_use_kc_pool = True
 
         # Freeze target encoder
         for p in self.target_encoder.parameters():
@@ -408,10 +412,18 @@ class MaskedJEPA(nn.Module):
                     "stim_meta required when stim_nce_coeff > 0; "
                     "pass return_stim_meta=True to JEPAMovieDataset."
                 )
-            # Re-encode full sequence (with grad) and pool to a per-clip global
-            # embedding [B, D]. Mean over all C·T·P tokens — same as DINO global.
+            # Re-encode full sequence (with grad) and pool to a per-clip
+            # embedding. Two pool modes:
+            #   v1 (use_kc_pool=False): mean over all C·T·P tokens → [B, D]
+            #   v2 (use_kc_pool=True):  keep_channels — pool over P then T
+            #                           and concat channel axis → [B, C·D]
             full_tokens = self.context_encoder.encode_tokens(eeg, mask=None)
-            z_clip = full_tokens.mean(dim=1)  # [B, D]
+            if self.stim_nce_use_kc_pool:
+                kc = self.context_encoder.pool_to_windows(full_tokens, keep_channels=True)
+                # [B, C·D, T, 1, 1] → [B, C·D]
+                z_clip = kc.squeeze(-1).squeeze(-1).mean(dim=2)
+            else:
+                z_clip = full_tokens.mean(dim=1)  # [B, D]
             stim_nce_loss, _, stim_info = self.stim_nce_loss(z_clip, stim_meta.to(device))
             loss_dict.update(stim_info)
 

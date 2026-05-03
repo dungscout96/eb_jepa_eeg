@@ -922,6 +922,45 @@ class JEPAMovieDataset(HBNMovieDataset):
             self._task_to_id[m.get("task", "_unknown")] for m in self._recording_metadata
         ]
 
+        # Lever 1 v2: optional flat-clip index for the StimAlignedBatchSampler.
+        # When ``stim_aligned_flat_index`` is enabled, __getitem__ accepts a flat
+        # index 0..N_clips-1 instead of rec_idx, and returns the clip at the
+        # specific (rec, start) pair (no random start). Buckets indexed by
+        # (movie_id, position_bucket) for cross-subject sampling.
+        self._stim_flat_index = bool(
+            cfg.get("stim_aligned_flat_index", False) if not isinstance(cfg, dict)
+            else cfg.get("stim_aligned_flat_index", False)
+        )
+        self._flat_clips: list[tuple[int, int]] = []
+        self._bucket_to_flat: dict[tuple[int, int], list[int]] = {}
+        if self._stim_flat_index:
+            feat_idx_pos = (
+                self.feature_names.index("position_in_movie")
+                if "position_in_movie" in self.feature_names else None
+            )
+            required = (n_windows - 1) * temporal_stride + 1
+            bucket_size = max(self._stim_position_bucket_size, 1e-6)
+            for rec_idx in range(len(self._fif_paths)):
+                n_clips = len(self._crop_inds[rec_idx]) - required + 1
+                if n_clips <= 0:
+                    continue
+                feats_rec = self.feature_recordings[rec_idx]
+                movie_id = int(self._task_id_per_recording[rec_idx])
+                for clip_start in range(n_clips):
+                    indices = list(range(clip_start, clip_start + required, temporal_stride))
+                    if feat_idx_pos is None:
+                        pos_bucket = 0
+                    else:
+                        mean_pos = float(feats_rec[indices, feat_idx_pos].mean().item())
+                        pos_bucket = int(mean_pos // bucket_size)
+                    self._flat_clips.append((rec_idx, clip_start))
+                    key = (movie_id, pos_bucket)
+                    self._bucket_to_flat.setdefault(key, []).append(len(self._flat_clips) - 1)
+            logger.info(
+                "Stim-aligned flat index: %d clips across %d (movie, pos_bucket) buckets",
+                len(self._flat_clips), len(self._bucket_to_flat),
+            )
+
         # Derive binary probe labels from subject metadata (age / sex).
         # Falls back to all-NaN if metadata is not available; the sanity
         # check hook will then use luminance as a fallback label instead.
@@ -1050,19 +1089,31 @@ class JEPAMovieDataset(HBNMovieDataset):
         return all_feats.median(0).values
 
     def __len__(self):
+        if self._stim_flat_index:
+            return len(self._flat_clips)
         return len(self._fif_paths)
 
     def __getitem__(self, idx):
-        crop_inds = self._crop_inds[idx]
-        feats = self.feature_recordings[idx]
-        n = len(crop_inds)
-        required = (self.n_windows - 1) * self.temporal_stride + 1
-        start = torch.randint(0, n - required + 1, (1,)).item()
-        indices = list(range(start, start + required, self.temporal_stride))
+        if self._stim_flat_index:
+            # Flat-clip mode (Lever 1 v2): idx → (rec_idx, clip_start) deterministic.
+            rec_idx, clip_start = self._flat_clips[idx]
+            crop_inds = self._crop_inds[rec_idx]
+            feats = self.feature_recordings[rec_idx]
+            required = (self.n_windows - 1) * self.temporal_stride + 1
+            indices = list(range(clip_start, clip_start + required, self.temporal_stride))
+            real_idx = rec_idx
+        else:
+            real_idx = idx
+            crop_inds = self._crop_inds[idx]
+            feats = self.feature_recordings[idx]
+            n = len(crop_inds)
+            required = (self.n_windows - 1) * self.temporal_stride + 1
+            start = torch.randint(0, n - required + 1, (1,)).item()
+            indices = list(range(start, start + required, self.temporal_stride))
 
         # Load only the needed windows from disk
         eeg = torch.from_numpy(
-            _read_raw_windows(self._fif_paths[idx], crop_inds[indices])
+            _read_raw_windows(self._fif_paths[real_idx], crop_inds[indices])
         )
 
         # Normalization: per-recording removes subject fingerprint, global preserves it
@@ -1084,7 +1135,7 @@ class JEPAMovieDataset(HBNMovieDataset):
 
         # Binary subject label (age > median, sex, …) — scalar float tensor.
         # NaN means metadata was unavailable for this recording.
-        probe_label = torch.tensor(self._probe_labels[idx], dtype=torch.float32)
+        probe_label = torch.tensor(self._probe_labels[real_idx], dtype=torch.float32)
 
         if not self._return_stim_meta:
             return eeg, feats[indices], probe_label
@@ -1099,8 +1150,8 @@ class JEPAMovieDataset(HBNMovieDataset):
         else:
             mean_pos = float(feats[indices, feat_idx_pos].mean().item())
             pos_bucket = int(mean_pos // max(self._stim_position_bucket_size, 1e-6))
-        movie_id = int(self._task_id_per_recording[idx])
-        stim_meta = torch.tensor([int(idx), movie_id, pos_bucket], dtype=torch.long)
+        movie_id = int(self._task_id_per_recording[real_idx])
+        stim_meta = torch.tensor([int(real_idx), movie_id, pos_bucket], dtype=torch.long)
         return eeg, feats[indices], probe_label, stim_meta
 
     @staticmethod
@@ -1173,3 +1224,92 @@ class HBNMovieProbeDataset(HBNMovieDataset):
         )
         features = self._flat_labels[idx]
         return torch.from_numpy(X[0]), features
+
+
+class StimAlignedBatchSampler(torch.utils.data.Sampler):
+    """Yields batches with K clips per (movie, position_bucket) bucket from K
+    distinct recordings.
+
+    Designed for the cross-subject stim-aligned InfoNCE loss (Lever 1 v2):
+    every batch is structurally guaranteed to contain at least one same-stim
+    cross-subject positive per anchor, so the loss has dense gradient signal.
+
+    Wraps a ``JEPAMovieDataset`` whose ``stim_aligned_flat_index=True`` so the
+    flat indices yielded here decode to ``(rec_idx, clip_start)`` pairs in
+    ``__getitem__``.
+
+    Args
+    ----
+    dataset : JEPAMovieDataset with stim_aligned_flat_index=True.
+    batch_size : total clips per batch (must be divisible by K).
+    K : clips per bucket (= positives per anchor + 1).
+    drop_last : if True, drop trailing batches that don't fill batch_size.
+    seed : RNG seed; ``set_epoch`` advances it for shuffle-per-epoch.
+    """
+
+    def __init__(self, dataset, batch_size: int, K: int = 4,
+                 drop_last: bool = True, seed: int = 0):
+        self.dataset = dataset
+        self.batch_size = int(batch_size)
+        self.K = int(K)
+        self.drop_last = bool(drop_last)
+        if not getattr(dataset, "_stim_flat_index", False):
+            raise ValueError(
+                "StimAlignedBatchSampler requires dataset.stim_aligned_flat_index=True"
+            )
+        if self.batch_size % self.K != 0:
+            raise ValueError(
+                f"batch_size ({batch_size}) must be divisible by K ({K})"
+            )
+        # Filter buckets with at least K distinct recordings.
+        self.buckets: list[tuple[int, int]] = []
+        for key, flat_idxs in dataset._bucket_to_flat.items():
+            recs = {dataset._flat_clips[i][0] for i in flat_idxs}
+            if len(recs) >= self.K:
+                self.buckets.append(key)
+        if not self.buckets:
+            raise RuntimeError("No bucket has >= K distinct recordings")
+        self.epoch = 0
+        self.seed = int(seed)
+        logger.info(
+            "StimAlignedBatchSampler: %d eligible buckets (K=%d, batch_size=%d)",
+            len(self.buckets), self.K, self.batch_size,
+        )
+
+    def set_epoch(self, e: int) -> None:
+        self.epoch = int(e)
+
+    def __iter__(self):
+        import random as _random
+        rng = _random.Random(self.seed + self.epoch)
+        bucket_order = list(self.buckets)
+        rng.shuffle(bucket_order)
+        cur: list[int] = []
+        for bucket in bucket_order:
+            flat_idxs = self.dataset._bucket_to_flat[bucket]
+            # Group flat idxs by recording, then pick K distinct recordings.
+            by_rec: dict[int, list[int]] = {}
+            for fi in flat_idxs:
+                rec = self.dataset._flat_clips[fi][0]
+                by_rec.setdefault(rec, []).append(fi)
+            recs = list(by_rec.keys())
+            rng.shuffle(recs)
+            picked = []
+            for rec in recs[:self.K]:
+                picked.append(rng.choice(by_rec[rec]))
+            if len(picked) < self.K:
+                continue
+            cur.extend(picked)
+            while len(cur) >= self.batch_size:
+                yield cur[:self.batch_size]
+                cur = cur[self.batch_size:]
+        if cur and not self.drop_last:
+            yield cur
+
+    def __len__(self):
+        n_groups = len(self.buckets)
+        n_per_batch = self.batch_size // self.K
+        n_batches = n_groups // n_per_batch
+        if not self.drop_last and n_groups % n_per_batch:
+            n_batches += 1
+        return n_batches

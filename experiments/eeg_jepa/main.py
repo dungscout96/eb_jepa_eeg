@@ -194,9 +194,17 @@ def run(
     # Lever 1: when the stim-aligned InfoNCE auxiliary is active, the dataloader
     # must emit (rec_idx, movie_id, position_bucket). Auto-enable so callers
     # only need to set --loss.stim_nce_coeff=...
-    if float(cfg.loss.get("stim_nce_coeff", 0.0)) > 0 and not cfg.data.get("return_stim_meta", False):
+    stim_nce_active = float(cfg.loss.get("stim_nce_coeff", 0.0)) > 0
+    if stim_nce_active and not cfg.data.get("return_stim_meta", False):
         OmegaConf.update(cfg, "data.return_stim_meta", True, force_add=True)
         logger.info("Auto-enabled data.return_stim_meta=True (loss.stim_nce_coeff > 0)")
+    # Lever 1 v2: structured cross-subject batches.
+    use_aligned_sampler = bool(cfg.data.get("stim_aligned_sampler", False))
+    if use_aligned_sampler and not stim_nce_active:
+        logger.warning("data.stim_aligned_sampler set but loss.stim_nce_coeff=0; sampler will run anyway")
+    if use_aligned_sampler and not cfg.data.get("stim_aligned_flat_index", False):
+        OmegaConf.update(cfg, "data.stim_aligned_flat_index", True, force_add=True)
+        logger.info("Auto-enabled data.stim_aligned_flat_index=True for sampler")
 
     train_set = JEPAMovieDataset(
         split="train",
@@ -224,14 +232,30 @@ def run(
     feature_median = train_set.compute_feature_median()
 
     num_workers = cfg.data.num_workers
-    train_loader = DataLoader(
-        train_set,
-        batch_size=cfg.data.batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        pin_memory=True,
-        persistent_workers=num_workers > 0,
-    )
+    if use_aligned_sampler:
+        from eb_jepa.datasets.hbn import StimAlignedBatchSampler
+        K = int(cfg.data.get("stim_aligned_K", 4))
+        train_sampler = StimAlignedBatchSampler(
+            train_set, batch_size=cfg.data.batch_size, K=K,
+            seed=cfg.meta.get("seed", 0),
+        )
+        train_loader = DataLoader(
+            train_set,
+            batch_sampler=train_sampler,
+            num_workers=num_workers,
+            pin_memory=True,
+            persistent_workers=num_workers > 0,
+        )
+    else:
+        train_sampler = None
+        train_loader = DataLoader(
+            train_set,
+            batch_size=cfg.data.batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=True,
+            persistent_workers=num_workers > 0,
+        )
     val_loader = DataLoader(
         val_set,
         batch_size=cfg.data.batch_size,
@@ -507,6 +531,8 @@ def run(
     total_steps = cfg.optim.epochs * len(train_loader)
 
     for epoch in range(start_epoch, cfg.optim.epochs):
+        if train_sampler is not None and hasattr(train_sampler, "set_epoch"):
+            train_sampler.set_epoch(epoch)
         pbar = tqdm(
             train_loader,
             desc=f"Epoch {epoch}",
