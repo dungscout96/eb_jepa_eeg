@@ -259,7 +259,8 @@ class MaskedJEPA(nn.Module):
                  pred_loss_type="mse",
                  dino_head=None, dino_target_head=None, dino_loss_fn=None, dino_coeff: float = 0.0,
                  env_aux_head=None, env_coeff: float = 0.0,
-                 stim_nce_loss=None, stim_nce_coeff: float = 0.0):
+                 stim_nce_loss=None, stim_nce_coeff: float = 0.0,
+                 xsub_coeff: float = 0.0, xsub_symmetric: bool = True):
         super().__init__()
         self.context_encoder = context_encoder
         self.target_encoder = target_encoder
@@ -285,6 +286,15 @@ class MaskedJEPA(nn.Module):
         self.stim_nce_loss = stim_nce_loss
         self.stim_nce_coeff = float(stim_nce_coeff)
         self.stim_nce_use_kc_pool = True
+
+        # Cell B: cross-subject masked latent prediction (Brain-JEPA / PopT mold).
+        # When xsub_coeff > 0, batches are paired (clip A, clip B at same
+        # (movie, position_bucket); see StimAlignedBatchSampler with K=2). For
+        # each pair we predict EMA(A)[masked positions] from B's full token
+        # context (no masking on B). Symmetric: also predict EMA(B)[masked]
+        # from A's full context. Pure JEPA — predictor + EMA target preserved.
+        self.xsub_coeff = float(xsub_coeff)
+        self.xsub_symmetric = bool(xsub_symmetric)
 
         # Freeze target encoder
         for p in self.target_encoder.parameters():
@@ -427,12 +437,65 @@ class MaskedJEPA(nn.Module):
             stim_nce_loss, _, stim_info = self.stim_nce_loss(z_clip, stim_meta.to(device))
             loss_dict.update(stim_info)
 
+        # 12. Cell B: cross-subject masked latent prediction.
+        # Batch is paired by StimAlignedBatchSampler(K=2) so eeg[0::2] (A) and
+        # eeg[1::2] (B) are same-(movie, position_bucket) clips from distinct
+        # recordings. Predict EMA(A)[masked] from B's *full* token sequence
+        # (no masking on B). Reuses the same predictor and the same mask
+        # geometry already sampled above for the within-subject branch.
+        xsub_pred_loss = torch.tensor(0.0, device=device)
+        if self.xsub_coeff > 0:
+            if B % 2 != 0:
+                raise ValueError(
+                    f"xsub_coeff > 0 requires even batch size (paired); got B={B}"
+                )
+            half = B // 2
+            if stim_meta is not None:
+                meta_A = stim_meta[0::2]
+                meta_B = stim_meta[1::2]
+                if not torch.equal(meta_A[:, 1:], meta_B[:, 1:]):
+                    raise ValueError(
+                        "xsub pair mismatch: eeg[0::2] and eeg[1::2] must share "
+                        "(movie_id, position_bucket). Use StimAlignedBatchSampler "
+                        "with K=2."
+                    )
+
+            full_tokens_A = self.context_encoder.encode_tokens(eeg[0::2], mask=None)
+            full_tokens_B = self.context_encoder.encode_tokens(eeg[1::2], mask=None)
+
+            tgt_A_masked = tgt_tokens[0::2][:, all_pred_indices]  # [half, n_pred, D]
+            tgt_B_masked = tgt_tokens[1::2][:, all_pred_indices]
+            ctx_pos_full = pos_embed[:half]
+            tgt_pos_pair = tgt_pos[:half]
+
+            pred_A_from_B = self.predictor(full_tokens_B, ctx_pos_full, tgt_pos_pair)
+            if self.pred_loss_type == "smooth_l1":
+                xsub_pred_loss = F.smooth_l1_loss(pred_A_from_B, tgt_A_masked.detach())
+            else:
+                xsub_pred_loss = F.mse_loss(pred_A_from_B, tgt_A_masked.detach())
+
+            if self.xsub_symmetric:
+                pred_B_from_A = self.predictor(full_tokens_A, ctx_pos_full, tgt_pos_pair)
+                if self.pred_loss_type == "smooth_l1":
+                    xsub_pred_loss = 0.5 * (
+                        xsub_pred_loss
+                        + F.smooth_l1_loss(pred_B_from_A, tgt_B_masked.detach())
+                    )
+                else:
+                    xsub_pred_loss = 0.5 * (
+                        xsub_pred_loss
+                        + F.mse_loss(pred_B_from_A, tgt_B_masked.detach())
+                    )
+
+            loss_dict["xsub_pred_loss"] = xsub_pred_loss.item()
+
         total_loss = (
             pred_loss
             + reg_loss
             + self.dino_coeff * dino_loss
             + self.env_coeff * env_loss
             + self.stim_nce_coeff * stim_nce_loss
+            + self.xsub_coeff * xsub_pred_loss
         )
         loss_dict["total_loss"] = total_loss.item()
 

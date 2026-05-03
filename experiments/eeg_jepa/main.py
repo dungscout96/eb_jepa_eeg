@@ -195,13 +195,24 @@ def run(
     # must emit (rec_idx, movie_id, position_bucket). Auto-enable so callers
     # only need to set --loss.stim_nce_coeff=...
     stim_nce_active = float(cfg.loss.get("stim_nce_coeff", 0.0)) > 0
-    if stim_nce_active and not cfg.data.get("return_stim_meta", False):
+    # Cell B: cross-subject masked latent prediction also requires paired meta
+    # AND the K=2 structured sampler. Auto-enable both together so callers only
+    # need to set --loss.xsub_coeff=...
+    xsub_active = float(cfg.loss.get("xsub_coeff", 0.0)) > 0
+    if (stim_nce_active or xsub_active) and not cfg.data.get("return_stim_meta", False):
         OmegaConf.update(cfg, "data.return_stim_meta", True, force_add=True)
-        logger.info("Auto-enabled data.return_stim_meta=True (loss.stim_nce_coeff > 0)")
+        logger.info("Auto-enabled data.return_stim_meta=True (stim_nce or xsub active)")
+    if xsub_active:
+        if not cfg.data.get("stim_aligned_sampler", False):
+            OmegaConf.update(cfg, "data.stim_aligned_sampler", True, force_add=True)
+            logger.info("Auto-enabled data.stim_aligned_sampler=True (loss.xsub_coeff > 0)")
+        # Cell B requires K=2 (one cross-subject pair per bucket).
+        OmegaConf.update(cfg, "data.stim_aligned_K", 2, force_add=True)
+        logger.info("Forced data.stim_aligned_K=2 (Cell B paired-batch requirement)")
     # Lever 1 v2: structured cross-subject batches.
     use_aligned_sampler = bool(cfg.data.get("stim_aligned_sampler", False))
-    if use_aligned_sampler and not stim_nce_active:
-        logger.warning("data.stim_aligned_sampler set but loss.stim_nce_coeff=0; sampler will run anyway")
+    if use_aligned_sampler and not (stim_nce_active or xsub_active):
+        logger.warning("data.stim_aligned_sampler set but no stim_nce/xsub coeff; sampler will run anyway")
     if use_aligned_sampler and not cfg.data.get("stim_aligned_flat_index", False):
         OmegaConf.update(cfg, "data.stim_aligned_flat_index", True, force_add=True)
         logger.info("Auto-enabled data.stim_aligned_flat_index=True for sampler")
@@ -412,6 +423,8 @@ def run(
             tau=float(cfg.loss.get("stim_nce_tau", 0.1))
         )
 
+    xsub_coeff = float(cfg.loss.get("xsub_coeff", 0.0))
+    xsub_symmetric = bool(cfg.loss.get("xsub_symmetric", True))
     if use_ema:
         jepa = MaskedJEPA(
             encoder, target_encoder, predictor, mask_collator, regularizer,
@@ -420,6 +433,7 @@ def run(
             dino_loss_fn=dino_loss_fn, dino_coeff=dino_coeff,
             env_aux_head=env_aux_head, env_coeff=env_coeff,
             stim_nce_loss=stim_nce_loss, stim_nce_coeff=stim_nce_coeff,
+            xsub_coeff=xsub_coeff, xsub_symmetric=xsub_symmetric,
         ).to(device)
     else:
         jepa = MaskedJEPANoEMA(
@@ -538,6 +552,7 @@ def run(
     # Early stopping and best checkpoint tracking
     patience = cfg.optim.get("early_stopping_patience", 0)  # 0 = disabled
     best_val_reg = float("inf")
+    best_mean_corr = float("-inf")
     epochs_without_improvement = 0
 
     # Load checkpoint if requested
@@ -703,6 +718,30 @@ def run(
                     logger.info("New best val/reg_loss=%.4f at epoch %d", best_val_reg, epoch)
             else:
                 epochs_without_improvement += 1
+
+            # Settled policy (memo §2): always track mean of val/reg_*_corr
+            # over the configured stim probes and save best_by_online_probe.pth.tar.
+            # Decouples downstream eval from the "probes peak then decline"
+            # phenomenon. Independent of early-stopping (patience).
+            corr_vals = [
+                v for k, v in val_logs.items()
+                if k.startswith("val/reg_") and k.endswith("_corr")
+            ]
+            if corr_vals:
+                current_mean_corr = float(sum(corr_vals) / len(corr_vals))
+                if current_mean_corr > best_mean_corr:
+                    best_mean_corr = current_mean_corr
+                    save_checkpoint(
+                        exp_dir / "best_by_online_probe.pth.tar",
+                        model=jepa,
+                        optimizer=optimizer,
+                        epoch=epoch,
+                        step=global_step,
+                    )
+                    logger.info(
+                        "New best mean(val/reg_*_corr)=%.4f at epoch %d (%d corrs)",
+                        best_mean_corr, epoch, len(corr_vals),
+                    )
 
             # Early stopping
             if patience > 0 and epochs_without_improvement >= patience:

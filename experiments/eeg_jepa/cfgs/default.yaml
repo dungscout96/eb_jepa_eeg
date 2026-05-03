@@ -86,6 +86,13 @@ loss:
   # When > 0, requires data.return_stim_meta=true. tau follows CPC default 0.1.
   stim_nce_coeff: 0.0
   stim_nce_tau: 0.1
+  # Cell B: cross-subject masked latent prediction (Brain-JEPA / PopT mold).
+  # When > 0, auto-enables the K=2 stim-aligned sampler so each batch is paired
+  # by (movie, position_bucket). Predicts EMA(A)[masked] from B's full token
+  # context (and vice versa when xsub_symmetric=true). Pure JEPA — same
+  # predictor, same EMA target, just a different mask geometry.
+  xsub_coeff: 0.0
+  xsub_symmetric: true
   # Direction C: envelope/stim auxiliary regression head (legacy, separate path).
   env_coeff: 0.0
 
