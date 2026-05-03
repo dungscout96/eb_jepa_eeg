@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --gpus-per-task=1
 #SBATCH --mem=64G
-#SBATCH --time=10:00:00
+#SBATCH --time=18:00:00
 #SBATCH --output=logs/cellB_%j.out
 #SBATCH --error=logs/cellB_%j.err
 # ---------------------------------------------------------------
