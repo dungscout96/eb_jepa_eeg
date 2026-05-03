@@ -96,3 +96,17 @@ sanity_checks:
   probe_buffer_size: 512    # Max (embedding, label) samples kept for linear probe training
   cosim_n_pairs: 128        # Random pairs for cosine-similarity collapse check
   horizon_every_steps: 200  # How often (steps) to compute short vs long pred losses
+
+# Post-training auto-eval. When auto_run is true (default), the training
+# entry point invokes eb_jepa.evaluation.run_probe_eval on the saved
+# checkpoint, then eb_jepa.evaluation.bootstrap_predictions on the dumped
+# predictions. Disable for fast smoke runs or when a sweep launcher will
+# submit eval as its own job.
+eval:
+  auto_run: true
+  splits: val,test          # Comma-separated list passed to run_probe_eval
+  probe_epochs: 20
+  subject_probe_epochs: 100
+  bootstrap_split: test     # Split to bootstrap CIs over
+  n_bootstrap: 1000         # Recording-level bootstrap resamples
+  wandb_group: probe_eval_auto

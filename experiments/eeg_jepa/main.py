@@ -587,6 +587,69 @@ def run(
 
     logger.info("Training complete!")
 
+    # ------------------------------------------------------------------
+    # Auto-eval: probe_eval -> bootstrap_predictions on the saved checkpoint.
+    # Gated by cfg.eval.auto_run (default true). Sweeps that submit eval as
+    # a separate SLURM job should set cfg.eval.auto_run=false.
+    # ------------------------------------------------------------------
+    eval_cfg = cfg.get("eval", None)
+    if eval_cfg is None or eval_cfg.get("auto_run", True):
+        _run_auto_eval(cfg, exp_dir, fname)
+
+
+def _run_auto_eval(cfg, exp_dir, cfg_fname):
+    """Run probe_eval + bootstrap on the just-saved checkpoint.
+
+    Errors are logged but do not fail the training run -- the checkpoint
+    is already saved and a sweep can re-run eval manually.
+    """
+    from eb_jepa.evaluation import bootstrap_predictions, run_probe_eval
+
+    eval_cfg = cfg.get("eval", {}) or {}
+    checkpoint_path = exp_dir / "latest.pth.tar"
+    save_predictions_dir = exp_dir / "saved_predictions"
+
+    splits = eval_cfg.get("splits", "val,test")
+    probe_epochs = eval_cfg.get("probe_epochs", 20)
+    subject_probe_epochs = eval_cfg.get("subject_probe_epochs", 100)
+    wandb_group = eval_cfg.get("wandb_group", "probe_eval_auto")
+
+    logger.info("Auto-eval: running probe_eval on %s", checkpoint_path)
+    try:
+        run_probe_eval(
+            checkpoint=str(checkpoint_path),
+            n_windows=cfg.data.n_windows,
+            window_size_seconds=cfg.data.window_size_seconds,
+            batch_size=cfg.data.batch_size,
+            num_workers=cfg.data.num_workers,
+            probe_epochs=probe_epochs,
+            subject_probe_epochs=subject_probe_epochs,
+            splits=splits,
+            norm_mode=cfg.data.norm_mode,
+            add_envelope=cfg.data.add_envelope,
+            corrca_filters=cfg.data.corrca_filters or "",
+            save_predictions_dir=str(save_predictions_dir),
+            wandb_group=wandb_group,
+            fname=cfg_fname,
+            seed=cfg.meta.seed,
+        )
+    except Exception as e:
+        logger.warning("Auto-eval probe_eval failed: %s", e)
+        return
+
+    bootstrap_split = eval_cfg.get("bootstrap_split", "test")
+    n_bootstrap = eval_cfg.get("n_bootstrap", 1000)
+    logger.info("Auto-eval: running bootstrap on %s split=%s",
+                save_predictions_dir, bootstrap_split)
+    try:
+        bootstrap_predictions(
+            predictions_dir=str(save_predictions_dir),
+            split=bootstrap_split,
+            n_bootstrap=n_bootstrap,
+        )
+    except Exception as e:
+        logger.warning("Auto-eval bootstrap failed: %s", e)
+
 
 if __name__ == "__main__":
     fire.Fire(run)
