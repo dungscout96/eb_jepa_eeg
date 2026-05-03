@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --gpus-per-task=1
 #SBATCH --mem=64G
-#SBATCH --time=01:00:00
+#SBATCH --time=10:00:00
 #SBATCH --output=logs/lever1v2_%j.out
 #SBATCH --error=logs/lever1v2_%j.err
 # ---------------------------------------------------------------
