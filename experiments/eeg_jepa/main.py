@@ -236,6 +236,12 @@ def run(
     # index (already baked into train_set._stim_flat_index).
     _val_cfg = OmegaConf.create(OmegaConf.to_container(cfg.data, resolve=True))
     OmegaConf.update(_val_cfg, "stim_aligned_flat_index", False, force_add=True)
+    # Val set always uses the first task only (typically "ThePresent"), since
+    # secondary tasks like DespicableMe have annotation issues in the val split
+    # that crash braindecode's create_windows_from_events.
+    val_kwargs = {}
+    if "task" in train_kwargs:
+        val_kwargs["task"] = train_kwargs["task"][0]
     val_set = JEPAMovieDataset(
         split="val",
         n_windows=cfg.data.n_windows,
@@ -246,7 +252,7 @@ def run(
         cfg=_val_cfg,
         preprocessed=preprocessed,
         preprocessed_dir=preprocessed_dir,
-        **train_kwargs,
+        **val_kwargs,
     )
 
     feature_stats = train_set.compute_feature_stats()
@@ -741,6 +747,7 @@ def run(
         cfg=cfg.data,
         preprocessed=preprocessed,
         preprocessed_dir=preprocessed_dir,
+        **val_kwargs,
     )
     test_loader = DataLoader(
         test_set,
