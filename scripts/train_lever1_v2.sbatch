@@ -37,6 +37,7 @@ STIM_COEFF="${STIM_COEFF:-2.0}"
 STIM_TAU="${STIM_TAU:-0.1}"
 STIM_BUCKET="${STIM_BUCKET:-0.025}"
 STIM_K="${STIM_K:-4}"
+TASKS="${TASKS:-ThePresent}"   # comma-separated: e.g. "ThePresent,DespicableMe"
 
 echo "Cfg: seed=${SEED} tag=${EXP_TAG} nw=${NW} ws=${WS} bs=${BATCH_SIZE}"
 echo "     lr=${LR} epochs=${EPOCHS} stim_coeff=${STIM_COEFF} K=${STIM_K} bucket=${STIM_BUCKET}"
@@ -73,6 +74,7 @@ PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py \
     --data.norm_mode=per_recording \
     --data.corrca_filters=corrca_filters.npz \
     --data.stim_position_bucket_size="${STIM_BUCKET}" \
+    --data.tasks="${TASKS}" \
     --data.stim_aligned_sampler=True \
     --data.stim_aligned_K="${STIM_K}" \
     --loss.std_coeff=0.25 \
