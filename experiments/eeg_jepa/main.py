@@ -206,6 +206,18 @@ def run(
         OmegaConf.update(cfg, "data.stim_aligned_flat_index", True, force_add=True)
         logger.info("Auto-enabled data.stim_aligned_flat_index=True for sampler")
 
+    # Multi-movie support: cfg.data.tasks is a list (or comma-separated string).
+    # Defaults to the dataset's default single movie when unspecified.
+    _tasks = cfg.data.get("tasks", None)
+    if _tasks is None:
+        _tasks_arg = JEPAMovieDataset.__init__.__defaults__[2]  # DEFAULT_TASK fallback
+        # Use module default by simply not passing task=
+        train_kwargs = {}
+    else:
+        if isinstance(_tasks, str):
+            _tasks = [t.strip() for t in _tasks.split(",") if t.strip()]
+        train_kwargs = {"task": list(_tasks)}
+        logger.info("Multi-movie pretraining tasks: %s", _tasks)
     train_set = JEPAMovieDataset(
         split="train",
         n_windows=cfg.data.n_windows,
@@ -215,7 +227,15 @@ def run(
         cfg=cfg.data,
         preprocessed=preprocessed,
         preprocessed_dir=preprocessed_dir,
+        **train_kwargs,
     )
+    # Val set should NOT use the flat-clip index — that turns the validation
+    # loop into 449 batches/epoch and adds ~4 min of validation per epoch.
+    # Make a shallow copy of cfg.data with flat-index disabled for val_set
+    # construction. The train-side sampler keeps using the train_set's flat
+    # index (already baked into train_set._stim_flat_index).
+    _val_cfg = OmegaConf.create(OmegaConf.to_container(cfg.data, resolve=True))
+    OmegaConf.update(_val_cfg, "stim_aligned_flat_index", False, force_add=True)
     val_set = JEPAMovieDataset(
         split="val",
         n_windows=cfg.data.n_windows,
@@ -223,9 +243,10 @@ def run(
         temporal_stride=temporal_stride,
         feature_names=feature_names,
         eeg_norm_stats=train_set.get_eeg_norm_stats(),
-        cfg=cfg.data,
+        cfg=_val_cfg,
         preprocessed=preprocessed,
         preprocessed_dir=preprocessed_dir,
+        **train_kwargs,
     )
 
     feature_stats = train_set.compute_feature_stats()
