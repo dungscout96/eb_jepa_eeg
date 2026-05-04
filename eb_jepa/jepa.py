@@ -261,7 +261,8 @@ class MaskedJEPA(nn.Module):
                  env_aux_head=None, env_coeff: float = 0.0,
                  stim_nce_loss=None, stim_nce_coeff: float = 0.0,
                  xsub_coeff: float = 0.0, xsub_symmetric: bool = True,
-                 pars_head=None, pars_coeff: float = 0.0, pars_max_delta: float = 1.0):
+                 pars_head=None, pars_coeff: float = 0.0, pars_max_delta: float = 1.0,
+                 horizon_embed=None, horizon_loss_decompose: bool = False):
         super().__init__()
         self.context_encoder = context_encoder
         self.target_encoder = target_encoder
@@ -307,6 +308,14 @@ class MaskedJEPA(nn.Module):
         self.pars_head = pars_head
         self.pars_coeff = float(pars_coeff)
         self.pars_max_delta = float(pars_max_delta)
+
+        # Cell L: multi-horizon latent rollout (V-JEPA 2 / TD-JEPA mold).
+        # When horizon_embed is provided, the predictor receives an additional
+        # embedding per masked target encoding its window-distance from the
+        # last context window (the "horizon"). This forces the predictor to
+        # explicitly differentiate near-future vs far-future predictions.
+        self.horizon_embed = horizon_embed
+        self.horizon_loss_decompose = bool(horizon_loss_decompose)
 
         # Freeze target encoder
         for p in self.target_encoder.parameters():
@@ -377,6 +386,17 @@ class MaskedJEPA(nn.Module):
         tgt_pos = pos_embed[:, all_pred_indices]  # [B, n_pred, D]
         tgt_representations = tgt_tokens[:, all_pred_indices]  # [B, n_pred, D]
 
+        # Cell L — horizon embedding added to target position embeddings.
+        # Horizons are computed by the mask collator (window-distance from last
+        # context window). Adds a per-horizon learned shift that lets the
+        # predictor explicitly differentiate near vs far future predictions.
+        per_target_horizon = None
+        if self.horizon_embed is not None and getattr(mask_result, "horizons", None) is not None:
+            horizons_full = mask_result.horizons.to(device)  # [n_total_tokens]
+            per_target_horizon = horizons_full[all_pred_indices]  # [n_pred]
+            h_emb = self.horizon_embed(per_target_horizon)  # [n_pred, D]
+            tgt_pos = tgt_pos + h_emb.unsqueeze(0)  # broadcast [B, n_pred, D]
+
         # 6. Predictor: predict representations at masked positions
         predictions = self.predictor(ctx_tokens, ctx_pos, tgt_pos)  # [B, n_pred, D]
 
@@ -388,6 +408,19 @@ class MaskedJEPA(nn.Module):
 
         # 8. Regularizer loss (optional, on context representations)
         loss_dict = {"pred_loss": pred_loss.item()}
+
+        # Cell L — per-horizon loss decomposition (logged only; total loss
+        # unchanged so it remains comparable to Cell J at the same mask).
+        if self.horizon_loss_decompose and per_target_horizon is not None:
+            uniq_h = torch.unique(per_target_horizon).tolist()
+            for k in uniq_h:
+                m = (per_target_horizon == k)
+                if m.any():
+                    if self.pred_loss_type == "smooth_l1":
+                        kloss = F.smooth_l1_loss(predictions[:, m], tgt_representations[:, m].detach())
+                    else:
+                        kloss = F.mse_loss(predictions[:, m], tgt_representations[:, m].detach())
+                    loss_dict[f"pred_loss_h{int(k)}"] = float(kloss.item())
         reg_loss = torch.tensor(0.0, device=device)
         if self.regularizer is not None:
             from eb_jepa.losses import SIGRegLoss

@@ -476,6 +476,20 @@ def run(
             pars_hidden, max_delta_seconds, pars_max_delta_samples, ws, pars_coeff,
         )
 
+    # Cell L: horizon embedding for multi-horizon latent rollout.
+    horizon_embed_max = int(masking_cfg.get("horizon_embed_max", 0))
+    horizon_embed = None
+    if horizon_embed_max > 0:
+        # +1 because horizons can be {0..horizon_embed_max} inclusive
+        horizon_embed = nn.Embedding(horizon_embed_max + 1, embed_dim)
+        nn.init.normal_(horizon_embed.weight, std=0.02)
+        logger.info(
+            "Cell L horizon embedding: max=%d, embed_dim=%d (loss_decompose=%s)",
+            horizon_embed_max, embed_dim,
+            masking_cfg.get("horizon_loss_decompose", False),
+        )
+    horizon_loss_decompose = bool(masking_cfg.get("horizon_loss_decompose", False))
+
     if use_ema:
         jepa = MaskedJEPA(
             encoder, target_encoder, predictor, mask_collator, regularizer,
@@ -487,6 +501,7 @@ def run(
             xsub_coeff=xsub_coeff, xsub_symmetric=xsub_symmetric,
             pars_head=pars_head, pars_coeff=pars_coeff,
             pars_max_delta=pars_max_delta_samples,
+            horizon_embed=horizon_embed, horizon_loss_decompose=horizon_loss_decompose,
         ).to(device)
     else:
         jepa = MaskedJEPANoEMA(
@@ -554,6 +569,8 @@ def run(
         jepa_params += [p for p in jepa.env_aux_head.parameters() if p.requires_grad]
     if getattr(jepa, "pars_head", None) is not None:
         jepa_params += [p for p in jepa.pars_head.parameters() if p.requires_grad]
+    if getattr(jepa, "horizon_embed", None) is not None:
+        jepa_params += [p for p in jepa.horizon_embed.parameters() if p.requires_grad]
     optimizer = Adam(jepa_params, lr=cfg.optim.lr)
     probe_optimizer = Adam(
         list(regression_probe.head.parameters())

@@ -74,6 +74,13 @@ masking:
   geometry: multi_block
   mask_window_fraction: 0.5         # cross_time only: fraction of T to mask
   mask_position: tail               # cross_time only: tail|head|random
+  # Cell L: multi-horizon latent rollout. When horizon_embed_max>0, the
+  # predictor receives a learned embedding per-target encoding the window-
+  # distance from the last context window. Pair with geometry=cross_time so
+  # masked windows have a meaningful horizon axis (multi_block all-windows-
+  # share-mask gives degenerate horizons). Set to n_windows-1 to cover all.
+  horizon_embed_max: 0
+  horizon_loss_decompose: false     # log per-horizon pred_loss for diagnostics
   n_pred_masks_short: 2             # Number of short-range prediction masks
   n_pred_masks_long: 2              # Number of long-range prediction masks
   short_channel_scale: [0.08, 0.15] # Fraction of channels per short mask

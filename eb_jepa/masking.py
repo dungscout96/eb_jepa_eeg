@@ -24,10 +24,14 @@ class MaskResult:
         context_mask: [C*T*P] bool — True for context (visible) tokens, False for masked
         pred_masks: list of [n_pred_i] int64 tensors — flat token indices for each prediction block
         n_total_tokens: total number of tokens in the grid
+        horizons: optional [n_total_tokens] int64 — per-token "horizon" (window-distance from
+            last context window). Used by Cell L (multi-horizon predictor); 0 for non-cross-
+            time mask collators that don't have a meaningful horizon axis.
     """
     context_mask: torch.Tensor
     pred_masks: list[torch.Tensor]
     n_total_tokens: int
+    horizons: torch.Tensor = None
 
 
 class MultiBlockMaskCollator:
@@ -221,10 +225,15 @@ class ContiguousTimeMaskCollator:
         n_mask = self.n_mask_windows
         if self.mask_position == "tail":
             t_start = T - n_mask
+            last_ctx_window = t_start - 1
         elif self.mask_position == "head":
             t_start = 0
+            last_ctx_window = t_start + n_mask
         else:
             t_start = random.randint(0, T - n_mask)
+            # for random, "last_ctx_window" reference is the closest context window
+            # before the masked block (or after, if mask is at head).
+            last_ctx_window = t_start - 1 if t_start > 0 else t_start + n_mask
         masked_windows = list(range(t_start, t_start + n_mask))
 
         C = self.n_channels
@@ -239,8 +248,18 @@ class ContiguousTimeMaskCollator:
         context_mask = torch.ones(self.n_total_tokens, dtype=torch.bool)
         context_mask[pred_masks[0]] = False
 
+        # Compute per-token horizons (window-distance from last_ctx_window).
+        # For Cell L's horizon-conditioned predictor; harmless for Cell J use.
+        horizons = torch.zeros(self.n_total_tokens, dtype=torch.long)
+        for c in range(C):
+            for t in range(T):
+                k = abs(t - last_ctx_window)
+                for p in range(P):
+                    horizons[c * (T * P) + t * P + p] = k
+
         return MaskResult(
             context_mask=context_mask,
             pred_masks=pred_masks,
             n_total_tokens=self.n_total_tokens,
+            horizons=horizons,
         )
