@@ -183,9 +183,11 @@ def _logreg_bin(Xtr, ytr, Xev, yev):
 
 
 def _logreg_multi(Xtr, ytr, Xev, yev, n_classes):
-    """Multinomial LogReg for movie_id top-1 / top-5."""
-    clf = LogisticRegression(C=1.0, multi_class="multinomial",
-                             solver="lbfgs", max_iter=2000)
+    """Multinomial LogReg for movie_id top-1 / top-5.
+
+    Note: scikit-learn dropped the `multi_class` kwarg; lbfgs solver
+    defaults to multinomial when n_classes > 2."""
+    clf = LogisticRegression(C=1.0, solver="lbfgs", max_iter=2000)
     clf.fit(Xtr, ytr.astype(int))
     proba = clf.predict_proba(Xev)
     # top-1 / top-5
@@ -327,13 +329,19 @@ def run(
         preds_npz[f"{tag}_sex_target"] = y.astype(np.float32)
 
     # ---- Movie-ID 20-class top-1 / top-5 ----
+    # Wrapped in try/except so a failure here doesn't drop the other 16 metrics.
     if pos_idx is not None:
         for split, X, y, tag in [("val", Xv_rec, bin_v, "val"), ("test", Xt_rec, bin_t, "test")]:
-            top1, top5, proba = _logreg_multi(Xtr_rec, bin_tr, X, y, movie_id_n_bins)
-            metrics[f"{tag}/movie_id/top1"] = top1
-            metrics[f"{tag}/movie_id/top5"] = top5
-            preds_npz[f"{tag}_movie_id_proba"] = proba.astype(np.float32)
-            preds_npz[f"{tag}_movie_id_target"] = y.astype(np.int32)
+            try:
+                top1, top5, proba = _logreg_multi(Xtr_rec, bin_tr, X, y, movie_id_n_bins)
+                metrics[f"{tag}/movie_id/top1"] = top1
+                metrics[f"{tag}/movie_id/top5"] = top5
+                preds_npz[f"{tag}_movie_id_proba"] = proba.astype(np.float32)
+                preds_npz[f"{tag}_movie_id_target"] = y.astype(np.int32)
+            except Exception as e:
+                logger.warning("movie_id %s probe failed: %s", tag, e)
+                metrics[f"{tag}/movie_id/top1"] = float("nan")
+                metrics[f"{tag}/movie_id/top5"] = float("nan")
 
     # rec_ids for bootstrap
     preds_npz["val_rec_ids"]  = np.arange(len(eval_sets["val"]),  dtype=np.int64)
