@@ -28,7 +28,7 @@ Then:
     recover.
 
 The strongest Littwin test is comparing (2) — not (1) — to the encoder's
-representation variance from scripts/variance_decomposition.py. Per-rec
+representation variance from eb_jepa/evaluation/variance_decomposition.py. Per-rec
 norm and CorrCA affect variance and predictability differently; the
 discrepancy is the diagnostic.
 
@@ -63,7 +63,7 @@ from pathlib import Path
 import fire
 import numpy as np
 
-from scripts.variance_decomposition import (
+from eb_jepa.evaluation.variance_decomposition import (
     _aggregate,
     _meta_arrays,
     decompose,

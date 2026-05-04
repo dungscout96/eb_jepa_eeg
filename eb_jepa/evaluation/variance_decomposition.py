@@ -28,7 +28,7 @@ Usage
 -----
 Single checkpoint:
 
-    PYTHONPATH=. uv run --group eeg python scripts/variance_decomposition.py \\
+    PYTHONPATH=. uv run --group eeg python -m eb_jepa.evaluation.variance_decomposition \\
         --checkpoint=/path/to/latest.pth.tar \\
         --n_windows=1 --window_size_seconds=1 \\
         --n_clips_per_rec=4 --split=val \\
@@ -36,12 +36,12 @@ Single checkpoint:
 
 Aggregate over all per-checkpoint outputs:
 
-    python scripts/variance_decomposition.py \\
+    python -m eb_jepa.evaluation.variance_decomposition \\
         --aggregate_dir=outputs/variance_decomp
 
 Self-test (random tensors, no checkpoint needed):
 
-    python scripts/variance_decomposition.py --selftest
+    python -m eb_jepa.evaluation.variance_decomposition --selftest
 """
 
 from __future__ import annotations

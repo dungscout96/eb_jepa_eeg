@@ -21,5 +21,11 @@ exposed by their submodules:
 from eb_jepa.evaluation.bootstrap import run as bootstrap_predictions
 from eb_jepa.evaluation.probe_eval import run as run_probe_eval
 from eb_jepa.evaluation.validation_loop import validation_loop
+from eb_jepa.evaluation.variance_decomposition import run as decompose_variance
 
-__all__ = ["run_probe_eval", "bootstrap_predictions", "validation_loop"]
+__all__ = [
+    "run_probe_eval",
+    "bootstrap_predictions",
+    "validation_loop",
+    "decompose_variance",
+]

@@ -37,7 +37,7 @@ def build_job():
     # distribution-shift artifact, not the trained encoder's actual behavior.
     cmd = (
         "PYTHONPATH=. uv run --group eeg"
-        " python scripts/variance_decomposition.py"
+        " python -m eb_jepa.evaluation.variance_decomposition"
         f" --checkpoint={CHECKPOINT}"
         f" --corrca_filters={CORRCA}"
         " --norm_mode=per_recording"

@@ -1,6 +1,6 @@
 """Submit variance decomposition analysis for the best subject-trait checkpoints.
 
-Runs scripts/variance_decomposition.py on the checkpoints documented in
+Runs eb_jepa/evaluation/variance_decomposition.py on the checkpoints documented in
 docs/best_subject_trait_checkpoints.md, packing all of them into a single
 SLURM job (embedding extraction is cheap — ~5 min per checkpoint).
 
@@ -45,7 +45,7 @@ CHECKPOINTS = [
 def _make_cmd(nw, ws, bs, ckpt_path):
     return (
         "PYTHONPATH=. uv run --group eeg"
-        " python scripts/variance_decomposition.py"
+        " python -m eb_jepa.evaluation.variance_decomposition"
         f" --checkpoint={ckpt_path}"
         f" --n_windows={nw}"
         f" --window_size_seconds={ws}"
@@ -60,7 +60,7 @@ def _make_cmd(nw, ws, bs, ckpt_path):
 def _make_aggregate_cmd():
     return (
         "PYTHONPATH=. uv run --group eeg"
-        " python scripts/variance_decomposition.py"
+        " python -m eb_jepa.evaluation.variance_decomposition"
         f" --aggregate_dir={OUT}"
     )
 

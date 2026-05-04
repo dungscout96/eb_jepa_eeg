@@ -1,7 +1,7 @@
 # Variance Decomposition of Frozen JEPA Embeddings
 
 **Date:** 2026-04-22 (updated)
-**Script:** [scripts/variance_decomposition.py](../scripts/variance_decomposition.py)
+**Script:** [eb_jepa/evaluation/variance_decomposition.py](../eb_jepa/evaluation/variance_decomposition.py)
 **Embeddings:** per-clip mean-pooled encoder tokens, evaluated on the val split.
 
 ## 1. What the decomposition measures
@@ -428,7 +428,7 @@ CorrCA reshapes what's already there:
 
 ```bash
 # Extract embeddings + decomposition for a single checkpoint (K=32, val split)
-PYTHONPATH=. uv run --group eeg python scripts/variance_decomposition.py \
+PYTHONPATH=. uv run --group eeg python -m eb_jepa.evaluation.variance_decomposition \
     --checkpoint=/path/to/best.pth.tar \
     --n_windows=4 --window_size_seconds=4 \
     --n_clips_per_rec=32 \
@@ -436,10 +436,10 @@ PYTHONPATH=. uv run --group eeg python scripts/variance_decomposition.py \
     --output_dir=outputs/variance_decomp_k32
 
 # Re-aggregate (or reanalyze) existing embeddings without re-embedding
-python scripts/variance_decomposition.py --reanalyze_dir=outputs/variance_decomp_k32
+python -m eb_jepa.evaluation.variance_decomposition --reanalyze_dir=outputs/variance_decomp_k32
 
 # Self-test (no checkpoint needed)
-python scripts/variance_decomposition.py --selftest
+python -m eb_jepa.evaluation.variance_decomposition --selftest
 ```
 
 For batch submissions on Delta see

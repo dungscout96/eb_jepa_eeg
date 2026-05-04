@@ -47,7 +47,7 @@ def build_jobs():
     )
     vardec_cmd = (
         "PYTHONPATH=. uv run --group eeg"
-        " python scripts/variance_decomposition.py"
+        " python -m eb_jepa.evaluation.variance_decomposition"
         f" --checkpoint={CHECKPOINT}"
         f" --corrca_filters={CORRCA}"
         " --norm_mode=per_recording"

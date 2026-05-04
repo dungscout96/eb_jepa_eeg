@@ -63,7 +63,7 @@ def _vardecomp_cmd(nw, ws, bs, ckpt_rel):
     ckpt = f"{CKPT_BASE}/{ckpt_rel}"
     return (
         "PYTHONPATH=. uv run --group eeg"
-        " python scripts/variance_decomposition.py"
+        " python -m eb_jepa.evaluation.variance_decomposition"
         f" --checkpoint={ckpt}"
         f" --n_windows={nw} --window_size_seconds={ws}"
         f" --batch_size={bs} --num_workers=4"
@@ -104,7 +104,7 @@ def build_jobs():
     var_cmds = [_vardecomp_cmd(nw, ws, bs, rel) for nw, ws, bs, rel, _ in CHECKPOINTS]
     agg_cmd = (
         "PYTHONPATH=. uv run --group eeg"
-        " python scripts/variance_decomposition.py"
+        " python -m eb_jepa.evaluation.variance_decomposition"
         f" --aggregate_dir={VAR_OUT}"
     )
     jobs.append(("vardecomp_global", Job(

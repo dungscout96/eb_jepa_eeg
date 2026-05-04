@@ -50,7 +50,7 @@ def _probe_cmd(nw, ws, bs, ckpt):
 def _vardecomp_cmd(nw, ws, bs, ckpt):
     return (
         "PYTHONPATH=. uv run --group eeg"
-        " python scripts/variance_decomposition.py"
+        " python -m eb_jepa.evaluation.variance_decomposition"
         f" --checkpoint={ckpt}"
         f" --corrca_filters={CORRCA}"
         " --norm_mode=per_recording"
@@ -95,7 +95,7 @@ def build_jobs():
     var_cmds = [_vardecomp_cmd(nw, ws, bs, ckpt) for nw, ws, bs, ckpt, _ in CHECKPOINTS]
     agg_cmd = (
         "PYTHONPATH=. uv run --group eeg"
-        " python scripts/variance_decomposition.py"
+        " python -m eb_jepa.evaluation.variance_decomposition"
         f" --aggregate_dir={VAR_OUT}"
     )
     jobs.append(("vardecomp_sigreg_corrca", Job(
