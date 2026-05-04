@@ -443,5 +443,5 @@ python -m eb_jepa.evaluation.variance_decomposition --selftest
 ```
 
 For batch submissions on Delta see
-[scripts/eval_retrained_perrec_delta.py](../scripts/eval_retrained_perrec_delta.py)
-and [scripts/eval_retrained_global_delta.py](../scripts/eval_retrained_global_delta.py).
+[experiments/eeg_jepa/sweeps/probe_eval_retrained_perrec.py](../experiments/eeg_jepa/sweeps/probe_eval_retrained_perrec.py)
+and [experiments/eeg_jepa/sweeps/probe_eval_retrained_global.py](../experiments/eeg_jepa/sweeps/probe_eval_retrained_global.py).

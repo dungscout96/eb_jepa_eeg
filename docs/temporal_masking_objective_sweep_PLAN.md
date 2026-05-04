@@ -62,14 +62,14 @@ For top 2-3 Phase 1 configs, sweep:
 
 ### Step 1: Add Delta preprocessed data path
 
-**File:** `experiments/eeg_jepa/main.py` line 62
+**File:** `experiments/eeg_jepa/train.py` line 62
 
 Add to `_PREPROCESSED_DIRS`:
 ```python
 Path("/projects/bbnv/kkokate/hbn_preprocessed"),  # Delta
 ```
 
-### Step 2: Create `scripts/sweep_phase1_delta.py`
+### Step 2: Create `experiments/eeg_jepa/sweeps/phase1.py`
 
 Structure:
 - Define all 33 `(n_windows, window_size, batch_size, seed)` configs
@@ -92,13 +92,13 @@ Before full sweep, submit one job to verify: git checkout, uv dependencies, prep
 
 | File | Action |
 |------|--------|
-| `experiments/eeg_jepa/main.py:62` | Add Delta preprocessed path |
-| `scripts/sweep_phase1_delta.py` | Create — Phase 1 sweep launcher |
+| `experiments/eeg_jepa/train.py:62` | Add Delta preprocessed path |
+| `experiments/eeg_jepa/sweeps/phase1.py` | Create — Phase 1 sweep launcher |
 | `scripts/sweep_phase2_delta.py` | Create — Phase 2 template |
 
 ## Verification
 
-1. `uv run python scripts/sweep_phase1_delta.py` → preview all SLURM scripts (dry run)
+1. `uv run python experiments/eeg_jepa/sweeps/phase1.py` → preview all SLURM scripts (dry run)
 2. **Timing test on Delta:** Submit a single baseline job (n_windows=4, ws=2s, the current config) with `num_workers=2` to verify it finishes within ~45 min on A40. If it's significantly slower than `num_workers=4`, adjust packing (fewer parallel jobs, longer allocation).
 3. **Parallel test on Delta:** Submit one SLURM job with 4 small parallel experiments to verify GPU sharing works (no CUDA OOM, no contention issues).
 4. Submit full Phase 1 → monitor W&B `sweep_phase1` group

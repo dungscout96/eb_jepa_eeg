@@ -33,7 +33,7 @@ job = Job(
     command=(
         # Fetch + checkout explicitly so new sweep branches are found on jamming
         "git fetch origin && git checkout main && git pull --ff-only &&"
-        " PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py"
+        " PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/train.py"
         " --optim.epochs=100"           # full run
         " --model.encoder_depth=2"      # best depth
         " --optim.lr=5e-4"              # stable lr

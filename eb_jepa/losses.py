@@ -442,7 +442,7 @@ class SIGRegLoss(nn.Module):
 
 # ---------------------------------------------------------------------------
 # Movie-feature probe losses
-# Used by experiments/eeg_jepa/main.py online probes and by
+# Used by experiments/eeg_jepa/train.py online probes and by
 # eb_jepa.evaluation.probe_eval for the post-training evaluation pipeline.
 # ---------------------------------------------------------------------------
 

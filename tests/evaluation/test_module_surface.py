@@ -10,7 +10,7 @@ import inspect
 
 
 def test_top_level_surface_is_stable():
-    """The three names experiments/eeg_jepa/main.py and sweep launchers
+    """The three names experiments/eeg_jepa/train.py and sweep launchers
     import must continue to be exposed."""
     from eb_jepa.evaluation import (  # noqa: F401
         bootstrap_predictions,

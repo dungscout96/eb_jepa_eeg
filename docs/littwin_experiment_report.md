@@ -1,8 +1,8 @@
 # Input-Space Predictability Decomposition (Littwin Test)
 
 **Date:** 2026-04-25
-**Script:** [scripts/input_variance_decomposition.py](../scripts/input_variance_decomposition.py)
-**Submission:** [scripts/run_input_vardecomp_delta.py](../scripts/run_input_vardecomp_delta.py)
+**Script:** [experiments/variance_analysis/run_input.py](../experiments/variance_analysis/run_input.py)
+**Submission:** [experiments/variance_analysis/sweeps/run_input_delta.py](../experiments/variance_analysis/sweeps/run_input_delta.py)
 
 ## 1. Motivation
 
@@ -235,20 +235,20 @@ loop on Littwin's mechanism claim.
 
 ```bash
 # Run all 4 conditions, one feature at a time:
-python scripts/input_variance_decomposition.py \
+python experiments/variance_analysis/run_input.py \
     --feature=alpha_phase \
     --output_dir=outputs/input_variance_decomp_phase \
     --n_windows=4 --window_size_seconds=4 --n_clips_per_rec=32 \
     --corrca_filters=/projects/bbnv/kkokate/eb_jepa_eeg/corrca_filters.npz
 
 # Reanalyze (recompute decompositions from saved features.npz, no re-read):
-python scripts/input_variance_decomposition.py \
+python experiments/variance_analysis/run_input.py \
     --reanalyze_dir=outputs/input_variance_decomp_phase
 
 # Selftest (synthetic toy cases, no dataset needed):
-python scripts/input_variance_decomposition.py --selftest
+python experiments/variance_analysis/run_input.py --selftest
 ```
 
 Delta submission for all 4 conditions in one job:
-[scripts/run_input_vardecomp_delta.py](../scripts/run_input_vardecomp_delta.py).
+[experiments/variance_analysis/sweeps/run_input_delta.py](../experiments/variance_analysis/sweeps/run_input_delta.py).
 Toggle `FEATURE` between `rms`, `bandpower`, `alpha_phase` in that script.

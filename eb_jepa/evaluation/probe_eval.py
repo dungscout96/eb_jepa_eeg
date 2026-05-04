@@ -20,7 +20,7 @@ uv run --group eeg python -m eb_jepa.evaluation.probe_eval \\
     --checkpoint=/abs/path/to/latest.pth.tar \\
     --n_windows=4 --window_size_seconds=4 --batch_size=32
 
-See scripts/eval_phase1_probes_delta.py to submit all Phase 1 checkpoints.
+See experiments/eeg_jepa/sweeps/probe_eval_phase1.py to submit all Phase 1 checkpoints.
 """
 
 import copy

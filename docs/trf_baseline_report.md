@@ -1,7 +1,7 @@
 # TRF Baseline vs Frozen-Encoder Linear Probes
 
 **Date:** 2026-04-25
-**Scripts:** [experiments/trf_baseline/run_trf.py](../experiments/trf_baseline/run_trf.py),
+**Scripts:** [experiments/trf_baseline/train.py](../experiments/trf_baseline/train.py),
 [experiments/trf_baseline/sanity.py](../experiments/trf_baseline/sanity.py)
 
 ## 1. Question
@@ -211,12 +211,12 @@ PYTHONPATH=. uv run --group eeg python scripts/compute_corrca.py \
     --output_path corrca_filters.npz --n_components 5 --task ThePresent
 
 # Pooled cross-subject TRF (raw branch, ~13 min)
-PYTHONPATH=. uv run --group eeg python experiments/trf_baseline/run_trf.py \
+PYTHONPATH=. uv run --group eeg python experiments/trf_baseline/train.py \
     --input=raw --max_train_recs=100 --n_lags_ms=1000 --fs_target=50 \
     --output_dir=outputs/trf_prototype_raw
 
 # Pooled cross-subject TRF (CorrCA branch, ~2 min)
-PYTHONPATH=. uv run --group eeg python experiments/trf_baseline/run_trf.py \
+PYTHONPATH=. uv run --group eeg python experiments/trf_baseline/train.py \
     --input=corrca --corrca_path=corrca_filters.npz \
     --max_train_recs=100 --n_lags_ms=1000 --fs_target=50 \
     --output_dir=outputs/trf_prototype_corrca

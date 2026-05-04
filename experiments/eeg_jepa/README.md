@@ -3,19 +3,19 @@
 Self-supervised V-JEPA-style masked prediction for EEG during the HBN
 movie-watching task.
 
-Entry point: `experiments/eeg_jepa/main.py` (fire CLI).
+Entry point: `experiments/eeg_jepa/train.py` (fire CLI).
 Default config: `cfgs/default.yaml`.
 
 ## Run
 
 ```bash
-PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py
+PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/train.py
 ```
 
 CLI overrides use OmegaConf dot syntax, e.g.:
 
 ```bash
-PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py \
+PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/train.py \
     --optim.lr=5e-4 --data.n_windows=4 --data.window_size_seconds=4
 ```
 

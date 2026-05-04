@@ -87,7 +87,7 @@ EXP_ID="<knob1>${KNOB1}_<knob2>${KNOB2}_seed${SEED}"
 EXP_DIR="/projects/bbnv/kkokate/eb_jepa_eeg/checkpoints/<sweep_name>/${EXP_ID}"
 mkdir -p "$EXP_DIR"
 
-PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py \
+PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/train.py \
     --meta.seed="${SEED}" \
     --meta.model_folder="${EXP_DIR}" \
     --<knob1>="${KNOB1}" \

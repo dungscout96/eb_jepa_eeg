@@ -1,4 +1,4 @@
-"""Tests for the end-of-training auto-eval hook in experiments/eeg_jepa/main.py.
+"""Tests for the end-of-training auto-eval hook in experiments/eeg_jepa/train.py.
 
 The hook (`_run_auto_eval`) is the integration point between training and
 the library-level eb_jepa.evaluation pipeline: it must fire when
@@ -48,7 +48,7 @@ def test_hook_calls_probe_eval_then_bootstrap(tmp_path):
     exp_dir = tmp_path / "exp"
     exp_dir.mkdir()
 
-    from experiments.eeg_jepa import main as m
+    from experiments.eeg_jepa import train as m
 
     with patch.object(m, "run_probe_eval", create=True) as pe, \
          patch.object(m, "bootstrap_predictions", create=True) as bs:
@@ -69,7 +69,7 @@ def test_probe_eval_receives_expected_kwargs(tmp_path):
     exp_dir = tmp_path / "exp"
     exp_dir.mkdir()
 
-    from experiments.eeg_jepa import main as m
+    from experiments.eeg_jepa import train as m
 
     with patch("eb_jepa.evaluation.run_probe_eval") as pe, \
          patch("eb_jepa.evaluation.bootstrap_predictions") as bs:
@@ -97,7 +97,7 @@ def test_bootstrap_receives_expected_kwargs(tmp_path):
     exp_dir = tmp_path / "exp"
     exp_dir.mkdir()
 
-    from experiments.eeg_jepa import main as m
+    from experiments.eeg_jepa import train as m
 
     with patch("eb_jepa.evaluation.run_probe_eval") as pe, \
          patch("eb_jepa.evaluation.bootstrap_predictions") as bs:
@@ -118,7 +118,7 @@ def test_probe_eval_failure_does_not_propagate(tmp_path):
     exp_dir = tmp_path / "exp"
     exp_dir.mkdir()
 
-    from experiments.eeg_jepa import main as m
+    from experiments.eeg_jepa import train as m
 
     with patch("eb_jepa.evaluation.run_probe_eval", side_effect=RuntimeError("boom")), \
          patch("eb_jepa.evaluation.bootstrap_predictions") as bs:
@@ -133,7 +133,7 @@ def test_bootstrap_failure_does_not_propagate(tmp_path):
     exp_dir = tmp_path / "exp"
     exp_dir.mkdir()
 
-    from experiments.eeg_jepa import main as m
+    from experiments.eeg_jepa import train as m
 
     with patch("eb_jepa.evaluation.run_probe_eval") as pe, \
          patch("eb_jepa.evaluation.bootstrap_predictions",
