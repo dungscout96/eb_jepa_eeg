@@ -261,52 +261,61 @@ def run(
     def _stdz(X): return (X - mu) / sd
     Xtr_g = _stdz(Xtr_g); Xv_g = _stdz(Xv_g); Xt_g = _stdz(Xt_g)
 
-    # Per-recording labels (median across passes; same per-rec position bin)
-    Ytr_rec = Ytr_g.mean(axis=1)   # [n_rec_tr, n_features]
-    Yv_rec  = Yv_g.mean(axis=1)
-    Yt_rec  = Yt_g.mean(axis=1)
+    # ===== Stim regression / classification: per-clip semantics (PR #15 protocol)
+    # Flatten (n_rec, n_passes) → (n_rec × n_passes,) for Ridge / LogReg fitting
+    # so the probe sees ALL clips, not per-recording means. Matches
+    # trivial_ridge_baseline.py exactly.
+    Xtr_flat_clips = Xtr_g.reshape(-1, Xtr_g.shape[-1])    # [n_train_clips, D]
+    Xv_flat_clips  = Xv_g.reshape(-1,  Xv_g.shape[-1])
+    Xt_flat_clips  = Xt_g.reshape(-1,  Xt_g.shape[-1])
+    Ytr_flat_clips = Ytr_g.reshape(-1, Ytr_g.shape[-1])    # [n_train_clips, n_features]
+    Yv_flat_clips  = Yv_g.reshape(-1,  Yv_g.shape[-1])
+    Yt_flat_clips  = Yt_g.reshape(-1,  Yt_g.shape[-1])
 
-    # Subject labels per recording
+    # ===== Subject + movie_id: per-recording semantics
+    # These are recording-level labels; can't be flattened without changing meaning.
     age_tr, sex_tr = _subject_labels(train_set)
     age_v,  sex_v  = _subject_labels(eval_sets["val"])
     age_t,  sex_t  = _subject_labels(eval_sets["test"])
-
-    # Movie-ID labels: bin position_in_movie into n_bins equal-width bins.
+    Ytr_rec = Ytr_g.mean(axis=1)
+    Yv_rec  = Yv_g.mean(axis=1)
+    Yt_rec  = Yt_g.mean(axis=1)
+    Xtr_rec = Xtr_g.mean(axis=1)  # [n_rec, D]
+    Xv_rec  = Xv_g.mean(axis=1)
+    Xt_rec  = Xt_g.mean(axis=1)
     pos_idx = feature_names.index("position_in_movie") if "position_in_movie" in feature_names else None
-    pos_tr_rec = Ytr_rec[:, pos_idx] if pos_idx is not None else None
-    pos_v_rec  = Yv_rec[:,  pos_idx] if pos_idx is not None else None
-    pos_t_rec  = Yt_rec[:,  pos_idx] if pos_idx is not None else None
     if pos_idx is not None:
+        pos_tr_rec = Ytr_rec[:, pos_idx]
+        pos_v_rec  = Yv_rec[:,  pos_idx]
+        pos_t_rec  = Yt_rec[:,  pos_idx]
         pos_min = pos_tr_rec.min(); pos_max = pos_tr_rec.max() + 1e-8
         edges = np.linspace(pos_min, pos_max, movie_id_n_bins + 1)
         bin_tr = np.clip(np.digitize(pos_tr_rec, edges) - 1, 0, movie_id_n_bins - 1)
         bin_v  = np.clip(np.digitize(pos_v_rec,  edges) - 1, 0, movie_id_n_bins - 1)
         bin_t  = np.clip(np.digitize(pos_t_rec,  edges) - 1, 0, movie_id_n_bins - 1)
 
-    # Per-recording feature mean for closed-form probes (collapse n_passes)
-    Xtr_rec = Xtr_g.mean(axis=1)  # [n_rec, D]
-    Xv_rec  = Xv_g.mean(axis=1)
-    Xt_rec  = Xt_g.mean(axis=1)
-
     metrics = {}
     preds_npz = {"feature_names": np.array(feature_names, dtype="<U24")}
 
-    # ---- Stim regression + classification (4 features each) ----
+    # ---- Stim regression + classification (4 features each) — per-clip Ridge/LogReg
+    # Train on FLATTENED clips (n_train × n_passes) → match trivial_ridge_baseline.py
     for fi, fname_feat in enumerate(feature_names):
-        ytr = Ytr_rec[:, fi]; yv = Yv_rec[:, fi]; yt = Yt_rec[:, fi]
+        ytr = Ytr_flat_clips[:, fi]
+        yv  = Yv_flat_clips[:, fi]
+        yt  = Yt_flat_clips[:, fi]
         # Regression
-        for split, X, y, tag in [("val", Xv_rec, yv, "val"), ("test", Xt_rec, yt, "test")]:
-            r, r2, pred = _ridge_reg(Xtr_rec, ytr, X, y)
+        for split, X, y, tag in [("val", Xv_flat_clips, yv, "val"), ("test", Xt_flat_clips, yt, "test")]:
+            r, r2, pred = _ridge_reg(Xtr_flat_clips, ytr, X, y)
             metrics[f"{tag}/reg_{fname_feat}_corr"] = r
             metrics[f"{tag}/reg_{fname_feat}_r2"] = r2
             preds_npz[f"{tag}_reg_{fname_feat}_pred"] = pred.astype(np.float32)
             preds_npz[f"{tag}_reg_{fname_feat}_target"] = y.astype(np.float32)
-        # Classification (binarize at train median)
+        # Classification (binarize at train median over flattened train labels)
         med = np.nanmedian(ytr)
         ytr_bin = (ytr > med).astype(np.float32)
-        for split, X, y, tag in [("val", Xv_rec, yv, "val"), ("test", Xt_rec, yt, "test")]:
+        for split, X, y, tag in [("val", Xv_flat_clips, yv, "val"), ("test", Xt_flat_clips, yt, "test")]:
             y_bin = (y > med).astype(np.float32)
-            auc, bal, proba = _logreg_bin(Xtr_rec, ytr_bin, X, y_bin)
+            auc, bal, proba = _logreg_bin(Xtr_flat_clips, ytr_bin, X, y_bin)
             metrics[f"{tag}/cls_{fname_feat}_auc"] = auc
             metrics[f"{tag}/cls_{fname_feat}_bal_acc"] = bal
             preds_npz[f"{tag}_cls_{fname_feat}_proba"] = proba.astype(np.float32)
