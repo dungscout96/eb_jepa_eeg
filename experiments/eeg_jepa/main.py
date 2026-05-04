@@ -466,11 +466,14 @@ def run(
             nn.Tanh(),
         )
         max_delta_seconds = float(cfg.loss.get("pars_max_delta_seconds", 60.0))
-        # sfreq for HBN movie data is 200Hz (declared in dataset).
-        pars_max_delta_samples = max_delta_seconds * 200.0
+        # Δ is reported in clip-index units (consecutive elements of _crop_inds
+        # are spaced window_size_seconds apart). Convert max_delta_seconds to
+        # clip-index units for normalization.
+        ws = float(cfg.data.get("window_size_seconds", 2.0))
+        pars_max_delta_samples = max_delta_seconds / max(ws, 1e-6)
         logger.info(
-            "Cell K PARS head: hidden=%d, max_delta=%.1fs (=%.0f samples), coeff=%.3f",
-            pars_hidden, max_delta_seconds, pars_max_delta_samples, pars_coeff,
+            "Cell K PARS head: hidden=%d, max_delta=%.1fs (=%.1f clip-index units, ws=%.1fs), coeff=%.3f",
+            pars_hidden, max_delta_seconds, pars_max_delta_samples, ws, pars_coeff,
         )
 
     if use_ema:

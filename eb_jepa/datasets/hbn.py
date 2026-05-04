@@ -1142,19 +1142,20 @@ class JEPAMovieDataset(HBNMovieDataset):
         probe_label = torch.tensor(self._probe_labels[real_idx], dtype=torch.float32)
 
         # Cell K (PARS) — emit a paired clip from the same recording with a
-        # known Δ (samples). Computed BEFORE the optional return-stim-meta path
-        # so we can return either (anchor, pair, Δ) or extend it with stim_meta.
+        # known Δ (in clip-index units; main.py converts max_delta_seconds via
+        # window_size_seconds * sfreq into the same unit). Computed BEFORE the
+        # optional return-stim-meta path so we can return either (anchor, pair,
+        # Δ) or extend it with stim_meta.
         pars_pair = None
         pars_delta = None
         if getattr(self, "_return_pars_pair", False):
             n_total = len(crop_inds)
             required_p = (self.n_windows - 1) * self.temporal_stride + 1
-            anchor_start_samples = int(crop_inds[indices[0]])
-            # pick a random Δ_clip_start_index uniformly in valid range
+            anchor_start_clip = int(indices[0])
             pair_start_clip = int(torch.randint(0, n_total - required_p + 1, (1,)).item())
             pair_indices = list(range(pair_start_clip, pair_start_clip + required_p, self.temporal_stride))
-            pair_start_samples = int(crop_inds[pair_indices[0]])
-            pars_delta = pair_start_samples - anchor_start_samples
+            # Δ in clip-index units; positive = pair is later in recording
+            pars_delta = pair_start_clip - anchor_start_clip
             eeg_p = torch.from_numpy(_read_raw_windows(self._fif_paths[real_idx], crop_inds[pair_indices]))
             if self._norm_mode == "per_recording":
                 rec_mean_p = eeg_p.mean(dim=(0, 2), keepdim=True)
