@@ -170,3 +170,77 @@ class MultiBlockMaskCollator:
             pred_masks=pred_masks,
             n_total_tokens=self.n_total_tokens,
         )
+
+
+class ContiguousTimeMaskCollator:
+    """Cross-Time JEPA mask (Cell J / Brain-JEPA "Cross-Time" geometry).
+
+    Masks ALL channels × ALL patches at a contiguous block of windows;
+    keeps the remaining windows fully visible as context. Forces the encoder
+    to capture temporal evolution within a clip — the dimension CorrCA does
+    NOT trivialize, since CorrCA operates per-time-point.
+
+    Token grid: [C, T, P] flattened by (c, t, p) order:
+        token_idx = c * (T * P) + t * P + p
+
+    Args:
+        n_channels: number of EEG channels (post-CorrCA, e.g., 5)
+        n_windows: number of temporal windows in a clip (e.g., 4)
+        n_patches_per_window: patches per window (e.g., 12)
+        mask_window_fraction: fraction of windows to mask (e.g., 0.5 → mask half)
+        mask_position: where to put the masked block: "tail" (predict future from past),
+            "head" (predict past from future), or "random" (sample location).
+    """
+
+    def __init__(
+        self,
+        n_channels: int = 5,
+        n_windows: int = 4,
+        n_patches_per_window: int = 12,
+        mask_window_fraction: float = 0.5,
+        mask_position: str = "tail",
+    ):
+        if mask_position not in ("tail", "head", "random"):
+            raise ValueError(f"mask_position must be tail|head|random, got {mask_position}")
+        self.n_channels = n_channels
+        self.n_windows = n_windows
+        self.n_patches_per_window = n_patches_per_window
+        self.mask_window_fraction = float(mask_window_fraction)
+        self.mask_position = mask_position
+        self.n_total_tokens = n_channels * n_windows * n_patches_per_window
+        n_mask = max(1, int(round(n_windows * self.mask_window_fraction)))
+        if n_mask >= n_windows:
+            raise ValueError(
+                f"mask_window_fraction={mask_window_fraction} → {n_mask}/{n_windows} masked; "
+                "must leave at least one context window"
+            )
+        self.n_mask_windows = n_mask
+
+    def __call__(self) -> MaskResult:
+        T = self.n_windows
+        n_mask = self.n_mask_windows
+        if self.mask_position == "tail":
+            t_start = T - n_mask
+        elif self.mask_position == "head":
+            t_start = 0
+        else:
+            t_start = random.randint(0, T - n_mask)
+        masked_windows = list(range(t_start, t_start + n_mask))
+
+        C = self.n_channels
+        P = self.n_patches_per_window
+        indices = []
+        for c in range(C):
+            for t in masked_windows:
+                for p in range(P):
+                    indices.append(c * (T * P) + t * P + p)
+        pred_masks = [torch.tensor(indices, dtype=torch.long)]
+
+        context_mask = torch.ones(self.n_total_tokens, dtype=torch.bool)
+        context_mask[pred_masks[0]] = False
+
+        return MaskResult(
+            context_mask=context_mask,
+            pred_masks=pred_masks,
+            n_total_tokens=self.n_total_tokens,
+        )

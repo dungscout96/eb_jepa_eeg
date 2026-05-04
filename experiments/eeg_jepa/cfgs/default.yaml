@@ -68,6 +68,12 @@ model:
   ema_momentum_end: 1.0  # EMA momentum end (cosine schedule)
 
 masking:
+  # Mask geometry. "multi_block" = standard EB-JEPA random C×P blocks
+  # replicated across T (Phase D / Cell B default). "cross_time" = Cell J:
+  # mask a contiguous block of windows; predict from the visible windows.
+  geometry: multi_block
+  mask_window_fraction: 0.5         # cross_time only: fraction of T to mask
+  mask_position: tail               # cross_time only: tail|head|random
   n_pred_masks_short: 2             # Number of short-range prediction masks
   n_pred_masks_long: 2              # Number of long-range prediction masks
   short_channel_scale: [0.08, 0.15] # Fraction of channels per short mask
@@ -98,6 +104,14 @@ loss:
   # predictor, same EMA target, just a different mask geometry.
   xsub_coeff: 0.0
   xsub_symmetric: true
+  # Cell K: PARS Δt regression auxiliary (Apple ML 2025, arXiv:2511.11940).
+  # When > 0, dataloader emits paired clips from SAME recording at random Δ
+  # (samples). Δ is normalized by pars_max_delta_seconds * sfreq before
+  # smooth-L1. CorrCA does not block this — temporal evolution within a
+  # recording is preserved.
+  pars_coeff: 0.0
+  pars_max_delta_seconds: 60.0
+  pars_hidden_dim: 128
   # Direction C: envelope/stim auxiliary regression head (legacy, separate path).
   env_coeff: 0.0
 

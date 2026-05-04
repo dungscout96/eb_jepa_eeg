@@ -260,7 +260,8 @@ class MaskedJEPA(nn.Module):
                  dino_head=None, dino_target_head=None, dino_loss_fn=None, dino_coeff: float = 0.0,
                  env_aux_head=None, env_coeff: float = 0.0,
                  stim_nce_loss=None, stim_nce_coeff: float = 0.0,
-                 xsub_coeff: float = 0.0, xsub_symmetric: bool = True):
+                 xsub_coeff: float = 0.0, xsub_symmetric: bool = True,
+                 pars_head=None, pars_coeff: float = 0.0, pars_max_delta: float = 1.0):
         super().__init__()
         self.context_encoder = context_encoder
         self.target_encoder = target_encoder
@@ -296,6 +297,17 @@ class MaskedJEPA(nn.Module):
         self.xsub_coeff = float(xsub_coeff)
         self.xsub_symmetric = bool(xsub_symmetric)
 
+        # Cell K: PARS Δt regression auxiliary (Apple ML 2025, arXiv:2511.11940).
+        # When pars_coeff > 0, batch carries paired clips from SAME recording
+        # with a known Δt (samples); pars_head: MLP(concat(z_a, z_b)) →
+        # predicted normalized Δ ∈ [-1, 1]. CorrCA does not trivialize this:
+        # within-recording temporal evolution is preserved post-CorrCA.
+        # Subject-leakage failure mode is structurally blocked because both
+        # clips share identical subject identity.
+        self.pars_head = pars_head
+        self.pars_coeff = float(pars_coeff)
+        self.pars_max_delta = float(pars_max_delta)
+
         # Freeze target encoder
         for p in self.target_encoder.parameters():
             p.requires_grad = False
@@ -317,6 +329,8 @@ class MaskedJEPA(nn.Module):
         eeg: torch.Tensor,
         env_targets: torch.Tensor = None,
         stim_meta: torch.Tensor = None,
+        pars_pair_eeg: torch.Tensor = None,
+        pars_delta: torch.Tensor = None,
     ) -> tuple[torch.Tensor, dict]:
         """Forward pass: mask, encode, predict, compute loss.
 
@@ -489,6 +503,24 @@ class MaskedJEPA(nn.Module):
 
             loss_dict["xsub_pred_loss"] = xsub_pred_loss.item()
 
+        # 13. Cell K: PARS Δt regression auxiliary.
+        # Encode the paired clip with the (no-grad-detached) context encoder
+        # for a per-clip pooled embedding; concat with the anchor's pooled
+        # embedding; predict normalized Δ via pars_head.
+        pars_loss = torch.tensor(0.0, device=device)
+        if self.pars_coeff > 0 and self.pars_head is not None and pars_pair_eeg is not None:
+            anchor_full = self.context_encoder.encode_tokens(eeg, mask=None)
+            z_anchor = anchor_full.mean(dim=1)  # [B, D]
+            pair_full = self.context_encoder.encode_tokens(pars_pair_eeg.to(device), mask=None)
+            z_pair = pair_full.mean(dim=1)
+            cat = torch.cat([z_anchor, z_pair], dim=-1)  # [B, 2D]
+            delta_pred = self.pars_head(cat).squeeze(-1)  # [B]
+            delta_norm = (pars_delta.to(device).float() / self.pars_max_delta).clamp(-1.0, 1.0)
+            pars_loss = F.smooth_l1_loss(delta_pred, delta_norm)
+            loss_dict["pars_loss"] = pars_loss.item()
+            loss_dict["pars_pred_mean"] = float(delta_pred.detach().mean().item())
+            loss_dict["pars_target_mean"] = float(delta_norm.mean().item())
+
         total_loss = (
             pred_loss
             + reg_loss
@@ -496,6 +528,7 @@ class MaskedJEPA(nn.Module):
             + self.env_coeff * env_loss
             + self.stim_nce_coeff * stim_nce_loss
             + self.xsub_coeff * xsub_pred_loss
+            + self.pars_coeff * pars_loss
         )
         loss_dict["total_loss"] = total_loss.item()
 
@@ -567,8 +600,10 @@ class MaskedJEPANoEMA(nn.Module):
         eeg: torch.Tensor,
         env_targets: torch.Tensor = None,  # accepted but ignored (no env head here)
         stim_meta: torch.Tensor = None,    # accepted but ignored (no stim_nce here yet)
+        pars_pair_eeg: torch.Tensor = None,  # accepted but ignored
+        pars_delta: torch.Tensor = None,     # accepted but ignored
     ) -> tuple[torch.Tensor, dict]:
-        del env_targets, stim_meta  # noqa: F841 — silence linter
+        del env_targets, stim_meta, pars_pair_eeg, pars_delta  # noqa: F841 — silence linter
         B = eeg.shape[0]
         device = eeg.device
 

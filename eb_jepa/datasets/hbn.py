@@ -851,6 +851,10 @@ class JEPAMovieDataset(HBNMovieDataset):
         # Cross-subject stim-aligned InfoNCE support: returning per-clip
         # (rec_idx, movie_id, position_bucket) lets the loss build same-stim
         # positives across recordings within a batch.
+        self._return_pars_pair = bool(
+            cfg.get("return_pars_pair", False) if not isinstance(cfg, dict)
+            else cfg.get("return_pars_pair", False)
+        )
         self._return_stim_meta = bool(
             cfg.get("return_stim_meta", False) if not isinstance(cfg, dict)
             else cfg.get("return_stim_meta", False)
@@ -1137,12 +1141,39 @@ class JEPAMovieDataset(HBNMovieDataset):
         # NaN means metadata was unavailable for this recording.
         probe_label = torch.tensor(self._probe_labels[real_idx], dtype=torch.float32)
 
+        # Cell K (PARS) — emit a paired clip from the same recording with a
+        # known Δ (samples). Computed BEFORE the optional return-stim-meta path
+        # so we can return either (anchor, pair, Δ) or extend it with stim_meta.
+        pars_pair = None
+        pars_delta = None
+        if getattr(self, "_return_pars_pair", False):
+            n_total = len(crop_inds)
+            required_p = (self.n_windows - 1) * self.temporal_stride + 1
+            anchor_start_samples = int(crop_inds[indices[0]])
+            # pick a random Δ_clip_start_index uniformly in valid range
+            pair_start_clip = int(torch.randint(0, n_total - required_p + 1, (1,)).item())
+            pair_indices = list(range(pair_start_clip, pair_start_clip + required_p, self.temporal_stride))
+            pair_start_samples = int(crop_inds[pair_indices[0]])
+            pars_delta = pair_start_samples - anchor_start_samples
+            eeg_p = torch.from_numpy(_read_raw_windows(self._fif_paths[real_idx], crop_inds[pair_indices]))
+            if self._norm_mode == "per_recording":
+                rec_mean_p = eeg_p.mean(dim=(0, 2), keepdim=True)
+                rec_std_p = eeg_p.std(dim=(0, 2), keepdim=True).clamp(min=1e-8)
+                eeg_p = (eeg_p - rec_mean_p) / rec_std_p
+            else:
+                eeg_p = (eeg_p - self._eeg_mean) / self._eeg_std
+            if self._add_envelope:
+                eeg_p = self._append_lowfreq_envelope(eeg_p)
+            if self._corrca_W is not None:
+                eeg_p = torch.einsum("wct,ck->wkt", eeg_p, self._corrca_W)
+            pars_pair = eeg_p
+
         if not self._return_stim_meta:
+            if pars_pair is not None:
+                return eeg, feats[indices], probe_label, pars_pair, torch.tensor(pars_delta, dtype=torch.long)
             return eeg, feats[indices], probe_label
 
         # Cross-subject stim-alignment metadata: (rec_idx, movie_id, pos_bucket).
-        # Position bucket = floor(mean position_in_movie of clip / bucket_size).
-        # 'position_in_movie' is in seconds inside the feature tensor.
         feat_idx_pos = self.feature_names.index("position_in_movie") \
             if "position_in_movie" in self.feature_names else None
         if feat_idx_pos is None:
@@ -1152,6 +1183,8 @@ class JEPAMovieDataset(HBNMovieDataset):
             pos_bucket = int(mean_pos // max(self._stim_position_bucket_size, 1e-6))
         movie_id = int(self._task_id_per_recording[real_idx])
         stim_meta = torch.tensor([int(real_idx), movie_id, pos_bucket], dtype=torch.long)
+        if pars_pair is not None:
+            return eeg, feats[indices], probe_label, stim_meta, pars_pair, torch.tensor(pars_delta, dtype=torch.long)
         return eeg, feats[indices], probe_label, stim_meta
 
     @staticmethod

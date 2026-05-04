@@ -34,7 +34,7 @@ from eb_jepa.datasets.hbn import JEPAMovieDataset
 from eb_jepa.jepa import MaskedJEPA, MaskedJEPANoEMA, MaskedJEPAProbe
 from eb_jepa.logging import get_logger
 from eb_jepa.losses import VCLoss, SIGRegLoss
-from eb_jepa.masking import MultiBlockMaskCollator
+from eb_jepa.masking import MultiBlockMaskCollator, ContiguousTimeMaskCollator
 from eb_jepa.sanity_checks import SanityCheckHook
 from eb_jepa.training_utils import (
     get_default_dev_name,
@@ -209,6 +209,10 @@ def run(
         # Cell B requires K=2 (one cross-subject pair per bucket).
         OmegaConf.update(cfg, "data.stim_aligned_K", 2, force_add=True)
         logger.info("Forced data.stim_aligned_K=2 (Cell B paired-batch requirement)")
+    pars_active = float(cfg.loss.get("pars_coeff", 0.0)) > 0
+    if pars_active:
+        OmegaConf.update(cfg, "data.return_pars_pair", True, force_add=True)
+        logger.info("Auto-enabled data.return_pars_pair=True (loss.pars_coeff > 0)")
     # Lever 1 v2: structured cross-subject batches.
     use_aligned_sampler = bool(cfg.data.get("stim_aligned_sampler", False))
     if use_aligned_sampler and not (stim_nce_active or xsub_active):
@@ -354,18 +358,36 @@ def run(
         mlp_dim_ratio=cfg.model.get("mlp_dim_ratio", 2.66),
         predictor_dim=predictor_dim,
     )
-    mask_collator = MultiBlockMaskCollator(
-        n_channels=n_chans,
-        n_windows=cfg.data.n_windows,
-        n_patches_per_window=encoder.n_patches_per_window,
-        n_pred_masks_short=masking_cfg.get("n_pred_masks_short", 2),
-        n_pred_masks_long=masking_cfg.get("n_pred_masks_long", 2),
-        short_channel_scale=tuple(masking_cfg.get("short_channel_scale", [0.08, 0.15])),
-        short_patch_scale=tuple(masking_cfg.get("short_patch_scale", [0.3, 0.6])),
-        long_channel_scale=tuple(masking_cfg.get("long_channel_scale", [0.15, 0.35])),
-        long_patch_scale=tuple(masking_cfg.get("long_patch_scale", [0.5, 1.0])),
-        min_context_fraction=masking_cfg.get("min_context_fraction", 0.15),
-    )
+    mask_geometry = masking_cfg.get("geometry", "multi_block")
+    if mask_geometry == "cross_time":
+        # Cell J — Cross-Time mask (Brain-JEPA): mask a contiguous block of
+        # windows; predict from the visible windows. CorrCA does not trivialize
+        # this since the temporal dimension is preserved within a clip.
+        mask_collator = ContiguousTimeMaskCollator(
+            n_channels=n_chans,
+            n_windows=cfg.data.n_windows,
+            n_patches_per_window=encoder.n_patches_per_window,
+            mask_window_fraction=float(masking_cfg.get("mask_window_fraction", 0.5)),
+            mask_position=str(masking_cfg.get("mask_position", "tail")),
+        )
+        logger.info(
+            "Using ContiguousTimeMaskCollator (Cell J): mask_window_fraction=%.2f, position=%s",
+            float(masking_cfg.get("mask_window_fraction", 0.5)),
+            masking_cfg.get("mask_position", "tail"),
+        )
+    else:
+        mask_collator = MultiBlockMaskCollator(
+            n_channels=n_chans,
+            n_windows=cfg.data.n_windows,
+            n_patches_per_window=encoder.n_patches_per_window,
+            n_pred_masks_short=masking_cfg.get("n_pred_masks_short", 2),
+            n_pred_masks_long=masking_cfg.get("n_pred_masks_long", 2),
+            short_channel_scale=tuple(masking_cfg.get("short_channel_scale", [0.08, 0.15])),
+            short_patch_scale=tuple(masking_cfg.get("short_patch_scale", [0.3, 0.6])),
+            long_channel_scale=tuple(masking_cfg.get("long_channel_scale", [0.15, 0.35])),
+            long_patch_scale=tuple(masking_cfg.get("long_patch_scale", [0.5, 1.0])),
+            min_context_fraction=masking_cfg.get("min_context_fraction", 0.15),
+        )
     # Regularizer — VCLoss, SIGReg, or none
     regularizer = None
     reg_type = cfg.loss.get("regularizer", "vc")
@@ -430,6 +452,27 @@ def run(
 
     xsub_coeff = float(cfg.loss.get("xsub_coeff", 0.0))
     xsub_symmetric = bool(cfg.loss.get("xsub_symmetric", True))
+
+    # Cell K: PARS Δt regression head — small MLP on concatenated pair embeddings.
+    pars_coeff = float(cfg.loss.get("pars_coeff", 0.0))
+    pars_head = None
+    pars_max_delta_samples = 1.0
+    if pars_coeff > 0:
+        pars_hidden = int(cfg.loss.get("pars_hidden_dim", 128))
+        pars_head = nn.Sequential(
+            nn.Linear(2 * embed_dim, pars_hidden),
+            nn.GELU(),
+            nn.Linear(pars_hidden, 1),
+            nn.Tanh(),
+        )
+        max_delta_seconds = float(cfg.loss.get("pars_max_delta_seconds", 60.0))
+        # sfreq for HBN movie data is 200Hz (declared in dataset).
+        pars_max_delta_samples = max_delta_seconds * 200.0
+        logger.info(
+            "Cell K PARS head: hidden=%d, max_delta=%.1fs (=%.0f samples), coeff=%.3f",
+            pars_hidden, max_delta_seconds, pars_max_delta_samples, pars_coeff,
+        )
+
     if use_ema:
         jepa = MaskedJEPA(
             encoder, target_encoder, predictor, mask_collator, regularizer,
@@ -439,6 +482,8 @@ def run(
             env_aux_head=env_aux_head, env_coeff=env_coeff,
             stim_nce_loss=stim_nce_loss, stim_nce_coeff=stim_nce_coeff,
             xsub_coeff=xsub_coeff, xsub_symmetric=xsub_symmetric,
+            pars_head=pars_head, pars_coeff=pars_coeff,
+            pars_max_delta=pars_max_delta_samples,
         ).to(device)
     else:
         jepa = MaskedJEPANoEMA(
@@ -504,6 +549,8 @@ def run(
         jepa_params += [p for p in jepa.dino_head.parameters() if p.requires_grad]
     if getattr(jepa, "env_aux_head", None) is not None:
         jepa_params += [p for p in jepa.env_aux_head.parameters() if p.requires_grad]
+    if getattr(jepa, "pars_head", None) is not None:
+        jepa_params += [p for p in jepa.pars_head.parameters() if p.requires_grad]
     optimizer = Adam(jepa_params, lr=cfg.optim.lr)
     probe_optimizer = Adam(
         list(regression_probe.head.parameters())
@@ -587,24 +634,38 @@ def run(
         )
 
         for batch in pbar:
-            # Backwards-compatible unpacking: dataset returns 3-tuple by default,
-            # 4-tuple (with stim_meta) when return_stim_meta=True (Lever 1).
-            if len(batch) == 4:
-                eeg, features, probe_labels, stim_meta = batch
-                stim_meta = stim_meta.to(device)
-            else:
+            # Backwards-compatible unpacking. Dataset emits 3, 4, 5, or 6 items:
+            # - 3: (eeg, features, probe_labels) baseline
+            # - 4: + stim_meta  (return_stim_meta=True; Lever 1, Cell B)
+            # - 5: + pars_pair, pars_delta  (return_pars_pair=True, no stim_meta)
+            # - 6: + stim_meta + pars_pair + pars_delta  (both flags on)
+            stim_meta = None
+            pars_pair = None
+            pars_delta = None
+            if len(batch) == 3:
                 eeg, features, probe_labels = batch
-                stim_meta = None
+            elif len(batch) == 4:
+                eeg, features, probe_labels, stim_meta = batch
+            elif len(batch) == 5:
+                eeg, features, probe_labels, pars_pair, pars_delta = batch
+            elif len(batch) == 6:
+                eeg, features, probe_labels, stim_meta, pars_pair, pars_delta = batch
+            else:
+                raise ValueError(f"Unexpected batch tuple length {len(batch)}")
+            if stim_meta is not None:
+                stim_meta = stim_meta.to(device)
+            if pars_pair is not None:
+                pars_pair = pars_pair.to(device)
+                pars_delta = pars_delta.to(device)
             eeg = eeg.to(device)
-            features = features.to(device)  # [B, T, n_features]
-            # probe_labels: [B] float (NaN where no subject metadata) — stays on CPU
+            features = features.to(device)
 
             # --- Masked JEPA pretraining ---
             optimizer.zero_grad()
-            # Pass per-window features as env_targets when envelope-aux is active;
-            # MaskedJEPA.forward only consumes them when env_coeff > 0.
-            # Pass stim_meta when Lever-1 InfoNCE auxiliary is active.
-            jepa_loss, loss_dict = jepa(eeg, env_targets=features, stim_meta=stim_meta)
+            jepa_loss, loss_dict = jepa(
+                eeg, env_targets=features, stim_meta=stim_meta,
+                pars_pair_eeg=pars_pair, pars_delta=pars_delta,
+            )
             jepa_loss.backward()
             torch.nn.utils.clip_grad_norm_(
                 list(jepa.context_encoder.parameters())
