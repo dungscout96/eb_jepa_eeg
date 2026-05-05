@@ -615,8 +615,10 @@ def _run_auto_eval(cfg, exp_dir, cfg_fname):
     wandb_group = eval_cfg.get("wandb_group", "probe_eval_auto")
 
     logger.info("Auto-eval: running probe_eval on %s", checkpoint_path)
+    probe_run_id = ""
+    probe_project = "eb_jepa"
     try:
-        run_probe_eval(
+        probe_metrics = run_probe_eval(
             checkpoint=str(checkpoint_path),
             n_windows=cfg.data.n_windows,
             window_size_seconds=cfg.data.window_size_seconds,
@@ -633,19 +635,23 @@ def _run_auto_eval(cfg, exp_dir, cfg_fname):
             fname=cfg_fname,
             seed=cfg.meta.seed,
         )
+        probe_run_id = probe_metrics.get("_wandb_run_id", "") or ""
+        probe_project = probe_metrics.get("_wandb_project", "eb_jepa") or "eb_jepa"
     except Exception as e:
         logger.warning("Auto-eval probe_eval failed: %s", e)
         return
 
     bootstrap_split = eval_cfg.get("bootstrap_split", "test")
     n_bootstrap = eval_cfg.get("n_bootstrap", 1000)
-    logger.info("Auto-eval: running bootstrap on %s split=%s",
-                save_predictions_dir, bootstrap_split)
+    logger.info("Auto-eval: running bootstrap on %s split=%s (wandb_run_id=%s)",
+                save_predictions_dir, bootstrap_split, probe_run_id or "<none>")
     try:
         bootstrap_predictions(
             predictions_dir=str(save_predictions_dir),
             split=bootstrap_split,
             n_bootstrap=n_bootstrap,
+            wandb_run_id=probe_run_id,
+            wandb_project=probe_project,
         )
     except Exception as e:
         logger.warning("Auto-eval bootstrap failed: %s", e)

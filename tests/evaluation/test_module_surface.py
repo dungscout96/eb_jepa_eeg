@@ -38,7 +38,10 @@ def test_bootstrap_run_signature():
     from eb_jepa.evaluation.bootstrap import run
 
     sig = inspect.signature(run)
-    required = {"predictions_dir", "split", "n_bootstrap"}
+    required = {
+        "predictions_dir", "split", "n_bootstrap",
+        "wandb_run_id", "wandb_project",
+    }
     missing = required - set(sig.parameters)
     assert not missing, f"bootstrap.run missing params: {sorted(missing)}"
 

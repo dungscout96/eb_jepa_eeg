@@ -101,7 +101,10 @@ def test_bootstrap_receives_expected_kwargs(tmp_path):
 
     with patch("eb_jepa.evaluation.run_probe_eval") as pe, \
          patch("eb_jepa.evaluation.bootstrap_predictions") as bs:
-        pe.return_value = {}
+        pe.return_value = {
+            "_wandb_run_id": "abc123",
+            "_wandb_project": "eb_jepa",
+        }
         bs.return_value = {}
 
         m._run_auto_eval(cfg, exp_dir, "cfgs/default.yaml")
@@ -110,6 +113,32 @@ def test_bootstrap_receives_expected_kwargs(tmp_path):
         assert kwargs["predictions_dir"] == str(exp_dir / "saved_predictions")
         assert kwargs["split"] == "test"
         assert kwargs["n_bootstrap"] == 1000
+        # The hook must forward probe_eval's W&B run id so bootstrap CIs
+        # land on the same run as the probe-eval point estimates.
+        assert kwargs["wandb_run_id"] == "abc123"
+        assert kwargs["wandb_project"] == "eb_jepa"
+
+
+def test_bootstrap_wandb_run_id_empty_when_probe_eval_omits_it(tmp_path):
+    """Older probe_eval result dicts (or W&B-disabled runs) won't carry
+    `_wandb_run_id`; the hook should pass an empty string, which bootstrap
+    treats as 'skip W&B logging'."""
+    cfg = _base_cfg()
+    exp_dir = tmp_path / "exp"
+    exp_dir.mkdir()
+
+    from experiments.eeg_jepa import train as m
+
+    with patch("eb_jepa.evaluation.run_probe_eval") as pe, \
+         patch("eb_jepa.evaluation.bootstrap_predictions") as bs:
+        pe.return_value = {}                # no _wandb_run_id key
+        bs.return_value = {}
+
+        m._run_auto_eval(cfg, exp_dir, "cfgs/default.yaml")
+
+        kwargs = bs.call_args.kwargs
+        assert kwargs["wandb_run_id"] == ""
+        assert kwargs["wandb_project"] == "eb_jepa"
 
 
 def test_probe_eval_failure_does_not_propagate(tmp_path):

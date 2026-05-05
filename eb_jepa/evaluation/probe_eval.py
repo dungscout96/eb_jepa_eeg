@@ -835,6 +835,8 @@ def run(
     # ------------------------------------------------------------------
     # W&B logging
     # ------------------------------------------------------------------
+    used_wandb_run_id = ""
+    used_wandb_project = wandb_project
     try:
         import wandb
         if wandb_run_id:
@@ -857,11 +859,17 @@ def run(
                     "probe_label": train_set.probe_label_name,
                 },
             )
+        used_wandb_run_id = wandb_run.id
         wandb_run.log(all_metrics)
         wandb_run.finish()
     except Exception as e:
         logger.warning("W&B logging failed: %s", e)
 
+    # Expose the run id so callers (e.g. the end-of-training auto-eval hook
+    # in experiments/eeg_jepa/train.py) can attach the bootstrap stage to
+    # the same run.
+    all_metrics["_wandb_run_id"] = used_wandb_run_id
+    all_metrics["_wandb_project"] = used_wandb_project
     return all_metrics
 
 

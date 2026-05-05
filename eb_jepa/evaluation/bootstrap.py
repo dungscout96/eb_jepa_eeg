@@ -172,7 +172,8 @@ def _bootstrap_subject(npz, n_bootstrap, rng):
 
 def run(predictions_dir: str, split: str = "test",
         n_bootstrap: int = 1000, seed: int = 0,
-        seeds_glob: str = ""):
+        seeds_glob: str = "",
+        wandb_run_id: str = "", wandb_project: str = "eb_jepa"):
     """Bootstrap recording-level CIs from saved predictions.
 
     Args:
@@ -183,6 +184,13 @@ def run(predictions_dir: str, split: str = "test",
         seeds_glob: If set, glob pattern matching multiple seed files; their
                     predictions are averaged per recording before bootstrap.
                     e.g. "test_seed*.npz" → avg over all seeds.
+        wandb_run_id: If set, resume this W&B run and log
+                      bootstrap/{split}/{metric}/{mean,std,ci_lo,ci_hi} so
+                      the CIs land on the same run as probe_eval.
+        wandb_project: W&B project (only used when wandb_run_id is set).
+
+    Returns:
+        Dict mapping metric name to {mean, std, ci_lo, ci_hi, n}.
     """
     pred_dir = Path(predictions_dir)
     rng = np.random.default_rng(seed)
@@ -224,6 +232,22 @@ def run(predictions_dir: str, split: str = "test",
     for name, s in results.items():
         ci = f"[{s['ci_lo']:.3f}, {s['ci_hi']:.3f}]"
         print(f"{name:<40} {s['mean']:>8.4f} {s['std']:>8.4f} {ci:>20}")
+
+    if wandb_run_id:
+        try:
+            import wandb
+            run = wandb.init(project=wandb_project, id=wandb_run_id, resume="must")
+            flat = {}
+            for name, s in results.items():
+                for stat in ("mean", "std", "ci_lo", "ci_hi"):
+                    flat[f"bootstrap/{split}/{name}/{stat}"] = s[stat]
+            flat[f"bootstrap/{split}/n_bootstrap"] = n_bootstrap
+            run.log(flat)
+            run.finish()
+        except Exception as e:
+            print(f"[bootstrap] W&B logging failed: {e}")
+
+    return results
 
     return results
 
