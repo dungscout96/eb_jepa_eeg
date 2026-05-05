@@ -104,23 +104,47 @@ def _kc_features(eeg, encoder, device):
     return emb
 
 
-def _extract(dataset, n_passes, encoder, device, seed):
+def _extract(dataset, n_passes, encoder, device, seed, train_order=False):
     """Per-recording: n_passes random clips → kc-pool features + per-clip
     feature labels. Returns features [n_rec, n_passes, 320] and labels
-    [n_rec, n_passes, n_features] grouped by recording."""
+    [n_rec, n_passes, n_features] grouped by recording.
+
+    train_order=True replicates trivial_ridge_baseline.py's training-set
+    extraction (outer-loop pass × inner-loop randperm(rec_idx)). The
+    different iteration order changes how the global torch RNG state
+    advances across dataset[rec_idx] calls, yielding different random
+    clip_starts per (rec, pass). This matters most for narrative which is
+    clip-position-sensitive (~0.04 narr swing in our experiments).
+    val/test extractions always use train_order=False (sequential rec
+    iteration) for compatibility with bootstrap NPZ schema.
+    """
     rng = torch.Generator().manual_seed(seed)
     n_rec = len(dataset)
-    feats_arr = []
-    labels_arr = []
-    for rec_idx in range(n_rec):
-        f_passes = []
-        l_passes = []
-        for _ in range(n_passes):
-            eeg, feats, _ = dataset[rec_idx]
-            f_passes.append(_kc_features(eeg, encoder, device))
-            l_passes.append(feats.mean(dim=0).numpy())
-        feats_arr.append(np.stack(f_passes))
-        labels_arr.append(np.stack(l_passes))
+    if train_order:
+        # trivial_ridge_baseline.py train order: outer p, inner randperm
+        # Build per-(rec, pass) buckets, fill them in trivial_ridge order.
+        feats_buckets = [[None] * n_passes for _ in range(n_rec)]
+        labels_buckets = [[None] * n_passes for _ in range(n_rec)]
+        for p in range(n_passes):
+            for rec_idx in torch.randperm(n_rec, generator=rng).tolist():
+                eeg, feats, _ = dataset[rec_idx]
+                feats_buckets[rec_idx][p] = _kc_features(eeg, encoder, device)
+                labels_buckets[rec_idx][p] = feats.mean(dim=0).numpy()
+        feats_arr = [np.stack(fb) for fb in feats_buckets]
+        labels_arr = [np.stack(lb) for lb in labels_buckets]
+    else:
+        # Sequential rec × pass iteration (matches trivial_ridge val/test order).
+        feats_arr = []
+        labels_arr = []
+        for rec_idx in range(n_rec):
+            f_passes = []
+            l_passes = []
+            for _ in range(n_passes):
+                eeg, feats, _ = dataset[rec_idx]
+                f_passes.append(_kc_features(eeg, encoder, device))
+                l_passes.append(feats.mean(dim=0).numpy())
+            feats_arr.append(np.stack(f_passes))
+            labels_arr.append(np.stack(l_passes))
     X = np.stack(feats_arr)     # [n_rec, n_passes, D]
     Y = np.stack(labels_arr)    # [n_rec, n_passes, n_features]
     return X, Y
@@ -248,7 +272,7 @@ def run(
     encoder, device = _load_encoder(checkpoint, train_set, cfg, n_windows)
     logger.info("Loaded encoder; extracting features ...")
 
-    Xtr_g, Ytr_g = _extract(train_set,         n_passes, encoder, device, seed)
+    Xtr_g, Ytr_g = _extract(train_set,         n_passes, encoder, device, seed,     train_order=True)
     Xv_g,  Yv_g  = _extract(eval_sets["val"],  n_passes, encoder, device, seed + 1)
     Xt_g,  Yt_g  = _extract(eval_sets["test"], n_passes, encoder, device, seed + 2)
     logger.info("Train: X=%s Y=%s; Val: X=%s; Test: X=%s",
