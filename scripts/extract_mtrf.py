@@ -37,13 +37,16 @@ from scipy.stats import pearsonr
 logger = get_logger(__name__)
 
 
-def _read_full_clip(dataset, rec_idx, start_idx):
-    """Read full 8-s clip at original 200 Hz: [n_windows, C, T_samples].
+def _read_full_clip(dataset, rec_idx, start_idx, downsample_factor=2):
+    """Read full 8-s clip and apply dataset transforms + memory-friendly downsample.
 
-    Applies the dataset's per-recording z-norm AND CorrCA spatial projection
-    (when dataset._corrca_W is set), matching JEPAMovieDataset.__getitem__'s
-    transformations. Without the CorrCA step, an `input=corrca5` mTRF run
-    would silently fall through to raw 129-ch input.
+    Steps mirror JEPAMovieDataset.__getitem__: per-recording z-norm → CorrCA
+    spatial projection (if set). Then box-mean-pool the time axis by
+    `downsample_factor` to keep the lag-stacked Toeplitz tractable; default
+    factor 2 takes 200 Hz → 100 Hz, halving both sample count and required
+    lag count for a fixed lag-time window. Lag spacing of 10 ms at 100 Hz
+    is still well within canonical mTRF resolution (Crosse 2016 typically
+    uses 5–20 ms spacing).
     """
     crop_inds = dataset._crop_inds[rec_idx]
     required = (dataset.n_windows - 1) * dataset.temporal_stride + 1
@@ -56,10 +59,16 @@ def _read_full_clip(dataset, rec_idx, start_idx):
         eeg = (eeg - rm) / rs
     elif dataset._norm_mode == "global" and dataset._eeg_mean is not None:
         eeg = (eeg - dataset._eeg_mean) / dataset._eeg_std
-    # CRITICAL: apply CorrCA spatial projection if configured. Without this
-    # step, both input="corrca5" and input="raw129" runs see raw 129-ch data.
     if dataset._corrca_W is not None:
         eeg = torch.einsum("wct,ck->wkt", eeg, dataset._corrca_W)  # [nw, K, T]
+    if downsample_factor > 1:
+        nw, C, T = eeg.shape
+        T_trim = (T // downsample_factor) * downsample_factor
+        eeg = (
+            eeg[..., :T_trim]
+            .reshape(nw, C, T_trim // downsample_factor, downsample_factor)
+            .mean(-1)
+        )
     return eeg.numpy(), indices
 
 
@@ -86,7 +95,7 @@ def _toeplitz_lagged(eeg_flat, n_lags):
     return out.reshape(valid_T, C * n_lags), valid_T
 
 
-def _build_xy(dataset, n_lags, max_clips_per_rec=4):
+def _build_xy(dataset, n_lags, max_clips_per_rec=2):
     """Build (X, y) over all train recordings: X = lagged EEG per timepoint,
     y = stim labels per timepoint. Sub-samples non-overlapping clips per recording
     to keep memory bounded.
@@ -124,7 +133,7 @@ def _build_xy(dataset, n_lags, max_clips_per_rec=4):
 
 
 def _predict_per_clip(dataset, ridge_per_feature, n_lags, ym, ys_norm,
-                     max_clips_per_rec=4):
+                     max_clips_per_rec=2):
     """For each test recording, produce per-recording mean predicted stim.
 
     Returns preds [n_rec, n_features], targets [n_rec, n_features].
@@ -195,10 +204,13 @@ def run(input: str, seed: int, out_dir: str,
         cfg=cfg.data, preprocessed=preprocessed, preprocessed_dir=preprocessed_dir,
     )
 
-    sfreq = float(train_set.sfreq)
-    n_lags = int(round(lag_ms * sfreq / 1000)) + 1  # 0-500 ms inclusive @ 200 Hz = 101 lags
-    logger.info("input=%s seed=%d n_lags=%d (%d ms range at %.0f Hz)",
-                input, seed, n_lags, lag_ms, sfreq)
+    # Downsample EEG to 100 Hz before lag-stacking for memory tractability.
+    sfreq_native = float(train_set.sfreq)
+    downsample_factor = 2  # 200 Hz → 100 Hz
+    sfreq = sfreq_native / downsample_factor
+    n_lags = int(round(lag_ms * sfreq / 1000)) + 1  # 0-500 ms @ 100 Hz = 51 lags
+    logger.info("input=%s seed=%d n_lags=%d (%d ms range at %.0f Hz, native %.0f Hz)",
+                input, seed, n_lags, lag_ms, sfreq, sfreq_native)
 
     logger.info("Building train (X, y) ...")
     X_train, y_train = _build_xy(train_set, n_lags)
@@ -211,11 +223,13 @@ def run(input: str, seed: int, out_dir: str,
     ym = y_train.mean(0); ys_norm = y_train.std(0) + 1e-8
     y_train_n = (y_train - ym[None, :]) / ys_norm[None, :]
 
-    logger.info("Fitting Ridge α=1 per stim feature (n_lags=%d, D=%d, N=%d) ...",
+    logger.info("Fitting Ridge α=1 (lsqr) per stim feature (n_lags=%d, D=%d, N=%d) ...",
                 n_lags, X_train.shape[1], X_train.shape[0])
     ridge_per_feature = []
     for fi in range(n_features):
-        r = Ridge(alpha=1.0).fit(X_train_n, y_train_n[:, fi])
+        # solver=lsqr uses iterative least-squares — O(N+D) memory per iter,
+        # avoids the O(D^2) Cholesky / O(N^2) dual-SVD that crashed at 80 GB.
+        r = Ridge(alpha=1.0, solver="lsqr", max_iter=500).fit(X_train_n, y_train_n[:, fi])
         ridge_per_feature.append(r)
 
     # Wrap predict to handle standardization
