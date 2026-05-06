@@ -37,14 +37,17 @@ Both columns ideally low (subject identity should NOT be recovered from a stimul
 | Tier 3 BIOT (frozen + Ridge) | +0.474 ± 0.025 | +0.122 ± 0.052 | 0.642 ± 0.021 | 0.586 ± 0.012 |
 | Tier 3 Luna (frozen + Ridge) | +0.458 ± 0.038 | +0.100 ± 0.070 | 0.687 ± 0.031 | 0.669 ± 0.015 |
 | Tier 3 BENDR (frozen + Ridge) | **−0.008 ± 0.068** | **−0.027 ± 0.007** | **0.480 ± 0.113** | 0.500 ± 0.000 |
-| Tier 3 LaBraM (frozen + Ridge) | +0.525 ± 0.023 | +0.182 ± 0.044 | **0.758 ± 0.037** ⚠ | 0.697 ± 0.048 |
-| Tier 3 CBraMod / EEGPT / REVE | _(in flight)_ | _(in flight)_ | _(in flight)_ | _(in flight)_ |
-| Tier 4 BIOT (full FT) | **+0.558 ± 0.007** ⚠ | **+0.302 ± 0.007** ⚠ | 0.676 ± 0.012 | 0.597 ± 0.012 |
+| Tier 3 LaBraM (frozen + Ridge) | +0.525 ± 0.023 | +0.182 ± 0.044 | 0.758 ± 0.037 | 0.697 ± 0.048 |
+| Tier 3 CBraMod (frozen + Ridge) | +0.547 ± 0.029 | +0.239 ± 0.039 | 0.734 ± 0.008 | 0.664 ± 0.040 |
+| Tier 3 EEGPT (frozen + Ridge) | +0.273 ± 0.069 | −0.322 ± 0.121 | 0.606 ± 0.026 | 0.572 ± 0.034 |
+| Tier 3 REVE (frozen + Ridge) | +0.614 ± 0.017 | +0.351 ± 0.019 | **0.867 ± 0.014** ⚠ | **0.781 ± 0.016** ⚠ |
+| Tier 4 BIOT (full FT) | +0.558 ± 0.007 | +0.302 ± 0.007 | 0.676 ± 0.012 | 0.597 ± 0.012 |
 | Tier 4 Luna (full FT) | +0.392 ± 0.059 | +0.090 ± 0.036 | 0.647 ± 0.026 | 0.502 ± 0.005 |
 | Tier 4 CBraMod (retrain nw=2 ws=4) | +0.269 ± 0.058 | +0.062 ± 0.035 | 0.663 ± 0.032 | 0.534 ± 0.021 |
 | Tier 4 BENDR (full FT) | **+0.038 ± 0.037 ns** | **−0.032 ± 0.015** | **0.520 ± 0.055 ns** | 0.537 ± 0.039 |
 | Tier 4 LaBraM (full FT) | +0.300 ± 0.115 | +0.080 ± 0.069 | 0.690 ± 0.028 | 0.548 ± 0.029 |
-| Tier 4 EEGPT / REVE | _(in flight)_ | _(in flight)_ | _(in flight)_ | _(in flight)_ |
+| Tier 4 EEGPT (full FT) | +0.420 ± 0.072 | +0.155 ± 0.072 | 0.631 ± 0.031 | 0.591 ± 0.017 |
+| Tier 4 REVE (full FT) | **+0.655 ± 0.017** ⚠ | **+0.428 ± 0.023** ⚠ | **0.896 ± 0.003** ⚠⚠ | **0.833 ± 0.017** ⚠ |
 | Tier 6 Luna+CorrCA-5 (full FT) | n/a | n/a | n/a | n/a |
 | mTRF (any input) | n/a | n/a | n/a | n/a |
 | Tier 2 native end-to-end (4 archs) | n/a (no subject head) | n/a | n/a | n/a |
@@ -53,11 +56,14 @@ Chance: age_corr/R² = 0; sex_auc / bal_acc = 0.5. ⚠ = highest leak; **bold** 
 
 ### Subject-axis takeaways
 
-- **Tier 4 BIOT has the worst leak**: age_corr 0.558, age_R² 0.302 (explains 30% of test-subject age variance).
-- **LaBraM Tier 3 has the highest sex AUC (0.758)** — stronger than its Tier 4 (0.690) and stronger than Luna T3 (0.687) or Cine-JEPA (0.726).
-- **BENDR is uniquely subject-clean both ways**: Tier 3 age −0.008 / sex 0.480 (basically chance) and Tier 4 age 0.038 ns / sex 0.520 ns. Combined with weak stim, BENDR's TUEG-pretrain doesn't transfer to HBN at all.
-- **Linear ceilings** (raw_corrca_64/pca) are the cleanest among learned-projection methods: age 0.09–0.13, sex 0.55–0.57. The fixed 320-d projection doesn't inflate subject leak; learned encoders do.
-- **Cine-JEPA reduces age leak vs random-init** (0.387 vs 0.437); sex roughly tied. SSL lowers age leakage by ~0.05.
+- **REVE is the worst leak we measured**, both frozen (Tier 3) and finetuned (Tier 4). Tier 4 REVE: age 0.655 / age_R² 0.428 (explains 43% of test-subject age variance) / **sex 0.896** / sex_bal_acc 0.833. Tier 3 REVE (frozen): age 0.614 / sex 0.867. Both substantially higher than any other method.
+- **Tier 4 BIOT** is second-worst on age (0.558, R² 0.302) but its sex (0.676) is much lower than REVE's 0.896.
+- **CBraMod Tier 3 (frozen)** has surprisingly high subject leak: age 0.547 / sex 0.734. Frozen CBraMod features encode subject identity strongly while only weakly carrying stim signal.
+- **LaBraM Tier 3** has high sex AUC (0.758) — stronger than its Tier 4 (0.690).
+- **BENDR is uniquely subject-clean both ways**: Tier 3 age −0.008 / sex 0.480 and Tier 4 age 0.038 ns / sex 0.520 ns. BENDR's TUEG pretraining doesn't transfer to HBN.
+- **EEGPT Tier 3 age_R² is negative (−0.322)**: predictions correlate with truth (age_corr 0.273) but are systematically biased.
+- **Linear ceilings** (raw_corrca_64/pca) are cleanest among learned-projection methods: age 0.09–0.13, sex 0.55–0.57. A fixed 320-d projection doesn't inflate subject leak; learned encoders do.
+- **Cine-JEPA reduces age leak vs random-init encoder** (0.387 vs 0.437; sex roughly tied).
 
 ## Table 2 — Stim-feature classification AUC (median-split, per feature)
 
@@ -83,11 +89,16 @@ For each stim feature the target is binarized at the median; AUC > 0.5 = above c
 | Tier 3 Luna | 0.555 ± 0.010 | 0.562 ± 0.015 | 0.585 ± 0.009 | 0.521 ± 0.013 |
 | Tier 3 BENDR | 0.508 ± 0.011 | 0.505 ± 0.014 | 0.515 ± 0.011 | 0.499 ± 0.017 |
 | Tier 3 LaBraM | 0.532 ± 0.012 | 0.542 ± 0.014 | 0.544 ± 0.014 | 0.528 ± 0.012 |
+| Tier 3 CBraMod | 0.544 ± 0.007 | 0.547 ± 0.010 | 0.576 ± 0.014 | 0.564 ± 0.015 |
+| Tier 3 EEGPT | 0.535 ± 0.012 | 0.527 ± 0.012 | 0.555 ± 0.003 | 0.530 ± 0.025 |
+| Tier 3 REVE | **0.636 ± 0.027** | **0.612 ± 0.019** | **0.671 ± 0.013** | **0.604 ± 0.005** |
 | Tier 4 BIOT | 0.529 ± 0.033 | 0.545 ± 0.042 | 0.545 ± 0.016 | 0.516 ± 0.027 |
 | Tier 4 Luna | 0.547 ± 0.047 | 0.563 ± 0.030 | 0.590 ± 0.019 | 0.534 ± 0.044 |
-| Tier 4 CBraMod | 0.593 ± 0.030 | 0.522 ± 0.007 | 0.572 ± 0.026 | 0.536 ± 0.050 |
+| Tier 4 CBraMod (retrain) | 0.593 ± 0.030 | 0.522 ± 0.007 | 0.572 ± 0.026 | 0.536 ± 0.050 |
 | Tier 4 BENDR | 0.531 ± 0.062 | 0.550 ± 0.059 | 0.562 ± 0.027 | 0.497 ± 0.058 |
 | Tier 4 LaBraM | 0.529 ± 0.031 | 0.545 ± 0.007 | 0.531 ± 0.020 | 0.543 ± 0.045 |
+| Tier 4 EEGPT | 0.543 ± 0.054 | 0.558 ± 0.042 | 0.567 ± 0.043 | 0.529 ± 0.028 |
+| Tier 4 REVE | 0.583 ± 0.025 | 0.591 ± 0.051 | 0.657 ± 0.073 | 0.619 ± 0.022 |
 
 ### Stim-classification takeaways
 
