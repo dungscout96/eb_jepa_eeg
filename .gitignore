@@ -237,3 +237,5 @@ data/
 # Generated SLURM scripts
 slurm/generated/
 logs/
+# Claude Code session lock
+.claude/scheduled_tasks.lock
