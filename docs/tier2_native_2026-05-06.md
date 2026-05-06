@@ -6,15 +6,17 @@ Per-clip predictions come from the trained regression head directly
 (no Ridge probe). Schema and bootstrap match Tier 4/6
 (`movie_reg_preds [n_rec=108, n_passes=20, n_features=4]`).
 
-## L3 (5-seed mean ± 1σ Pearson r per-clip flat over 2160 pairs)
+## L3 (5-seed mean ± 1σ of bootstrap means, B=2000 recording-level resamples)
 
 | Method | lum | cont | pos | narr |
 |---|---|---|---|---|
-| **Cine-JEPA + Ridge (ours, ref)** | 0.226 ± 0.018 | 0.223 ± 0.014 | 0.226 ± 0.016 | 0.155 ± 0.023 |
-| Tier 2 Deep4Net (native)          | 0.191 ± 0.037 | 0.142 ± 0.056 | 0.160 ± 0.021 | 0.024 ± 0.032 |
-| Tier 2 ShallowFBCSPNet (native)   | 0.110 ± 0.023 | 0.057 ± 0.068 | 0.041 ± 0.082 | 0.027 ± 0.017 |
-| **Tier 2 EEGNetv4 (native)**      | **0.312** ± 0.025 | 0.229 ± 0.017 | **0.273** ± 0.022 | **0.177** ± 0.019 |
-| **Tier 2 EEGNeX (native)**        | **0.334** ± 0.010 | **0.277** ± 0.013 | **0.310** ± 0.014 | **0.178** ± 0.041 |
+| **Cine-JEPA + Ridge (ours, ref)** | 0.226 ± 0.018 ✓ | 0.223 ± 0.014 ✓ | 0.226 ± 0.016 ✓ | 0.155 ± 0.023 ✓ |
+| Tier 2 Deep4Net (native)          | 0.191 ± 0.037 ✓ | 0.142 ± 0.056 ✓ | 0.160 ± 0.021 ✓ | 0.024 ± 0.032 ns |
+| Tier 2 ShallowFBCSPNet (native)   | 0.111 ± 0.023 ✓ | 0.057 ± 0.069 ns | 0.042 ± 0.082 ns | 0.027 ± 0.017 ✓ |
+| **Tier 2 EEGNetv4 (native)**      | **0.311** ± 0.026 ✓ | 0.228 ± 0.018 ✓ | **0.273** ± 0.022 ✓ | **0.177** ± 0.018 ✓ |
+| **Tier 2 EEGNeX (native)**        | **0.334** ± 0.010 ✓ | **0.277** ± 0.013 ✓ | **0.310** ± 0.014 ✓ | **0.178** ± 0.040 ✓ |
+
+✓ = bootstrap mean significantly above 0 (1-sample two-sided t-test on 5 seeds, p<0.05). ns = not significant.
 
 ## Per-seed L1 detail (Pearson r over 2160 (rec, pass) flat clips)
 
@@ -55,9 +57,19 @@ eegnex   2025       0.3300      0.2686      0.2956      0.1765
 - **Shallow is at the bottom** (lum 0.110, narr 0.027) — expected; ShallowFBCSPNet
   is a 2-layer conv designed for motor-imagery BCI, not stimulus decoding.
 - All numbers are per-clip flat Pearson r over 2160 (rec × pass) pairs.
-  Bootstrap CI not yet computed — these are 5-seed mean ± std of L1.
+  Bootstrap = recording-level resampling (108 recs, B=2000) per seed; L3 is
+  the 5-seed mean ± std of those bootstrap means (matches Tier 4/6 protocol).
 - Subject features (age, sex) and movie_id heads were NOT trained — native
   Tier 2 architecture has only the 4-feature stim regression head.
+
+## Per-seed L1 narrative (model-native head, raw Pearson r)
+
+```
+deep4    [+0.014, -0.023, +0.053, +0.056, +0.021]
+shallow  [+0.025, +0.050, +0.036, +0.006, +0.016]
+eegnet   [+0.160, +0.204, +0.160, +0.177, +0.184]
+eegnex   [+0.178, +0.192, +0.115, +0.228, +0.177]
+```
 
 ## Source artifacts
 
