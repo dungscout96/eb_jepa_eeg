@@ -398,9 +398,29 @@ def run(
     output_json: str = "",
     save_predictions_dir: str = "",
     movie_id_n_bins: int = 20,
+    external_npz_dir: str = "",
 ):
+    """Unified canonical probe eval entry point.
+
+    feature_source="external_npz" path: skip encoder/feature_fn entirely and
+    load pre-extracted features + labels from
+        {external_npz_dir}/train_seed{seed}.npz
+        {external_npz_dir}/val_seed{seed+1}.npz
+        {external_npz_dir}/test_seed{seed+2}.npz
+    Each NPZ must contain `embs [n_rec, n_passes, D]` and
+    `labels [n_rec, n_passes, n_features]`. Used to plug Tier 3 / Tier 2
+    forward-passes (which run in their own scripts) into the canonical
+    Ridge/LogReg/bootstrap pipeline. Match scale/density/seeds via:
+        n_passes=20, seeds {42,123,456,789,2025}, train extraction with
+        train_order=True (outer pass × inner randperm rec), val/test with
+        sequential rec × passes.
+    """
     if feature_source == "jepa" and not checkpoint:
         raise ValueError("--checkpoint is required when feature_source=jepa")
+    if feature_source == "external_npz" and not external_npz_dir:
+        raise ValueError(
+            "--external_npz_dir is required when feature_source=external_npz"
+        )
     setup_seed(seed)
     overrides = {
         "data.n_windows": n_windows,
@@ -447,18 +467,49 @@ def run(
     )
 
     sfreq = train_set.n_times / window_size_seconds
-    feature_fn, expected_d = _make_feature_fn(
-        feature_source, checkpoint, train_set, cfg, n_windows, sfreq
-    )
-    logger.info(
-        "feature_source=%s, expected D=%d; extracting features ...",
-        feature_source,
-        expected_d,
-    )
 
-    Xtr_g, Ytr_g = _extract(train_set, n_passes, feature_fn, seed, train_order=True)
-    Xv_g, Yv_g = _extract(eval_sets["val"], n_passes, feature_fn, seed + 1)
-    Xt_g, Yt_g = _extract(eval_sets["test"], n_passes, feature_fn, seed + 2)
+    if feature_source == "external_npz":
+        npz_dir = Path(external_npz_dir)
+        def _load_external(p: Path):
+            d = np.load(p)
+            X = np.asarray(d["embs"], dtype=np.float32)
+            Y = np.asarray(d["labels"], dtype=np.float32)
+            assert X.ndim == 3 and Y.ndim == 3, \
+                f"{p}: expected embs/labels of shape [n_rec, n_passes, D]; got {X.shape}, {Y.shape}"
+            assert X.shape[0] == Y.shape[0] and X.shape[1] == Y.shape[1], \
+                f"{p}: mismatched (n_rec, n_passes) between embs and labels"
+            return X, Y
+        Xtr_g, Ytr_g = _load_external(npz_dir / f"train_seed{seed}.npz")
+        Xv_g, Yv_g = _load_external(npz_dir / f"val_seed{seed + 1}.npz")
+        Xt_g, Yt_g = _load_external(npz_dir / f"test_seed{seed + 2}.npz")
+        # Audit: enforce same n_passes as the canonical protocol.
+        if Xtr_g.shape[1] != n_passes:
+            raise ValueError(
+                f"External train NPZ has n_passes={Xtr_g.shape[1]} but "
+                f"--n_passes={n_passes}. Re-extract with matching density."
+            )
+        # Audit: train rec count must match the dataset's train split.
+        if Xtr_g.shape[0] != len(train_set):
+            raise ValueError(
+                f"External train NPZ has n_rec={Xtr_g.shape[0]} but "
+                f"len(train_set)={len(train_set)}. Re-extract with matching split."
+            )
+        expected_d = Xtr_g.shape[-1]
+        logger.info(
+            "feature_source=external_npz, D=%d; loaded train %s, val %s, test %s",
+            expected_d, Xtr_g.shape, Xv_g.shape, Xt_g.shape,
+        )
+    else:
+        feature_fn, expected_d = _make_feature_fn(
+            feature_source, checkpoint, train_set, cfg, n_windows, sfreq
+        )
+        logger.info(
+            "feature_source=%s, expected D=%d; extracting features ...",
+            feature_source, expected_d,
+        )
+        Xtr_g, Ytr_g = _extract(train_set, n_passes, feature_fn, seed, train_order=True)
+        Xv_g, Yv_g = _extract(eval_sets["val"], n_passes, feature_fn, seed + 1)
+        Xt_g, Yt_g = _extract(eval_sets["test"], n_passes, feature_fn, seed + 2)
     logger.info(
         "Train: X=%s Y=%s; Val: X=%s; Test: X=%s",
         Xtr_g.shape,
