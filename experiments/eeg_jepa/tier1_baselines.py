@@ -107,6 +107,75 @@ class RawCorrCAExtractor:
         return x.permute(0, 2, 1).unsqueeze(-1).unsqueeze(-1)
 
 
+class TrivialStatsExtractor:
+    """(mean, std, log-power per band) × n_chans, computed per window.
+
+    Args:
+        sfreq: Sampling rate (Hz).
+        n_chans_in: Number of channels in the dataset (post-CorrCA if enabled).
+        mode: 'per_chan' keeps each channel's 7 stats in its own slot in D
+              (D = 7 * n_chans). 'pooled' averages across channels then tiles
+              back to D = 7 * n_chans so the dim matches its per_chan twin —
+              isolates channel routing from feature dim.
+        select_chans: Optional list of channel indices to keep. If set, only
+                      these channels contribute to D (used for chan1_only).
+    """
+
+    BAND_EDGE_LIST = list(BAND_EDGES.values())
+
+    def __init__(self, sfreq: float, n_chans_in: int,
+                 mode: str = "per_chan",
+                 select_chans: list[int] | None = None):
+        assert mode in ("per_chan", "pooled"), mode
+        self.sfreq = float(sfreq)
+        self.mode = mode
+        self.select_chans = select_chans
+        n_keep = len(select_chans) if select_chans is not None else n_chans_in
+        # 2 (mean, std) + 5 bands = 7 stats per channel
+        self.n_stats = 2 + len(self.BAND_EDGE_LIST)
+        self.feat_dim = self.n_stats * n_keep
+        self.nperseg = min(int(self.sfreq), 256)
+
+    def __call__(self, eeg: torch.Tensor) -> torch.Tensor:
+        # eeg: [B, T_win, C, T_samp]
+        if self.select_chans is not None:
+            eeg = eeg[:, :, self.select_chans, :]
+        B, T, C, Ts = eeg.shape
+        x_np = eeg.detach().cpu().numpy().astype(np.float64)
+        flat = x_np.reshape(B * T * C, Ts)
+
+        # Mean + std per (clip × window × channel)
+        means = flat.mean(axis=-1, keepdims=False).astype(np.float32)
+        stds = flat.std(axis=-1, keepdims=False).astype(np.float32)
+
+        # Welch PSD → log-power per band
+        f, P = welch(flat, fs=self.sfreq, nperseg=min(self.nperseg, Ts), axis=-1)
+        n_bands = len(self.BAND_EDGE_LIST)
+        log_bands = np.zeros((B * T * C, n_bands), dtype=np.float32)
+        for i, (lo, hi) in enumerate(self.BAND_EDGE_LIST):
+            mask = (f >= lo) & (f < hi)
+            if mask.sum() == 0:
+                continue
+            band_power = P[:, mask].mean(axis=-1)
+            log_bands[:, i] = np.log10(band_power + 1e-12).astype(np.float32)
+
+        # Stack to [B*T*C, n_stats]
+        stats = np.concatenate(
+            [means[:, None], stds[:, None], log_bands], axis=-1
+        )  # [B*T*C, 7]
+        stats = stats.reshape(B, T, C, self.n_stats)
+
+        if self.mode == "pooled":
+            # Mean across channels, then tile back so D = n_stats * C
+            stats_pooled = stats.mean(axis=2, keepdims=True)  # [B, T, 1, 7]
+            stats = np.broadcast_to(stats_pooled, (B, T, C, self.n_stats)).copy()
+
+        # Concat (channel × stat) → D
+        feats = stats.reshape(B, T, C * self.n_stats)
+        out = torch.from_numpy(feats).to(eeg.device)
+        return out.permute(0, 2, 1).unsqueeze(-1).unsqueeze(-1)
+
+
 class PSDBandExtractor:
     """Welch PSD integrated into 5 frequency bands per channel per window."""
 
@@ -515,6 +584,7 @@ def run(
     # Output
     output_json: str = "",
     save_embeddings: str = "",
+    save_predictions_dir: str = "",
     # Exp 6 baseline
     checkpoint: str = "",
     fname: str = "experiments/eeg_jepa/cfgs/default.yaml",
@@ -537,7 +607,16 @@ def run(
                          (one .npz per split) under this directory.
         checkpoint: Required for baseline=exp6.
     """
-    assert baseline in ("raw_corrca", "psd_band", "random_init", "exp6", "exp6_residual"), baseline
+    TRIVIAL_BASELINES = (
+        "trivial_corrca_per_chan",
+        "trivial_corrca_chan1_only",
+        "trivial_raw_per_chan",
+        "trivial_corrca_pooled35",
+        "trivial_raw_pooled903",
+    )
+    assert baseline in (
+        "raw_corrca", "psd_band", "random_init", "exp6", "exp6_residual",
+    ) + TRIVIAL_BASELINES, baseline
     if baseline in ("exp6", "exp6_residual"):
         assert checkpoint, f"baseline={baseline} requires --checkpoint=/path/to/best.pth.tar"
     setup_seed(seed)
@@ -555,7 +634,7 @@ def run(
         "model.encoder_heads": encoder_heads,
         "model.encoder_head_dim": encoder_head_dim,
     }
-    if baseline == "psd_band":
+    if baseline in ("psd_band", "trivial_raw_per_chan", "trivial_raw_pooled903"):
         overrides["data.corrca_filters"] = None
     else:
         overrides["data.corrca_filters"] = corrca_filters or None
@@ -633,6 +712,37 @@ def run(
         assert train_set._corrca_W is None, \
             "psd_band must run on raw EEG; do not pass --corrca_filters"
         extractor = PSDBandExtractor(sfreq=sfreq, n_chans_in=n_chans_in)
+    elif baseline == "trivial_corrca_per_chan":
+        assert train_set._corrca_W is not None, \
+            "trivial_corrca_per_chan requires --corrca_filters"
+        extractor = TrivialStatsExtractor(
+            sfreq=sfreq, n_chans_in=n_chans_in, mode="per_chan",
+        )
+    elif baseline == "trivial_corrca_chan1_only":
+        assert train_set._corrca_W is not None, \
+            "trivial_corrca_chan1_only requires --corrca_filters"
+        extractor = TrivialStatsExtractor(
+            sfreq=sfreq, n_chans_in=n_chans_in, mode="per_chan",
+            select_chans=[0],
+        )
+    elif baseline == "trivial_raw_per_chan":
+        assert train_set._corrca_W is None, \
+            "trivial_raw_per_chan must run on raw EEG; do not pass --corrca_filters"
+        extractor = TrivialStatsExtractor(
+            sfreq=sfreq, n_chans_in=n_chans_in, mode="per_chan",
+        )
+    elif baseline == "trivial_corrca_pooled35":
+        assert train_set._corrca_W is not None, \
+            "trivial_corrca_pooled35 requires --corrca_filters"
+        extractor = TrivialStatsExtractor(
+            sfreq=sfreq, n_chans_in=n_chans_in, mode="pooled",
+        )
+    elif baseline == "trivial_raw_pooled903":
+        assert train_set._corrca_W is None, \
+            "trivial_raw_pooled903 must run on raw EEG; do not pass --corrca_filters"
+        extractor = TrivialStatsExtractor(
+            sfreq=sfreq, n_chans_in=n_chans_in, mode="pooled",
+        )
     elif baseline == "random_init":
         encoder = EEGEncoderTokens(
             n_chans=n_chans_in,
@@ -787,8 +897,13 @@ def run(
     # Eval on each split
     # ------------------------------------------------------------------
     all_metrics = {}
+    save_dir = Path(save_predictions_dir) if save_predictions_dir else None
+    if save_dir is not None:
+        save_dir.mkdir(parents=True, exist_ok=True)
 
     for split in splits_list:
+        save_data = {} if save_dir is not None else None
+
         # Movie probes
         m = _eval_movie_probes(
             reg_head, cls_head, eval_feats[split], eval_targets[split],
@@ -796,6 +911,22 @@ def run(
         )
         for k, v in m.items():
             all_metrics[f"{split}/{k}"] = v
+
+        if save_data is not None:
+            # Re-run reg/cls heads on per-clip features for npz dump
+            # (matches probe_eval.py schema: [N_rec, T, F] per array).
+            reg_head.eval(); cls_head.eval()
+            with torch.no_grad():
+                ef = eval_feats[split].to(device)
+                reg_p = reg_head(ef).cpu().numpy()  # [N, T, F]
+                cls_p = cls_head(ef).cpu().numpy()
+            save_data["movie_reg_preds"] = reg_p
+            save_data["movie_cls_logits"] = cls_p
+            save_data["movie_targets"] = eval_targets[split].numpy()
+            save_data["feature_names"] = np.array(feature_names)
+            save_data["feature_mean"] = feature_stats["mean"].numpy()
+            save_data["feature_std"] = feature_stats["std"].numpy()
+            save_data["feature_median"] = feature_median.numpy()
 
         # Movie ID
         if movie_id_probe is not None:
@@ -806,6 +937,14 @@ def run(
             )
             for k, v in mid.items():
                 all_metrics[f"{split}/movie_id/{k}"] = v
+
+            if save_data is not None:
+                movie_id_probe.eval()
+                with torch.no_grad():
+                    X = torch.from_numpy(clip_embs).float().to(device)
+                    save_data["movie_id_logits"] = movie_id_probe(X).cpu().numpy()
+                save_data["movie_id_positions"] = eval_positions[split]
+                save_data["movie_id_bin_edges"] = movie_id_bin_edges
 
         # Subject probes
         if subject_probes:
@@ -826,6 +965,35 @@ def run(
                     metrics = _eval_reg_probe(probe, rec_embs, ev, device, ym, ys)
                     for k, v in metrics.items():
                         all_metrics[f"{split}/subject/{label_name}/{k}"] = v
+
+            if save_data is not None:
+                save_data["subj_embs"] = rec_embs
+                for label_name, info in subject_probes.items():
+                    ev = eval_labels.get(label_name)
+                    if ev is None:
+                        continue
+                    save_data[f"subj_{label_name}_labels"] = ev
+                    with torch.no_grad():
+                        X = torch.from_numpy(rec_embs).float().to(device)
+                        if info[0] == "cls":
+                            save_data[f"subj_{label_name}_logits"] = (
+                                info[1](X).squeeze(-1).cpu().numpy()
+                            )
+                        else:
+                            _, probe, ym, ys = info
+                            save_data[f"subj_{label_name}_pred_norm"] = (
+                                probe(X).squeeze(-1).cpu().numpy()
+                            )
+                            save_data[f"subj_{label_name}_y_mean"] = ym
+                            save_data[f"subj_{label_name}_y_std"] = ys
+
+        if save_data is not None:
+            n_recs = eval_feats[split].shape[0]
+            save_data["rec_ids"] = np.arange(n_recs)
+            save_data["seed"] = seed
+            out_path = save_dir / f"{split}_seed{seed}.npz"
+            np.savez_compressed(out_path, **save_data)
+            logger.info("Saved predictions for %s to %s", split, out_path)
 
     # ------------------------------------------------------------------
     # Print + dump
