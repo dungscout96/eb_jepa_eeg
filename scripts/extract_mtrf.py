@@ -95,11 +95,12 @@ def _toeplitz_lagged(eeg_flat, n_lags):
     return out.reshape(valid_T, C * n_lags), valid_T
 
 
-def _build_xy(dataset, n_lags, max_clips_per_rec=2):
+def _build_xy(dataset, n_lags, n_passes=2, seed=0):
     """Build (X, y) over all train recordings: X = lagged EEG per timepoint,
-    y = stim labels per timepoint. Sub-samples non-overlapping clips per recording
-    to keep memory bounded.
+    y = stim labels per timepoint. Uses RANDOM clip starts (n_passes per rec)
+    so the training set has diverse movie-position content.
     """
+    rng = torch.Generator().manual_seed(seed)
     Xs, ys = [], []
     required = (dataset.n_windows - 1) * dataset.temporal_stride + 1
     for rec_idx in range(len(dataset)):
@@ -108,21 +109,14 @@ def _build_xy(dataset, n_lags, max_clips_per_rec=2):
         n_clips = n_total - required + 1
         if n_clips <= 0:
             continue
-        max_non_overlap = (n_clips - 1) // required + 1
-        n_sample = min(max_clips_per_rec, max_non_overlap)
-        starts = (np.arange(n_sample) * required).astype(int)
         feats_full = dataset.feature_recordings[rec_idx]  # [n_total, n_features]
-        for start in starts:
+        for _ in range(n_passes):
+            start = int(torch.randint(0, n_clips, (1,), generator=rng).item())
             eeg, indices = _read_full_clip(dataset, rec_idx, start)
             eeg_flat = _flatten_clip(eeg)
             X_clip, valid_T = _toeplitz_lagged(eeg_flat, n_lags)
             if valid_T <= 0:
                 continue
-            # Per-sample labels: for each valid t in clip, the stim feature at that
-            # timepoint comes from feats_full[indices][window_idx], where window_idx
-            # = which window the timepoint t falls into.
-            # Approximation: use clip-mean stim (constant across clip timepoints).
-            # This collapses temporal labels but matches per-clip eval target.
             label_clip = feats_full[indices].mean(dim=0).numpy().astype(np.float32)
             y_replicated = np.tile(label_clip[None, :], (valid_T, 1))
             Xs.append(X_clip)
@@ -133,46 +127,41 @@ def _build_xy(dataset, n_lags, max_clips_per_rec=2):
 
 
 def _predict_per_clip(dataset, ridge_per_feature, n_lags, ym, ys_norm,
-                     max_clips_per_rec=2):
-    """For each test recording, produce per-recording mean predicted stim.
+                     n_passes=20, seed=0):
+    """For each (rec, pass) random clip, produce per-clip predicted stim.
 
-    Returns preds [n_rec, n_features], targets [n_rec, n_features].
+    Returns preds [n_rec, n_passes, n_features], targets [n_rec, n_passes, n_features].
+    Random clip starts (per rec, per pass) — breaks the deterministic-movie-position
+    symmetry that made fixed-start sampling produce identical targets across recs.
     """
+    rng = torch.Generator().manual_seed(seed)
     n_features = ym.shape[0]
-    preds = np.full((len(dataset), n_features), np.nan, dtype=np.float32)
-    targets = np.full((len(dataset), n_features), np.nan, dtype=np.float32)
+    n_rec = len(dataset)
+    preds = np.full((n_rec, n_passes, n_features), np.nan, dtype=np.float32)
+    targets = np.full((n_rec, n_passes, n_features), np.nan, dtype=np.float32)
     required = (dataset.n_windows - 1) * dataset.temporal_stride + 1
-    for rec_idx in range(len(dataset)):
+    for rec_idx in range(n_rec):
         crop_inds = dataset._crop_inds[rec_idx]
         n_total = len(crop_inds)
         n_clips = n_total - required + 1
         if n_clips <= 0:
             continue
-        max_non_overlap = (n_clips - 1) // required + 1
-        n_sample = min(max_clips_per_rec, max_non_overlap)
-        starts = (np.arange(n_sample) * required).astype(int)
-        clip_preds = []
-        clip_targets = []
         feats_full = dataset.feature_recordings[rec_idx]
-        for start in starts:
+        for p in range(n_passes):
+            start = int(torch.randint(0, n_clips, (1,), generator=rng).item())
             eeg, indices = _read_full_clip(dataset, rec_idx, start)
             eeg_flat = _flatten_clip(eeg)
             X_clip, valid_T = _toeplitz_lagged(eeg_flat, n_lags)
             if valid_T <= 0:
                 continue
-            # Predict per-sample stim, denormalize, then mean over samples per clip
             sample_preds = np.zeros((valid_T, n_features), dtype=np.float32)
             for fi, ridge in enumerate(ridge_per_feature):
                 sample_preds[:, fi] = ridge.predict(X_clip) * ys_norm[fi] + ym[fi]
-            clip_pred = sample_preds.mean(axis=0)  # [n_features] per clip
-            clip_target = feats_full[indices].mean(dim=0).numpy().astype(np.float32)
-            clip_preds.append(clip_pred)
-            clip_targets.append(clip_target)
-        if clip_preds:
-            preds[rec_idx] = np.mean(clip_preds, axis=0)
-            targets[rec_idx] = np.mean(clip_targets, axis=0)
-    valid = ~np.isnan(preds[:, 0])
-    return preds[valid], targets[valid]
+            preds[rec_idx, p] = sample_preds.mean(axis=0)
+            targets[rec_idx, p] = (
+                feats_full[indices].mean(dim=0).numpy().astype(np.float32)
+            )
+    return preds, targets
 
 
 def run(input: str, seed: int, out_dir: str,
@@ -212,8 +201,8 @@ def run(input: str, seed: int, out_dir: str,
     logger.info("input=%s seed=%d n_lags=%d (%d ms range at %.0f Hz, native %.0f Hz)",
                 input, seed, n_lags, lag_ms, sfreq, sfreq_native)
 
-    logger.info("Building train (X, y) ...")
-    X_train, y_train = _build_xy(train_set, n_lags)
+    logger.info("Building train (X, y) with random clip starts (n_passes=2) ...")
+    X_train, y_train = _build_xy(train_set, n_lags, n_passes=2, seed=seed)
     logger.info("X_train=%s y_train=%s", X_train.shape, y_train.shape)
 
     # Standardize features and targets (train-only)
@@ -239,14 +228,24 @@ def run(input: str, seed: int, out_dir: str,
             return self.ridge.predict((X - mu_X) / sd_X)
     wrapped = [_Wrapped(r) for r in ridge_per_feature]
 
-    logger.info("Predicting test per-clip ...")
-    test_preds, test_targets = _predict_per_clip(test_set, wrapped, n_lags, ym, ys_norm)
-    logger.info("test_preds=%s test_targets=%s", test_preds.shape, test_targets.shape)
+    logger.info("Predicting test per-(rec, pass) with random clip starts ...")
+    test_preds, test_targets = _predict_per_clip(
+        test_set, wrapped, n_lags, ym, ys_norm,
+        n_passes=20, seed=seed + 2,
+    )
+    logger.info(
+        "test_preds=%s test_targets=%s", test_preds.shape, test_targets.shape
+    )
 
-    # Per-clip Pearson r per feature
+    # Per-clip flat Pearson r per feature (matches canonical Protocol B)
+    pred_flat = test_preds.reshape(-1, len(feat_names))
+    targ_flat = test_targets.reshape(-1, len(feat_names))
+    valid = ~np.isnan(pred_flat[:, 0])
+    pred_flat = pred_flat[valid]
+    targ_flat = targ_flat[valid]
     metrics = {}
     for fi, name in enumerate(feat_names):
-        r, _ = pearsonr(test_preds[:, fi], test_targets[:, fi])
+        r, _ = pearsonr(pred_flat[:, fi], targ_flat[:, fi])
         metrics[f"test/reg_{name}_corr"] = float(r)
 
     out = Path(out_dir)
