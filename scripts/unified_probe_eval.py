@@ -308,6 +308,25 @@ def _make_feature_fn(feature_source, checkpoint, train_set, cfg, n_windows, sfre
             lambda eeg: _stats7_features(eeg, sfreq=sfreq, pooled=True),
             train_set.n_chans * 7,
         )
+    if feature_source == "trf_corrca5":
+        # TRF-style backward decoder on CorrCA-5: high-resolution time-stacked
+        # EEG (5 chans × 100 time-bins per window-mean = 500-d). Box-mean to 100
+        # samples preserves multi-lag structure that Ridge can find weights for
+        # — closer to canonical mTRF backward decoder (Crosse 2016) than to the
+        # 7-stat summary in corrca_stats. Caller MUST pass corrca_filters.
+        return (
+            lambda eeg: _raw_corrca_features(eeg, downsample_to=100),
+            train_set.n_chans * 100,
+        )
+    if feature_source == "trf_raw129":
+        # TRF backward decoder on raw 129-channel EEG: 129 × 50 time-bins =
+        # 6450-d. Aggressive downsample (50 vs 100) keeps Ridge tractable; 25 Hz
+        # effective sampling rate is sufficient for canonical TRF lag patterns
+        # on a stim envelope at < 12.5 Hz. Caller MUST set corrca_filters="".
+        return (
+            lambda eeg: _raw_corrca_features(eeg, downsample_to=50),
+            train_set.n_chans * 50,
+        )
     raise ValueError(f"unsupported feature_source: {feature_source}")
 
 
