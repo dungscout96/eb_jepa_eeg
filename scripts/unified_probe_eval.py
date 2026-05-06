@@ -154,6 +154,29 @@ def _raw_corrca_features(eeg, downsample_to=100):
     return x.mean(0).flatten().numpy().astype(np.float32)  # [C * ds]
 
 
+def _trf_features_8s(eeg, downsample_to_per_window=100):
+    """TRF backward decoder feature with FULL 8 s context — concatenates the
+    two windows along the time axis instead of averaging them.
+
+    Matches nw2_ws4's 8 s temporal context fed to JEPA. The previous
+    `_raw_corrca_features(eeg).mean(0)` collapsed windows pointwise → only
+    4 s of effective time-axis. This variant keeps both windows distinguishable
+    by concatenation, so Ridge sees lag bins from t=0 to t=8s explicitly.
+
+    eeg: [nw, C, T_samp] (CorrCA-projected when corrca_filters set, raw 129ch
+        when not). Returns [C * (nw * downsample_to_per_window)].
+    """
+    nw, C, Ts = eeg.shape
+    factor = max(Ts // downsample_to_per_window, 1)
+    Ts_trim = factor * downsample_to_per_window
+    x = eeg[..., :Ts_trim].reshape(
+        nw, C, downsample_to_per_window, factor
+    ).mean(-1)  # [nw, C, ds]
+    # Concat along time: [nw, C, ds] → [C, nw * ds]
+    x = x.permute(1, 0, 2).reshape(C, nw * downsample_to_per_window)
+    return x.flatten().numpy().astype(np.float32)  # [C * nw * ds]
+
+
 def _psd_band_features(eeg, sfreq):
     """Welch PSD per channel × 5 bands, log-pow, mean over windows.
 
@@ -314,6 +337,8 @@ def _make_feature_fn(feature_source, checkpoint, train_set, cfg, n_windows, sfre
         # samples preserves multi-lag structure that Ridge can find weights for
         # — closer to canonical mTRF backward decoder (Crosse 2016) than to the
         # 7-stat summary in corrca_stats. Caller MUST pass corrca_filters.
+        # NOTE: averages the 2 windows (effective 4 s context); see _8s variant
+        # for the matched-to-nw2ws4 8 s version.
         return (
             lambda eeg: _raw_corrca_features(eeg, downsample_to=100),
             train_set.n_chans * 100,
@@ -323,9 +348,27 @@ def _make_feature_fn(feature_source, checkpoint, train_set, cfg, n_windows, sfre
         # 6450-d. Aggressive downsample (50 vs 100) keeps Ridge tractable; 25 Hz
         # effective sampling rate is sufficient for canonical TRF lag patterns
         # on a stim envelope at < 12.5 Hz. Caller MUST set corrca_filters="".
+        # NOTE: averages the 2 windows; see _8s variant for full nw2_ws4 context.
         return (
             lambda eeg: _raw_corrca_features(eeg, downsample_to=50),
             train_set.n_chans * 50,
+        )
+    if feature_source == "trf_corrca5_8s":
+        # 8 s context match to nw2_ws4: concatenate windows instead of averaging.
+        # 5 chans × (2 windows × 100 bins) = 1000-d, 40 ms resolution, full 8 s
+        # of explicit lag information. Caller MUST pass corrca_filters.
+        return (
+            lambda eeg: _trf_features_8s(eeg, downsample_to_per_window=100),
+            train_set.n_chans * 2 * 100,
+        )
+    if feature_source == "trf_raw129_8s":
+        # 8 s context match to nw2_ws4: concatenate windows. 129 × (2 × 50) =
+        # 12900-d, 80 ms resolution, full 8 s of explicit lag info. Closed-form
+        # Ridge on 14k samples × 12900 features fits in memory comfortably.
+        # Caller MUST set corrca_filters="".
+        return (
+            lambda eeg: _trf_features_8s(eeg, downsample_to_per_window=50),
+            train_set.n_chans * 2 * 50,
         )
     raise ValueError(f"unsupported feature_source: {feature_source}")
 
