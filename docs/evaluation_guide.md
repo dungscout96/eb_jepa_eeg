@@ -73,26 +73,50 @@ Every reported metric must come with a recording-level bootstrap interval. We us
 
 **Why mandatory:** raw test-set metrics are dominated by recording-level variance — a single hard or easy recording can swing the headline number by ±0.05. The bootstrap collapses that variance into a per-seed point estimate that's stable across re-evaluations.
 
-### 3.1 Bootstrap protocol
+### 3.1 The three measurement layers (L1 / L2 / L3)
+
+Every metric exists at three distinct layers. Confusing them is the most common source of "why does X say 0.156 and Y say 0.114" arguments. Always state which layer a number is at.
+
+| Layer | Definition | Captures | Where it's stored |
+|---|---|---|---|
+| **L1 — raw test r** | Single Ridge fit on train clips → `pearsonr(pred, target)` over all test predictions, one number per (encoder seed, probe seed) | Nothing about uncertainty — single point estimate | `results/canonical/<method>/<enc_seed>/metrics.json` |
+| **L2 — per-seed bootstrap** | For one (enc seed, probe seed): B=2000 recording-level resamples → mean + 95% CI of resampled Pearson r | **Test-set sampling** variance (would the number change with a different draw of 108 test recordings?) | `results/canonical/<method>/<enc_seed>/bootstrap.json` |
+| **L3 — across-seed L2** | Train K=5 encoder seeds → take per-seed L2 bootstrap mean → aggregate as `mean ± 1σ` over the K per-seed bootstrap means | Both test-set sampling and **encoder-training** variance — the headline number | `results/canonical/<method>/aggregate.json` |
+
+**Why L2 might ≠ L1**: Pearson r is non-linear under resampling, so bootstrap-mean r is not guaranteed to equal raw r. When L2 differs materially from L1, that itself is diagnostic information (skewed per-recording residuals); state both layers.
+
+**Which one to report**: **always L3** (if K=5 seeds are available). Single-seed L2 is a fallback when retraining isn't feasible. Bare L1 is diagnostic only.
+
+**Why 5-seed × bootstrap is canonical and not just one or the other**:
+- Encoder-training variance σ on narrative is ~0.020; per-seed bootstrap CI half-width is ~0.015. Encoder seed is the **dominant** noise source.
+- Reporting only L2 (single-seed bootstrap) hides encoder variance → understates uncertainty.
+- Reporting only "5-seed mean of L1" wastes the bootstrap step → harder to detect when test-set noise dominates.
+- L3 captures both sources cleanly and is what gets reported in papers.
+
+### 3.2 Bootstrap protocol
 
 For each (encoder seed, probe seed) pair:
 
-1. Run `unified_probe_eval.py` with `--save_predictions_dir=...` → per-recording `(prediction, target)` saved to disk.
-2. Compute bootstrap point estimates by resampling **at the recording level** (not the clip level — clips within a recording are highly correlated):
-   - For B=2000 iterations, resample recordings with replacement.
-   - Compute the metric on the resampled set.
-   - Record the bootstrap mean (and 95% CI from the 2.5th / 97.5th percentiles if needed).
+1. Run `unified_probe_eval.py` with `--save_predictions_dir=...` → per-recording `(prediction, target)` saved to NPZ → produces L1.
+2. Run `scripts/bootstrap_trivial_perseed.py` on the NPZ:
+   - Resample recordings with replacement (not clips — clips within a recording are highly correlated).
+   - For B=2000 iterations, compute the metric on the resampled set.
+   - Record bootstrap mean and 95% CI (2.5th / 97.5th percentiles) → **L2**.
+3. Aggregate L2 across encoder seeds → **L3**: `mean ± 1σ` over K per-seed bootstrap means.
 
-Driver script: `scripts/bootstrap_trivial_perseed.py` (existing utility); operates on the NPZ produced by `unified_probe_eval.py`.
+### 3.3 What to report
 
-### 3.2 What to report
+Every results table must state all three layers (or explicitly note which is omitted):
 
-In any results table, prefer:
+```
+| Metric                       | L1 (5-seed raw mean) | L3 (5-seed mean of L2 ± 1σ) |
+|------------------------------|----------------------|-----------------------------|
+| reg_narrative_event_score_corr | 0.114 ± 0.020      | 0.156 ± 0.023               |
+```
 
-**Bootstrap mean ± 1σ across encoder seeds** (5-seed mean + std):
-- `0.207 ± 0.018`
+L2 (per-seed bootstrap mean + CI) goes in supplementary tables for full transparency.
 
-Never report a raw single-evaluation metric without bootstrap context.
+**Headline number = L3.** Never report a bare L1 in a comparison without flagging it.
 
 ## 4. Seed-level significance testing (on request)
 
@@ -113,24 +137,27 @@ Probe seed: <int>
 Pretrain config: nw_ws=<X_Y>, grad_steps=<N>, ...
 Eval driver: scripts/unified_probe_eval.py
 Bootstrap: B=2000, recording-level resampling
+Reporting: L3 = 5-seed mean of per-seed bootstrap means ± 1σ
 
-| Metric                       | Test (5-seed mean ± 1σ) |
-|------------------------------|-------------------------|
-| reg_luminance_mean_corr      | ...                     |
-| reg_contrast_rms_corr        | ...                     |
-| reg_position_in_movie_corr   | ...                     |
-| reg_narrative_event_score_corr| ...                    |
-| cls_luminance_mean_auc       | ...                     |
-| cls_contrast_rms_auc         | ...                     |
-| cls_position_in_movie_auc    | ...                     |
-| cls_narrative_event_score_auc| ...                     |
-| subject/age_reg/corr         | ...                     |
-| subject/sex/auc              | ...                     |
-| movie_id/top1                | ...                     |
-| movie_id/top5                | ...                     |
+| Metric                       | L1 (raw 5-seed mean) | L3 (5-seed mean of L2 ± 1σ) |
+|------------------------------|----------------------|-----------------------------|
+| reg_luminance_mean_corr      | ...                  | ...                         |
+| reg_contrast_rms_corr        | ...                  | ...                         |
+| reg_position_in_movie_corr   | ...                  | ...                         |
+| reg_narrative_event_score_corr| ...                 | ...                         |
+| cls_luminance_mean_auc       | ...                  | ...                         |
+| cls_contrast_rms_auc         | ...                  | ...                         |
+| cls_position_in_movie_auc    | ...                  | ...                         |
+| cls_narrative_event_score_auc| ...                  | ...                         |
+| subject/age_reg/corr         | ...                  | ...                         |
+| subject/sex/auc              | ...                  | ...                         |
+| movie_id/top1                | ...                  | ...                         |
+| movie_id/top5                | ...                  | ...                         |
 ```
 
-Optional: include cls bal_acc and reg r² alongside.
+Optional supplement: per-seed L2 bootstrap mean + 95% CI table.
+
+When K < 5 (e.g. only 1 seed available), state that explicitly and report L2 ± 95% CI in place of L3 — never hide the layer change.
 
 When a paired comparison is reported, add:
 
@@ -141,23 +168,47 @@ Paired t-test (5 enc seeds, matched probe seed):
 ...
 ```
 
-## 6. Worked example: Phase D nw2_ws4 (5-seed kc+Ridge, 2026-05-04)
+## 6. Worked example: Phase D nw2_ws4 (canonical Protocol B, locked 2026-05-04)
 
-```
-Method: Phase D nw2_ws4
-Encoder seeds: [42, 123, 456, 789, 2025]
-Probe seed: 42
-Pretrain config: nw=2, ws=4, ~1.1k grad steps
-Eval driver: scripts/unified_probe_eval.py
-Bootstrap: B=2000, recording-level
+**Protocol locked**: `unified_probe_eval.py` with `train_order=True` (commit c805692), n_passes=20 train-flatten Ridge α=1, kc-pool features, B=2000 recording-level bootstrap, **probe_seed=42 fixed across all encoder seeds**, 5 encoder seeds {42, 123, 456, 789, 2025}.
 
-| Metric                          | Test (5-seed mean ± 1σ) |
-|---------------------------------|-------------------------|
-| reg_luminance_mean_corr         | 0.225 ± 0.018           |
-| reg_contrast_rms_corr           | 0.220 ± 0.017           |
-| reg_position_in_movie_corr      | 0.222 ± 0.016           |
-| reg_narrative_event_score_corr  | 0.156 ± 0.023           |
-```
+All artifact paths use the **`pB_` prefix** for grep-traceability.
+
+**Reproducibility check (issue8 latest, per-seed narrative — exact match against doc):**
+
+| seed | doc | reproduced |
+|---|---|---|
+| 42 | 0.137 | 0.1367 ✓ |
+| 123 | 0.160 | 0.1601 ✓ |
+| 456 | 0.148 | 0.1477 ✓ |
+| 789 | 0.142 | 0.1410 ✓ |
+| 2025 | 0.194 | 0.1938 ✓ |
+| **mean ± 1σ** | **0.156 ± 0.023** | **0.1559 ± 0.023** ✓ |
+
+**Full canonical results (issue8 vs issue10) — equivalent within 1σ on every metric:**
+
+| Metric | pB_phaseD_issue8 (L3) | pB_phaseD_issue10best (L3) | pB_phaseD_issue10latest (L3) |
+|---|---|---|---|
+| reg_luminance_mean_corr | 0.2245 ± 0.018 | 0.2259 ± 0.018 | 0.2255 ± 0.018 |
+| reg_contrast_rms_corr | 0.2195 ± 0.017 | 0.2231 ± 0.014 | 0.2235 ± 0.014 |
+| reg_position_in_movie_corr | 0.2219 ± 0.016 | 0.2255 ± 0.016 | 0.2256 ± 0.016 |
+| **reg_narrative_event_score_corr** | **0.1562 ± 0.023** | 0.1553 ± 0.023 | 0.1554 ± 0.024 |
+| cls_luminance_mean_auc | 0.5791 ± 0.004 | 0.5783 ± 0.003 | 0.5785 ± 0.003 |
+| cls_contrast_rms_auc | 0.5717 ± 0.011 | 0.5722 ± 0.009 | 0.5724 ± 0.010 |
+| cls_position_in_movie_auc | 0.6092 ± 0.007 | 0.6105 ± 0.007 | 0.6105 ± 0.007 |
+| cls_narrative_event_score_auc | 0.5467 ± 0.012 | 0.5467 ± 0.012 | 0.5465 ± 0.012 |
+| subject/age_reg/corr | 0.3837 ± 0.014 | 0.3895 ± 0.014 | 0.3902 ± 0.014 |
+| subject/sex/auc | 0.7313 ± 0.017 | 0.7273 ± 0.019 | 0.7269 ± 0.020 |
+| movie_id/top1 (chance 0.05) | 0.094 ± 0.024 | 0.092 ± 0.017 | 0.094 ± 0.020 |
+| movie_id/top5 (chance 0.25) | 0.452 ± 0.024 | 0.459 ± 0.032 | 0.459 ± 0.032 |
+
+L1 (raw test r per seed) and L3 (5-seed mean of L2) agree to within 0.001 on every metric.
+
+Source artifacts:
+- Per-seed predictions NPZ: `predictions/canonical/pB_phaseD_<fam>/seed<S>/test_seed42.npz`
+- Per-seed metrics: `results/canonical/pB_phaseD_<fam>/seed<S>/metrics.json`
+- Per-seed bootstrap: `results/bootstrap/pB_phaseD_<fam>_<seed>.json`
+- L3 aggregate: `results/bootstrap/pB_phaseD_<fam>_L3.json`
 
 ## 7. Anti-patterns (don't do these)
 
@@ -202,3 +253,4 @@ This document is **the source of truth** for evaluation. When changes are needed
 
 - **2026-05-03** — Initial doc. Mandatory bootstrap + paired-t. Multiple probe types per family.
 - **2026-05-04** — **Canonical protocol locked**: one probe head per family (Ridge for reg, LogReg LBFGS for cls/multinomial), kc-pool only (mean-pool dropped), `unified_probe_eval.py` is the canonical driver. All 18 headline metrics in one JSON. Reverted multi-probe sweep (was diagnostic clutter).
+- **2026-05-04 (late)** — **L1 / L2 / L3 framework added** (§3.1) and **iteration-order issue surfaced**. The doc previously cited narr 0.156 ± 0.023 (5-seed Phase D), reproducible only under `train_order=True` train extraction (the `c805692` patched version). The pre-patch sequential extraction yields narr 0.116 ± 0.022 on the same checkpoints. Both are valid Ridge fits — they differ because the train-extraction order changes which random clip-starts are drawn for each (rec, pass) cell. **Protocol locking pending.** Worked example in §6 cleared until a single train-extraction order is adopted as canonical.
