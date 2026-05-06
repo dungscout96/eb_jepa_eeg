@@ -170,29 +170,36 @@ def run(
 
     n_chans = train_set.n_chans
     n_times = train_set.n_times
+    sfreq = float(train_set.sfreq)
+    chs_info = train_set.get_chs_info()
     feat_stats = train_set.compute_feature_stats()
     feat_median = train_set.compute_feature_median()
     feat_mean = feat_stats["mean"].to(device)
     feat_std = feat_stats["std"].to(device)
     feat_median_t = feat_median.to(device)
 
-    net = _build_model(model, n_chans, n_times, n_features).to(device)
-    opt = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=1e-2)
-    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
+    # Build via DualHeadModel (matches tier2_supervised.run() pattern).
+    # native_preproc=False for canonical-protocol comparison.
+    net = DualHeadModel(
+        model, n_chans, n_times, n_features, sfreq, chs_info,
+        native_preproc=False, source_sfreq=None,
+    ).to(device)
+    opt = torch.optim.Adam(net.parameters(), lr=lr)
 
     import math
     best_val_corr = -math.inf
     best_state = None
     epochs_since_improve = 0
-    for ep in range(epochs):
-        tr = _epoch(net, train_loader, opt, feat_mean, feat_std, feat_median_t, device,
-                    n_features=n_features, sched=sched, train=True)
+    for ep in range(1, epochs + 1):
+        tr = _epoch(net, train_loader, opt, feat_mean, feat_std, feat_median_t, device, train=True)
         with torch.no_grad():
-            vl = _epoch(net, val_loader, None, feat_mean, feat_std, feat_median_t, device,
-                        n_features=n_features, sched=None, train=False)
+            vl = _epoch(net, val_loader, opt, feat_mean, feat_std, feat_median_t, device, train=False)
         val_metrics = _metrics_from_eval(vl, feat_mean, feat_std, feat_median, feat_names)
         val_corr = float(np.mean([val_metrics[f"reg_{n}_corr"] for n in feat_names]))
-        logger.info("ep %d/%d  train -r=%.4f | val mean_corr=%.4f", ep, epochs, tr["loss"], val_corr)
+        logger.info(
+            "ep %d/%d  train reg=%.4f cls=%.4f | val mean_corr=%.4f",
+            ep, epochs, tr["reg_loss"], tr["cls_loss"], val_corr,
+        )
         if val_corr > best_val_corr:
             best_val_corr = val_corr
             best_state = {k: v.detach().cpu().clone() for k, v in net.state_dict().items()}
