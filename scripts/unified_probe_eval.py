@@ -38,6 +38,7 @@ from pathlib import Path
 import fire
 import numpy as np
 import torch
+from torch import nn
 from omegaconf import OmegaConf
 from scipy.stats import pearsonr
 from sklearn.linear_model import LogisticRegression, Ridge
@@ -65,8 +66,17 @@ BAND_EDGES = {
 }
 
 
-def _load_encoder(checkpoint, train_set, cfg, n_windows, random_init=False):
-    """Load (or randomly init) the EEGEncoderTokens context encoder."""
+def _load_encoder(checkpoint, train_set, cfg, n_windows, random_init=False, variant=None):
+    """Load (or randomly init) the EEGEncoderTokens context encoder.
+
+    variant: optional surgical modification applied AFTER weight load/init.
+        - "no_transformer": replace transformer with identity (returns input).
+            Tests: contribution of attention+MLP on top of patch_embed+pos.
+        - "no_attn": zero out each attn.to_out.weight so attn(x)=0 (residual passes
+            through). Tests: attention vs MLP-only mixing at random init.
+        - "no_pos": replace positional embedding with zeros. Tests: contribution of
+            clip-invariant 4D Fourier pos signal (expected ~0 after Ridge std).
+    """
     from eb_jepa.architectures import EEGEncoderTokens
     from eb_jepa.training_utils import setup_device
 
@@ -94,6 +104,21 @@ def _load_encoder(checkpoint, train_set, cfg, n_windows, random_init=False):
             if k.startswith("context_encoder.")
         }
         encoder.load_state_dict(ce_sd, strict=False)
+
+    if variant == "no_transformer":
+        encoder.transformer = nn.Identity()
+    elif variant == "no_attn":
+        for attn, _ff in encoder.transformer.layers:
+            attn.to_out.weight.data.zero_()
+    elif variant == "no_pos":
+        n_tok = (
+            encoder.n_chans * encoder.n_windows * encoder.n_patches_per_window
+        )
+        zero_pos = torch.zeros(1, n_tok, encoder.embed_dim, device=device)
+        encoder._compute_pos_embed = lambda B, dev, _z=zero_pos: _z.expand(B, -1, -1)
+    elif variant is not None:
+        raise ValueError(f"unknown encoder variant: {variant}")
+
     encoder.eval()
     for p in encoder.parameters():
         p.requires_grad_(False)
@@ -203,6 +228,36 @@ def _make_feature_fn(feature_source, checkpoint, train_set, cfg, n_windows, sfre
     if feature_source == "random_init":
         encoder, device = _load_encoder(
             None, train_set, cfg, n_windows, random_init=True
+        )
+        return (
+            lambda eeg: _kc_features(eeg, encoder, device),
+            encoder.embed_dim * encoder.n_chans,
+        )
+    if feature_source == "random_no_transformer":
+        # Ablation: random patch_embed + 4D Fourier pos, transformer = identity.
+        # Isolates the random-projection contribution (no attn/MLP mixing).
+        encoder, device = _load_encoder(
+            None, train_set, cfg, n_windows, random_init=True, variant="no_transformer"
+        )
+        return (
+            lambda eeg: _kc_features(eeg, encoder, device),
+            encoder.embed_dim * encoder.n_chans,
+        )
+    if feature_source == "random_no_attn":
+        # Ablation: random patch_embed + pos + GEGLU MLP only (attention zeroed).
+        # Tests whether random softmax attention helps or hurts at init.
+        encoder, device = _load_encoder(
+            None, train_set, cfg, n_windows, random_init=True, variant="no_attn"
+        )
+        return (
+            lambda eeg: _kc_features(eeg, encoder, device),
+            encoder.embed_dim * encoder.n_chans,
+        )
+    if feature_source == "random_no_pos":
+        # Ablation: full random encoder with positional embedding zeroed.
+        # Sanity: pos is clip-invariant so should be killed by Ridge std anyway → ~0 Δ.
+        encoder, device = _load_encoder(
+            None, train_set, cfg, n_windows, random_init=True, variant="no_pos"
         )
         return (
             lambda eeg: _kc_features(eeg, encoder, device),
