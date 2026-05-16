@@ -44,8 +44,16 @@ CPUS = 16
 
 
 def _make_command(seed: int) -> str:
-    """Single-seed command: pretrain → canonical probe_eval → bootstrap."""
-    return f"SEED={seed} bash experiments/eeg_jepa/sbatch/canonical_replication.sbatch"
+    """Single-seed command: pretrain → canonical probe_eval → bootstrap.
+
+    `|| exit $?` propagates the inner sbatch's exit code so a real failure
+    surfaces as a SLURM FAILED state instead of being masked by the neurolab
+    wrapper's trailing echo (which silently returns 0).
+    """
+    return (
+        f"SEED={seed} bash experiments/eeg_jepa/sbatch/canonical_replication.sbatch "
+        f"|| exit $?"
+    )
 
 
 def build_jobs():

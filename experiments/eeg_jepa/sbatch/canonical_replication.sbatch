@@ -43,7 +43,14 @@ L2_JSON="${EXP_DIR}/canonical_L2.json"
 
 echo "Job ID: $SLURM_JOB_ID  Node: $SLURM_NODELIST  Seed: $SEED  Tag: $EXP_TAG"
 
-cd "$SLURM_SUBMIT_DIR"
+# Caller (neurolab wrapper or direct sbatch from repo root) is responsible for
+# cwd. Don't trust SLURM_SUBMIT_DIR -- under neurolab it points at HOME, not the
+# repo. Fail loudly if we're not in the right place.
+if [ ! -f experiments/eeg_jepa/train.py ]; then
+    echo "ERROR: must be run with cwd=repo root (cwd=$(pwd), expected to contain experiments/eeg_jepa/train.py)" >&2
+    exit 1
+fi
+
 mkdir -p logs "$EXP_DIR" "$PREDS_DIR"
 
 if [ -f "$HOME/.wandb_key" ]; then
