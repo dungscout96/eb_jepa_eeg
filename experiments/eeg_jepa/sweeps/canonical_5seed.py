@@ -51,15 +51,15 @@ def _make_command(seed: int) -> str:
 def build_jobs():
     jobs = []
     for seed in SEEDS:
+        # NOTE: deliberately no per-job `git fetch / pull`.
+        # 5 jobs launching simultaneously race on .git/refs/* locks and break the
+        # && chain (observed 2026-05-16: jobs 18294774/18294775). The expectation
+        # is that the user pulls the target branch on Delta once before --submit.
         job = Job(
             name=f"canonical_nw2ws4_s{seed}",
             cluster="delta",
             repo_path="/u/dtyoung/eb_jepa_eeg",
-            command=(
-                "git fetch origin && git checkout refactor/eeg-only-library && "
-                "git pull --ff-only origin refactor/eeg-only-library &&\n"
-                + _make_command(seed)
-            ),
+            command=_make_command(seed),
             venv="__none__",
             branch="",
             partition="gpuA40x4",

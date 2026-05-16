@@ -51,8 +51,11 @@ if [ -f "$HOME/.wandb_key" ]; then
 fi
 export WANDB_PROJECT="${WANDB_PROJECT:-eb_jepa}"
 
-GIT_BRANCH="${GIT_BRANCH:-refactor/eeg-only-library}"
-git fetch origin && git checkout "$GIT_BRANCH" && git pull --ff-only origin "$GIT_BRANCH"
+# Inner sbatch deliberately does NOT touch git. The outer sweep launcher
+# expects the repo on Delta to already be on the target branch (manually
+# pulled once before submission) to avoid concurrent ref-lock races when
+# multiple seeds launch at once. Print the SHA we're running on for the log.
+echo "Running on commit: $(git rev-parse HEAD)  branch: $(git rev-parse --abbrev-ref HEAD)"
 
 # ---------- Stage 1: pretraining --------------------------------
 PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/train.py \
