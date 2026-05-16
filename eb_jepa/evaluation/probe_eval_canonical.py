@@ -402,9 +402,9 @@ def run(
         ybin_t = np.clip(np.digitize(pos_t, edges) - 1, 0, n_movie_id_bins - 1)
         ybin_v = np.clip(np.digitize(pos_v, edges) - 1, 0, n_movie_id_bins - 1)
         if len(np.unique(ybin_tr)) >= 2:
-            mid_clf = LogisticRegression(
-                C=1.0, solver="lbfgs", max_iter=2000, multi_class="multinomial",
-            )
+            # sklearn ≥1.5 dropped the multi_class= kwarg; lbfgs auto-handles
+            # multinomial when >2 classes are present in y.
+            mid_clf = LogisticRegression(C=1.0, solver="lbfgs", max_iter=2000)
             mid_clf.fit(Xtr, ybin_tr)
             probs_t = mid_clf.predict_proba(Xt)
             probs_v = mid_clf.predict_proba(Xv)
