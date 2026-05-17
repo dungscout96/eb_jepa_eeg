@@ -1,9 +1,0 @@
-meta:
-  num_eval_episodes: 20
-  plan_suffix: _sum_diffs # cem_sum_diffs | mppi_last_obj
-env:
-  n_allowed_steps: 200
-  level: normal
-data:
-  env_name: two_rooms
-  # Eval-specific overrides (base config in eb_jepa/datasets/two_rooms/data_config.yaml)

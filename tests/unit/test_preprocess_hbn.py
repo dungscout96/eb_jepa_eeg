@@ -21,7 +21,7 @@ class _FakeBaseConcatDataset:
 
 
 _STUB_ATTRS = {
-    "eegdash": {},
+    "eegdash": {"EEGDashDataset": MagicMock()},
     "eegdash.dataset": {"EEGChallengeDataset": MagicMock()},
     "braindecode": {},
     "braindecode.datasets": {"BaseConcatDataset": _FakeBaseConcatDataset},

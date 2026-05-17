@@ -19,6 +19,8 @@ for _mod_name in _STUB_MODULES:
     if _mod_name not in sys.modules:
         stub = ModuleType(_mod_name)
         # Provide the names that hbn.py imports at module level
+        if _mod_name == "eegdash":
+            stub.EEGDashDataset = MagicMock()
         if _mod_name == "eegdash.dataset":
             stub.EEGChallengeDataset = MagicMock()
         if _mod_name == "braindecode.datasets":

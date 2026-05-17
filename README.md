@@ -1,234 +1,127 @@
-<h1 align="center">
-    <p>⚡ <b>EB-JEPA</b></p>
-</h1>
+# EEG JEPA
 
-<h2 align="center">
-    <p><i>Energy-Based Joint-Embedding Predictive Architectures</i></p>
-</h2>
+Self-supervised V-JEPA-style masked prediction for EEG, applied to the
+Healthy Brain Network (HBN) movie-watching task. The library trains a
+masked Joint-Embedding Predictive Architecture on raw EEG, and the
+post-training pipeline measures what the encoder actually learned via
+linear probes (movie features + subject traits) with bootstrap CIs over
+recordings.
 
-<div align="center" style="line-height: 1;">
-  <a href="https://github.com/facebookresearch/eb_jepa" target="_blank" style="margin: 2px;"><img alt="Github" src="https://img.shields.io/badge/Github-facebookresearch/eb__jepa-black?logo=github" style="display: inline-block; vertical-align: middle;"/></a>
-  <a href="https://arxiv.org/abs/2602.03604" target="_blank" style="margin: 2px;"><img alt="ArXiv" src="https://img.shields.io/badge/arXiv-2602.03604-b5212f?logo=arxiv" style="display: inline-block; vertical-align: middle;"/></a>
-</div>
+This repo started as a fork of [Meta's eb_jepa](https://github.com/facebookresearch/eb_jepa)
+(originally a CV / planning library) and has been adapted for EEG. The
+upstream image / video / planning code paths have been removed; see the
+[refactor plan](.claude/plans/i-want-to-refactor-ancient-matsumoto.md)
+for the full transition.
 
-<br>
+## Layout
 
-<p align="center">
-  <b><a href="https://ai.facebook.com/research/">Meta AI Research, FAIR</a></b>
-</p>
+```
+eb_jepa/                       # the library
+  architectures.py             # REVE backbone, EEGEncoderTokens, MaskedPredictor, heads
+  jepa.py                      # MaskedJEPA, MaskedJEPAProbe, JEPA
+  losses.py                    # VCLoss, SIGRegLoss, ClassificationLoss, RegressionLoss
+  masking.py                   # MultiBlockMaskCollator (V-JEPA style 2D channel x patch masks)
+  sanity_checks.py             # SanityCheckHook (collapse + linear-probe diagnostics)
+  paths.py                     # cluster-aware preprocessed-dir resolver
+  datasets/hbn.py              # JEPAMovieDataset, HBNMovieProbeDataset
+  preprocessing/corrca.py      # CorrCA spatial filter computation
+  evaluation/                  # post-training pipeline
+    probe_eval.py              # frozen-encoder probes (movie features + subject traits)
+    bootstrap.py               # recording-level bootstrap CIs over saved predictions
+    validation_loop.py         # in-loop val metrics during training
+    variance_decomposition.py  # subject / stimulus / residual decomposition
 
-<p align="center">
-  <a href="https://x.com/BasileTerv987">Basile Terver</a>,
-  Randall Balestriero,
-  Megi Dervishi,
-  David Fan,
-  Quentin Garrido,
-  Tushar Nagarajan,
-  <br>
-  Koustuv Sinha,
-  Wancong Zhang,
-  Mike Rabbat,
-  Yann LeCun,
-  Amir Bar
-</p>
+experiments/                   # one folder per study
+  eeg_jepa/                    # the main JEPA pretraining study
+  trf_baseline/                # supervised TRF baseline
+  benchmark/                   # EEGNet / REVE / BIOT / classical ML baselines
+  position_leakage/            # diagnostic: does the encoder leak time-in-movie?
+  variance_analysis/           # per-checkpoint variance & predictability decomposition
 
-<p align="center">
-  An open source library and tutorial for learning representations for<br>
-  prediction and planning using joint embedding predictive architectures.
-</p>
+scripts/                       # cluster + data utilities (not study-specific)
+  preprocess_hbn.py / .sbatch  # raw HBN -> .fif preprocessing (run once)
+  compute_corrca.py / .sbatch  # thin CLI over eb_jepa.preprocessing.compute_corrca
+  submit_job_{delta,expanse,jamming}.py
+  pull_wandb.py, extract_*_results.py
 
-<p align="center">
-  <img src="docs/archi-schema-eb-jepa.png" alt="EB-JEPA Architecture" width="800">
-</p>
+tests/                         # pytest
+```
 
-> Each example is (almost) self-contained and training takes up to a few hours on a single GPU card.
+See [`experiments/README.md`](experiments/README.md) for the per-study
+index, and each study's own README for details.
 
----
-
-## 📚 Examples
-
-### [Image JEPA](examples/image_jepa/README.md)
-
-Self-supervised representations from unlabeled images on CIFAR-10, evaluated on classification.
-
-![Image JEPA Architecture](examples/image_jepa/assets/arch_figure.png)
-
-### [Video JEPA](examples/video_jepa/README.md)
-
-Predict next image representation in a sequence.
-
-![Moving MNIST](examples/video_jepa/assets/viz.png)
-
-### [AC Video JEPA](examples/ac_video_jepa/README.md)
-
-JEPA for world modeling + planning in Two Rooms environment.
-
-| Planning Episode | Task Definition |
-|------------------|-----------------|
-| <img src="examples/ac_video_jepa/assets/top_randw_agent_steps_succ.gif" alt="Successful planning episode" width="155" /> | <img src="examples/ac_video_jepa/assets/top_randw_state.png" alt="Episode task definition" width="300" /> |
-| *Successful planning episode* | *From init to goal state* |
-
----
-
-## 🚀 Installation
+## Install
 
 We use [uv](https://docs.astral.sh/uv/guides/projects/) for package management.
 
 ```bash
-# Install dependencies
 uv sync
-# Option 1: Activate virtual environment
-source .venv/bin/activate
-python main.py
-# Option 2: Run directly with uv
-uv run python main.py
+# EEG-specific dependencies (braindecode, eegdash, neurolab) live in the `eeg` group:
+uv sync --group eeg
 ```
-If you need conda-specific packages, you can use **Conda + uv**
+
+For development (pytest, black, isort, autoflake):
 
 ```bash
-# Create conda environment with Python 3.12
-conda create -n eb_jepa python=3.12 -y
-conda activate eb_jepa
-# Install package in editable mode with dev dependencies (pytest, black, isort)
-uv pip install -e . --group dev
+uv sync --group dev
 ```
 
-Add these to your `~/.bashrc` for persistent configuration.
+## Quick start
 
 ```bash
-# Required for SLURM jobs to find datasets
-export EBJEPA_DSETS=/path/to/eb_jepa/datasets
-# Optional: Directory for checkpoints and logs
-export EBJEPA_CKPTS=/path/to/checkpoints
+# 1. Preprocess HBN once (downloads + windows the data; long-running).
+PYTHONPATH=. uv run --group eeg python scripts/preprocess_hbn.py
+
+# 2. Train a JEPA model with default config.
+PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/train.py
+
+# 3. End-of-training auto-runs probe_eval + bootstrap on the saved
+#    checkpoint (gated by cfg.eval.auto_run, default true). To run
+#    manually on an existing checkpoint:
+PYTHONPATH=. uv run --group eeg python -m eb_jepa.evaluation.probe_eval \
+    --checkpoint=/path/to/latest.pth.tar
+PYTHONPATH=. uv run --group eeg python -m eb_jepa.evaluation.bootstrap \
+    --predictions_dir=/path/to/saved_predictions --split=test
 ```
 
+CLI overrides use OmegaConf dot syntax (`--optim.lr=5e-4`,
+`--data.n_windows=4`, `--eval.auto_run=false`, etc.).
 
+## Cluster
 
----
+- **Delta** (NCSA): SLURM, see [`scripts/submit_job_delta.py`](scripts/submit_job_delta.py)
+  and study-specific `sbatch/` directories under `experiments/`.
+- **Expanse** (SDSC): [`scripts/submit_job_expanse.py`](scripts/submit_job_expanse.py)
+- **Jamming** (local workstation): [`scripts/submit_job_jamming.py`](scripts/submit_job_jamming.py),
+  no SLURM, direct execution.
 
-## 🏋️ Training
+Sweep launchers under `experiments/<study>/sweeps/` are thin wrappers
+around `neurolab.jobs.Job`; they construct command lines and submit
+batches.
 
-### Quick Start
+## Tests
 
 ```bash
-# Local training
-python -m examples.{image_jepa,video_jepa,ac_video_jepa}.main
-```
-> Our default configs are tuned for H100 GPUs. With older GPUs (e.g., A100, V100), you may need to reduce batch size to fit in memory.
-
-### 📂 Folder Structure
-
-All experiments use a unified folder structure:
-
-```
-checkpoints/
-└── {example_name}/
-    ├── dev_2026-01-16_00-10/                 # Single/local runs (dev_ prefix)
-    │   └── {exp_name}_seed1/
-    │
-    ├── sweep_2026-01-16_00-10/         # Auto-named 3-seed sweep
-    │   ├── {exp_name}_seed1/
-    │   ├── {exp_name}_seed1000/
-    │   └── {exp_name}_seed10000/
-    │
-    └── sweep_my_experiment/            # Custom-named sweep
-        └── ...
+uv run --group eeg pytest tests/
 ```
 
-`{exp_name}` encodes key hyperparameters to avoid folder collisions, e.g.:
-- **image_jepa**: `resnet_vicreg_proj_bs256_ep300_ph2048_po2048_std1.0_cov80.0`
-- **video_jepa**: `resnet_bs64_lr0.001_std10.0_cov100.0`
-- **ac_video_jepa**: `impala_cov8_std16_simt12_idm1`
+The fast focused suite (`tests/evaluation/`, `tests/unit/`,
+`tests/test_loss_equivalences.py`) runs in seconds and does not require
+any cluster fixtures or downloaded data.
 
-<details>
-<summary><span style="font-size: 1.17em; font-weight: bold;">🖥️ SLURM Launcher (optional)</span></summary>
+## Development
 
-| Command | Description |
-|---------|-------------|
-| `--example {name}` | Choose: `image_jepa`, `video_jepa`, `ac_video_jepa` |
-| `--fname {path}` | Run the sweep specified in the config at `{path}` |
-| `--single` | Launch single job (dev mode) |
-| `--sweep {name}` | Custom sweep name |
-| `--array-parallelism {N}` | Limits the maximum number of concurrent jobs to `N` |
-| `--full-sweep` | Full hyperparameter sweep from config |
-| `--use-wandb-sweep` | Enable wandb sweep UI |
+Before contributing, format with:
 
 ```bash
-# 3 seeds with wandb averaging (recommended)
-python -m examples.launch_sbatch --example image_jepa --fname examples/image_jepa/cfgs/default.yaml
-
-# Custom sweep name
-python -m examples.launch_sbatch --example image_jepa --fname examples/image_jepa/cfgs/default.yaml --sweep my_experiment
-
-# Single job
-python -m examples.launch_sbatch --example image_jepa --fname examples/image_jepa/cfgs/default.yaml --single
-
-# Full hyperparameter sweep
-python -m examples.launch_sbatch --example image_jepa --fname examples/image_jepa/cfgs/default.yaml --full-sweep
-
-# With wandb sweep UI for hyperparameter analysis
-python -m examples.launch_sbatch --example image_jepa --fname examples/image_jepa/cfgs/default.yaml --use-wandb-sweep
-```
-
-Replace `image_jepa` with `ac_video_jepa` or `video_jepa` for other examples.
-
-**Full Sweep Configuration:** The `--full-sweep` flag reads the `sweep.param_grid` section from the example's YAML config file (e.g., `examples/image_jepa/cfgs/default.yaml`). Without this flag, only a 3-seed sweep is launched. To customize sweep parameters, edit the `sweep` section in the config:
-
-```yaml
-# Example: examples/image_jepa/cfgs/default.yaml
-sweep:
-  param_grid:
-    loss.cov_coeff: [0.1, 1.0, 10.0, 100.0]
-    loss.std_coeff: [1.0, 10.0]
-    meta.seed: [1, 1000, 10000]
-```
-
-### Wandb Seed Averaging
-
-Runs with the same hyperparameters but different seeds share the same wandb run name, enabling automatic averaging:
-
-1. Go to wandb web UI → Runs table
-2. Click **"Group by"** → select **"Name"**
-   → Groups runs with identical hyperparameters (different seeds) together
-
-To filter runs from a specific sweep:
-3. Click **"Filter"** → **"Group"** → select your sweep name
-
-For detailed wandb sweep analysis (parallel coordinates, hyperparameter importance):
-1. Use `--use-wandb-sweep` flag when launching
-2. Go to wandb web UI → left pane → **"Sweeps"** → click your sweep name
-
-**SLURM Configuration:** To customize SLURM parameters (partition, account, memory, etc.), edit the `SLURM_DEFAULTS` dictionary at the top of `examples/launch_sbatch.py`.
-
-</details>
-
-## 🧪 Running test cases
-
-Libraries added to eb_jepa [must have their own test cases](/tests/). To run the tests:
-
-```bash
-# With uv sync installation
-uv run pytest tests/
-# With conda + uv installation (no .venv created)
-pytest tests/
-```
-
-## 👩‍💻 Development
-
-Before contributing, please format your code with the following tools:
-
-```bash
-# Remove unused imports
 autoflake --remove-all-unused-imports -r --in-place .
-# Sort imports
-python -m isort eb_jepa examples tests
-# Format code
-python -m black eb_jepa examples tests
+python -m isort eb_jepa experiments tests
+python -m black eb_jepa experiments tests
 ```
 
-## 📚 Citing EB-JEPA
+## Citing the upstream library
 
-If you find this repository useful, please consider giving a ⭐ and citing:
+This work builds on Meta's eb_jepa scaffolding:
 
 ```bibtex
 @misc{terver2026lightweightlibraryenergybasedjointembedding,
@@ -242,6 +135,6 @@ If you find this repository useful, please consider giving a ⭐ and citing:
 }
 ```
 
-## 📄 License
+## License
 
-EB-JEPA is Apache licensed. See [LICENSE](LICENSE.md).
+Apache 2.0. See [LICENSE](LICENSE.md).

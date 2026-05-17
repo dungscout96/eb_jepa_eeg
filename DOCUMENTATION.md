@@ -8,33 +8,43 @@ Self-supervised EEG representation learning using JEPA (Joint Embedding Predicti
 
 ```
 eb_jepa_eeg/
-├── eb_jepa/                    # Core library
-│   ├── jepa.py                 # JEPA model classes
-│   ├── architectures.py        # Encoders, predictors, heads
-│   ├── losses.py               # Loss functions (VCLoss, SquareLoss, etc.)
-│   ├── training_utils.py       # Device setup, checkpointing, W&B
-│   ├── logging.py              # Logger configuration
-│   ├── nn_utils.py             # NN utilities (TemporalBatchMixin)
-│   ├── scheduling.py           # LR schedulers
-│   └── datasets/
-│       └── hbn.py              # HBN EEG dataset classes
-├── experiments/
-│   ├── eeg_jepa/               # Main EEG JEPA experiment
-│   │   ├── main.py             # Training script
-│   │   ├── eval.py             # Validation loop
-│   │   └── cfgs/default.yaml   # Training config
-│   ├── run_benchmark.py        # Supervised baseline benchmarks
-│   └── run_benchmark_multitask.py
-├── scripts/
-│   └── preprocess_hbn.py       # Data preprocessing pipeline
-├── config/
-│   ├── default.yaml            # Global config (benchmark, data params)
-│   └── preprocess_hbn.yaml     # Preprocessing config
-├── examples/                   # Original EB-JEPA examples (image, video, AC)
-├── tests/                      # Test suite
+├── eb_jepa/                            # Core library
+│   ├── jepa.py                         # MaskedJEPA, MaskedJEPAProbe, JEPA
+│   ├── architectures.py                # REVE backbone, EEGEncoderTokens, MaskedPredictor, heads
+│   ├── losses.py                       # VCLoss, SIGRegLoss, ClassificationLoss, RegressionLoss
+│   ├── masking.py                      # MultiBlockMaskCollator (V-JEPA 2D channel x patch masks)
+│   ├── sanity_checks.py                # SanityCheckHook
+│   ├── training_utils.py               # Device setup, checkpointing, W&B
+│   ├── paths.py                        # Cluster-aware preprocessed-dir resolver
+│   ├── logging.py, nn_utils.py, schedulers.py
+│   ├── datasets/
+│   │   └── hbn.py                      # JEPAMovieDataset, HBNMovieProbeDataset
+│   ├── preprocessing/
+│   │   └── corrca.py                   # CorrCA spatial filter computation
+│   └── evaluation/                     # Post-training pipeline (used by every study)
+│       ├── probe_eval.py               # Frozen-encoder linear probes
+│       ├── bootstrap.py                # Recording-level bootstrap CIs
+│       ├── validation_loop.py          # In-loop val metrics during training
+│       └── variance_decomposition.py   # Subject / stimulus / residual decomposition
+├── experiments/                        # One subfolder per study
+│   ├── README.md                       # Index of studies
+│   ├── eeg_jepa/                       # Main JEPA pretraining study
+│   │   ├── train.py                    # Entry point (was main.py)
+│   │   ├── cfgs/default.yaml
+│   │   ├── sweeps/                     # 20 sweep launchers (training + probe_eval)
+│   │   └── sbatch/                     # 4 SBATCH templates
+│   ├── trf_baseline/                   # Supervised TRF baseline
+│   ├── benchmark/                      # EEGNet / REVE / BIOT / classical ML baselines
+│   ├── position_leakage/               # Diagnostic for time-in-movie leakage
+│   └── variance_analysis/              # Per-checkpoint variance + predictability decomposition
+├── scripts/                            # Cluster + data utilities only
+│   ├── preprocess_hbn.py / .sbatch     # Raw HBN -> .fif preprocessing (run once)
+│   ├── compute_corrca.py / .sbatch     # Thin CLI over eb_jepa.preprocessing
+│   ├── submit_job_{delta,expanse,jamming}.py
+│   └── pull_wandb.py, extract_*_results.py
+├── tests/                              # pytest (unit/, evaluation/, ...)
 └── data/
-    ├── movies/                 # Movie stimulus files
-    └── output/The_Present/     # Extracted movie features (CSV)
+    └── movies/                         # Movie stimulus files
 ```
 
 ---
@@ -229,13 +239,13 @@ Probes train their own heads on frozen encoder representations.
 
 ```bash
 # Default config (using uv)
-PYTHONPATH=. uv run experiments/eeg_jepa/main.py
+PYTHONPATH=. uv run experiments/eeg_jepa/train.py
 
 # Or with explicit python
-PYTHONPATH=. python experiments/eeg_jepa/main.py
+PYTHONPATH=. python experiments/eeg_jepa/train.py
 
 # Override hyperparameters
-PYTHONPATH=. uv run experiments/eeg_jepa/main.py \
+PYTHONPATH=. uv run experiments/eeg_jepa/train.py \
     --data.batch_size=32 --optim.lr=1e-4
 ```
 
@@ -278,13 +288,13 @@ Validation runs every `log_every` epochs. Checkpoints saved every `save_every` e
 
 ```bash
 # Binary classification benchmark (default)
-PYTHONPATH=. uv run experiments/run_benchmark.py
+PYTHONPATH=. uv run experiments/benchmark/train.py
 
 # Regression benchmark
-PYTHONPATH=. uv run experiments/run_benchmark.py benchmark.task_mode=regression
+PYTHONPATH=. uv run experiments/benchmark/train.py benchmark.task_mode=regression
 
 # Tertile classification
-PYTHONPATH=. uv run experiments/run_benchmark.py benchmark.task_mode=tertile
+PYTHONPATH=. uv run experiments/benchmark/train.py benchmark.task_mode=tertile
 ```
 
 Benchmarks train supervised models (EEGNet, REVE, BIOT) directly on movie feature prediction. Metrics: R², Pearson correlation, accuracy, balanced accuracy, ROC-AUC.

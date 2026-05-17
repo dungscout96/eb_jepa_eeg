@@ -41,6 +41,7 @@ HPRE = 32      # Hidden dimension in predictor
 STEPS = 4      # Number of prediction steps during training
 STD_COEFF = 10.0
 COV_COEFF = 100.0
+N_TIMES = 1000  # Window length in samples; required by braindecode REVE position bank
 
 # Mock channel info for REVE (1 channel to match dobs=1)
 MOCK_CHS_INFO = [{"ch_name": "CZ"}]
@@ -58,7 +59,7 @@ def set_seed(seed=42):
 
 def create_eeg_jepa_model(device="cpu"):
     """Create an EEG JEPA model matching the eeg_jepa example main.py."""
-    encoder = EEGEncoder(DOBS, HENC, DSTC, chs_info=MOCK_CHS_INFO)
+    encoder = EEGEncoder(DOBS, HENC, DSTC, chs_info=MOCK_CHS_INFO, n_times=N_TIMES)
     predictor = MLPEEGPredictor(DSTC, HPRE, DSTC)
     predictor_model = MLPEEGPredictor(DSTC*2, HPRE, DSTC)
     predictor = StateOnlyPredictor(predictor_model, context_length=2)

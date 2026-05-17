@@ -6,7 +6,7 @@ if __name__ == "__main__":
         name="eeg_jepa_experiments",          # job name + log file prefix
         cluster="expanse",                  # which cluster profile to use
         repo_path="/expanse/projects/nemar/dtyoung/eb_jepa_eeg",  # remote repo
-        command="PYTHONPATH=. uv run --group eeg experiments/eeg_jepa/main.py", # entry point
+        command="PYTHONPATH=. uv run --group eeg experiments/eeg_jepa/train.py", # entry point
         branch="",                        # which branch to use
         venv="__none__",                        
         env_vars={"WANDB_MODE": "online"},  # environment variables to set

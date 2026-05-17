@@ -26,15 +26,21 @@ from torch.utils.data import DataLoader
 _STUB_MODULES = [
     "eegdash", "eegdash.dataset",
     "braindecode", "braindecode.datasets",
+    "braindecode.datautil", "braindecode.datautil.serialization",
     "braindecode.preprocessing",
 ]
 for _mod_name in _STUB_MODULES:
     if _mod_name not in sys.modules:
         stub = ModuleType(_mod_name)
+        if _mod_name == "eegdash":
+            stub.EEGDashDataset = MagicMock()
         if _mod_name == "eegdash.dataset":
             stub.EEGChallengeDataset = MagicMock()
         if _mod_name == "braindecode.datasets":
             stub.BaseConcatDataset = MagicMock()
+        if _mod_name == "braindecode.datautil.serialization":
+            stub.load_concat_dataset = MagicMock()
+            stub.save_concat_dataset = MagicMock()
         if _mod_name == "braindecode.preprocessing":
             stub.create_fixed_length_windows = MagicMock()
             stub.create_windows_from_events = MagicMock()

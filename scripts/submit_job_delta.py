@@ -26,7 +26,7 @@ job = Job(
         # Fetch + checkout explicitly so new sweep branches are found on jamming
         "git fetch origin && git checkout main && git pull --ff-only &&"
         # === timing test: baseline config with num_workers=2 ===
-        " PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/main.py"
+        " PYTHONPATH=. uv run --group eeg python experiments/eeg_jepa/train.py"
         " --optim.epochs=100 --model.encoder_depth=2 --optim.lr=5e-4"
         " --optim.lr_min=1e-6 --optim.warmup_epochs=5"
         " --data.num_workers=16"

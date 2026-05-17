@@ -76,4 +76,4 @@ You can now experiment with:
 - Architecture: model.encoder_embed_dim, encoder_depth, encoder_heads, encoder_head_dim, dstc, hpre
 - Training: optim.lr, optim.epochs, loss.std_coeff, loss.cov_coeff
 - Data: data.n_windows, data.window_size_seconds, data.batch_size
-- Overrides via CLI: `PYTHONPATH=. .venv/bin/python experiments/eeg_jepa/main.py --model.dstc=128 --optim.lr=1e-3`
+- Overrides via CLI: `PYTHONPATH=. .venv/bin/python experiments/eeg_jepa/train.py --model.dstc=128 --optim.lr=1e-3`

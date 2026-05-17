@@ -1,7 +1,7 @@
 # TRF Baseline vs Frozen-Encoder Linear Probes
 
 **Date:** 2026-04-25
-**Scripts:** [experiments/trf_baseline/run_trf.py](../experiments/trf_baseline/run_trf.py),
+**Scripts:** [experiments/trf_baseline/train.py](../experiments/trf_baseline/train.py),
 [experiments/trf_baseline/sanity.py](../experiments/trf_baseline/sanity.py)
 
 ## 1. Question
@@ -40,7 +40,7 @@ grid won, indicating any lower alpha overfits.
 Pooled samples ≈ 1M, equivalent to ~280 minutes of EEG, well beyond the
 literature TRF data scale (typically ~30 min/subject, single-subject).
 
-**Eval.** Mirrors `experiments/eeg_jepa/probe_eval.py`:
+**Eval.** Mirrors `eb_jepa/evaluation/probe_eval.py`:
 - Pearson r on continuous prediction time series (per-recording, mean across recs).
 - Window-matched: aggregate prediction inside 1-s, 2-s, or 16-s clips,
   pool clips across recordings, compute Pearson r and median-split bal_acc.
@@ -211,12 +211,12 @@ PYTHONPATH=. uv run --group eeg python scripts/compute_corrca.py \
     --output_path corrca_filters.npz --n_components 5 --task ThePresent
 
 # Pooled cross-subject TRF (raw branch, ~13 min)
-PYTHONPATH=. uv run --group eeg python experiments/trf_baseline/run_trf.py \
+PYTHONPATH=. uv run --group eeg python experiments/trf_baseline/train.py \
     --input=raw --max_train_recs=100 --n_lags_ms=1000 --fs_target=50 \
     --output_dir=outputs/trf_prototype_raw
 
 # Pooled cross-subject TRF (CorrCA branch, ~2 min)
-PYTHONPATH=. uv run --group eeg python experiments/trf_baseline/run_trf.py \
+PYTHONPATH=. uv run --group eeg python experiments/trf_baseline/train.py \
     --input=corrca --corrca_path=corrca_filters.npz \
     --max_train_recs=100 --n_lags_ms=1000 --fs_target=50 \
     --output_dir=outputs/trf_prototype_corrca
