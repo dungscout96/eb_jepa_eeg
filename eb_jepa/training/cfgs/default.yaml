@@ -1,0 +1,112 @@
+# EEG JEPA Training Configuration
+# Train a self-supervised EEG prediction model with movie feature evaluation decoders
+
+meta:
+  seed: 2025
+  device: auto  # auto, cuda, or cpu
+
+data:
+  batch_size: 64
+  num_workers: 4
+  task: ThePresent #[ThePresent, DespicableMe]  # str or list; recordings from all tasks are combined
+  n_windows: 4          # Number of windows per sample
+  window_size_seconds: 2  # Window duration in seconds
+  temporal_stride: 1      # Stride between sampled windows (1=contiguous, 4=8s apart)
+  preprocessed: true     # Use preprocessed data (set true + preprocessed_dir to use)
+  preprocessed_dir: null  # Auto-detects known paths; set explicitly to override
+  norm_mode: global       # "global" = dataset-wide mean/std; "per_recording" = removes subject fingerprint
+  add_envelope: false     # Append 1-8 Hz analytic envelope as extra channels (doubles n_chans)
+  corrca_filters: null    # null | str path (shared across tasks) | {task: path} for per-movie filters
+                          # e.g. {ThePresent: corrca_filters_ThePresent.npz, DespicableMe: corrca_filters_DespicableMe.npz}
+  # Movie feature names used for probe evaluation (regression + classification heads)
+  feature_names:
+    - contrast_rms
+    - luminance_mean
+    - position_in_movie
+    - narrative_event_score
+  # HBN dataset parameters
+  annotation_duration_tolerance_s: 1.0
+  post_movie_visual_processing_s: 2.0
+  max_recording_overshoot_s: 60.0
+  trial_stop_offset_s: 0.1
+  visual_processing_delay_s: 0.3
+
+model:
+  # REVE encoder architecture (n_chans auto-detected from data)
+  encoder_embed_dim: 64
+  encoder_depth: 4
+  encoder_heads: 4
+  encoder_head_dim: 16
+
+  # Decoder heads
+  hdec: 64          # Hidden dimension in movie feature heads
+  temporal_probe: false  # Concat global temporal mean to per-window probe input
+
+  # Masked prediction (V-JEPA style)
+  patch_size: 50         # Temporal patch size in samples
+  patch_overlap: 20      # Overlap between patches
+  freqs: 4               # Fourier positional encoding frequencies
+  mlp_dim_ratio: 2.66   # FFN hidden dim = embed_dim * mlp_dim_ratio
+  predictor_depth: 2     # Transformer depth for predictor (shallower than encoder)
+  predictor_embed_dim: null  # Predictor bottleneck dim (null = same as encoder_embed_dim)
+  use_ema: true           # Use EMA target encoder (V-JEPA style). Set false for LeWM style.
+  ema_momentum: 0.996    # EMA momentum start (ignored when use_ema=false)
+  ema_momentum_end: 1.0  # EMA momentum end (cosine schedule)
+
+masking:
+  n_pred_masks_short: 2             # Number of short-range prediction masks
+  n_pred_masks_long: 2              # Number of long-range prediction masks
+  short_channel_scale: [0.08, 0.15] # Fraction of channels per short mask
+  short_patch_scale: [0.3, 0.6]     # Fraction of patches per short mask
+  long_channel_scale: [0.15, 0.35]  # Fraction of channels per long mask
+  long_patch_scale: [0.5, 1.0]      # Fraction of patches per long mask
+  min_context_fraction: 0.15        # Minimum fraction of tokens as context
+
+loss:
+  regularizer: vc     # "vc" (VCLoss), "sigreg", or "none" (when std/cov both 0)
+  use_projector: true # whether to wrap VICReg with Projector MLP (ignored for sigreg)
+  # VCLoss settings (only used when regularizer=vc)
+  cov_coeff: 1.0    # Covariance loss weight (reduced from 100)
+  std_coeff: 1.0    # Standard deviation loss weight (reduced from 10)
+  # SIGReg settings (only used when regularizer=sigreg)
+  sigreg:
+    num_slices: 256   # Number of random projection directions
+    coeff: 0.1        # SIGReg loss weight (lambda)
+  pred_loss_type: mse  # Prediction loss: "mse" or "smooth_l1" (Huber, used in V-JEPA)
+
+optim:
+  epochs: 100
+  early_stopping_patience: 0  # 0 = disabled; N > 0 = stop after N epochs without val/reg_loss improvement
+  lr: 3.0e-4
+  lr_min: 1.0e-6       # Cosine LR schedule minimum (set to 0 to disable schedule)
+  warmup_epochs: 5     # Linear warmup epochs before cosine decay
+
+logging:
+  log_wandb: true
+  wandb_group:        # Set to group runs
+  log_every: 1        # Log every N epochs
+  save_every: 10      # Save checkpoint every N epochs
+  tqdm_silent: false  # Disable tqdm progress bars
+
+sanity_checks:
+  enabled: true             # Set false to disable all sanity check logging
+  log_every_steps: 50       # How often (steps) to log embedding/collapse/grad metrics
+  probe_every_steps: 200    # How often (steps) to train & eval the downstream linear probe
+  probe_train_steps: 30     # SGD steps per linear probe evaluation round
+  probe_buffer_size: 512    # Max (embedding, label) samples kept for linear probe training
+  cosim_n_pairs: 128        # Random pairs for cosine-similarity collapse check
+  horizon_every_steps: 200  # How often (steps) to compute short vs long pred losses
+
+# Post-training auto-eval. When auto_run is true (default), the training
+# entry point invokes eb_jepa.evaluation.run_probe_eval on the saved
+# checkpoint, then eb_jepa.evaluation.bootstrap_predictions on the dumped
+# predictions. Disable for fast smoke runs or when a sweep launcher will
+# submit eval as its own job.
+eval:
+  auto_run: true
+  splits: val,test          # Comma-separated list passed to run_probe_eval
+  probe_epochs: 20
+  subject_probe_epochs: 100
+  bootstrap_split: test     # Split to bootstrap CIs over
+  n_bootstrap: 1000         # Recording-level bootstrap resamples
+  wandb_group: probe_eval_auto

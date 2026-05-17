@@ -1,7 +1,27 @@
-# EEG JEPA pretraining
+# EEG JEPA pretraining — LEGACY (frozen 2026-05-16)
+
+> **This folder is preserved as a frozen reproducibility snapshot of the
+> pre-refactor pipeline.** Do not extend it. The training entry, default
+> config, and canonical sbatches have been promoted to
+> [`eb_jepa/training/`](../../eb_jepa/training/), and the sweeps have
+> been regrouped into self-contained studies under `experiments/`
+> (see [`experiments/README.md`](../README.md)).
+>
+> Why it's still here: every sweep launcher under `sweeps/` invokes
+> `experiments/eeg_jepa/train.py` directly, so leaving the directory
+> untouched means any pre-refactor sweep run remains reproducible
+> against the exact code that produced it.
+>
+> For new work, use:
+> - `python -m eb_jepa.training.jepa_pretrain` instead of `experiments/eeg_jepa/train.py`
+> - `experiments/<study>/` (canonical_replication, temporal_sweep,
+>   regularizer_study, retrain_best, trivial_baselines, corrca_study)
+>   instead of `experiments/eeg_jepa/sweeps/`
+
+---
 
 Self-supervised V-JEPA-style masked prediction for EEG during the HBN
-movie-watching task. The main study in this repo.
+movie-watching task. The main study in this repo (pre-refactor entry).
 
 ## Entry point
 
