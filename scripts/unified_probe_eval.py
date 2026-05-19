@@ -81,20 +81,8 @@ def _load_encoder(checkpoint, train_set, cfg, n_windows, random_init=False, vari
     from eb_jepa.training_utils import setup_device
 
     device = setup_device("auto")
-    encoder = EEGEncoderTokens(
-        n_chans=train_set.n_chans,
-        n_times=train_set.n_times,
-        embed_dim=cfg.model.encoder_embed_dim,
-        depth=cfg.model.encoder_depth,
-        heads=cfg.model.encoder_heads,
-        head_dim=cfg.model.encoder_head_dim,
-        n_windows=n_windows,
-        patch_size=cfg.model.get("patch_size", 50),
-        patch_overlap=cfg.model.get("patch_overlap", 20),
-        freqs=cfg.model.get("freqs", 4),
-        chs_info=train_set.get_chs_info(),
-        mlp_dim_ratio=cfg.model.get("mlp_dim_ratio", 2.66),
-    ).to(device)
+    patch_size = cfg.model.get("patch_size", 50)
+    ce_sd = None
     if not random_init:
         sd_dict = torch.load(checkpoint, map_location=device, weights_only=False)
         sd = sd_dict.get("model_state_dict", sd_dict)
@@ -103,6 +91,24 @@ def _load_encoder(checkpoint, train_set, cfg, n_windows, random_init=False, vari
             for k, v in sd.items()
             if k.startswith("context_encoder.")
         }
+        ckpt_patch = ce_sd.get("to_patch_embedding.weight")
+        if ckpt_patch is not None and ckpt_patch.shape[-1] != patch_size:
+            patch_size = int(ckpt_patch.shape[-1])
+    encoder = EEGEncoderTokens(
+        n_chans=train_set.n_chans,
+        n_times=train_set.n_times,
+        embed_dim=cfg.model.encoder_embed_dim,
+        depth=cfg.model.encoder_depth,
+        heads=cfg.model.encoder_heads,
+        head_dim=cfg.model.encoder_head_dim,
+        n_windows=n_windows,
+        patch_size=patch_size,
+        patch_overlap=cfg.model.get("patch_overlap", 20),
+        freqs=cfg.model.get("freqs", 4),
+        chs_info=train_set.get_chs_info(),
+        mlp_dim_ratio=cfg.model.get("mlp_dim_ratio", 2.66),
+    ).to(device)
+    if ce_sd is not None:
         encoder.load_state_dict(ce_sd, strict=False)
 
     if variant == "no_transformer":
@@ -139,6 +145,24 @@ def _kc_features(eeg, encoder, device):
         pooled = x_tok.mean(dim=3)  # [B, C, T, D]
         pooled = pooled.permute(0, 2, 1, 3).reshape(B, T, C * D)
         emb = pooled.mean(dim=1).squeeze(0).cpu().numpy()  # [C*D]
+    return emb
+
+
+def _chmean_features(eeg, encoder, device):
+    """Channel-mean pool: mean over C, T, P → D-dim per clip. Matches the peer's
+    `pool_to_windows(keep_channels=False)` readout used in their probe_eval_canonical.py."""
+    with torch.no_grad():
+        x = eeg.unsqueeze(0).to(device)
+        tokens = encoder.encode_tokens(x, mask=None)
+        B = tokens.shape[0]
+        C = encoder.n_chans
+        T = encoder.n_windows
+        P = encoder.n_patches_per_window
+        D = encoder.embed_dim
+        x_tok = tokens.view(B, C, T, P, D)
+        # mean over channels AND patches → [B, T, D], then mean over T → [B, D]
+        pooled = x_tok.mean(dim=(1, 3))  # [B, T, D]
+        emb = pooled.mean(dim=1).squeeze(0).cpu().numpy()  # [D]
     return emb
 
 
@@ -247,6 +271,15 @@ def _make_feature_fn(feature_source, checkpoint, train_set, cfg, n_windows, sfre
         return (
             lambda eeg: _kc_features(eeg, encoder, device),
             encoder.embed_dim * encoder.n_chans,
+        )
+    if feature_source == "jepa_chmean":
+        # Replication-check: 64-D channel-mean readout (mean over C, T, P) matching
+        # the peer's `jepa.encode(eeg, keep_channels=False)` in probe_eval_canonical.py.
+        # Tests whether the 320-D → 64-D pool fully explains their narr=0.037 vs ours=0.155.
+        encoder, device = _load_encoder(checkpoint, train_set, cfg, n_windows)
+        return (
+            lambda eeg: _chmean_features(eeg, encoder, device),
+            encoder.embed_dim,
         )
     if feature_source == "random_init":
         encoder, device = _load_encoder(
@@ -516,6 +549,7 @@ def run(
     save_predictions_dir: str = "",
     movie_id_n_bins: int = 20,
     external_npz_dir: str = "",
+    orthogonalize_subject: bool = False,
 ):
     """Unified canonical probe eval entry point.
 
@@ -707,6 +741,40 @@ def run(
     age_tr, sex_tr = _subject_labels(train_set)
     age_v, sex_v = _subject_labels(eval_sets["val"])
     age_t, sex_t = _subject_labels(eval_sets["test"])
+
+    if orthogonalize_subject:
+        # Project out the 2-d subspace of the feature space that linearly predicts
+        # (sex, age). Stim Ridge then operates on the subject-orthogonal residual;
+        # subject Ridge stays on the originals (we want to verify subject info was
+        # actually there before claiming the orth view is meaningful).
+        # Method: find W [D, 2] = OLS coefficients X_train -> S_train, then null
+        # span(W) via P = I - W (W^T W)^-1 W^T. Apply to all splits without
+        # using subject labels at test (so the projection is symmetric).
+        n_passes_train = Xtr_g.shape[1]
+        sex_tr_clip = np.repeat(sex_tr.astype(np.float32), n_passes_train)
+        age_tr_clip = np.repeat(age_tr.astype(np.float32), n_passes_train)
+        valid = ~(np.isnan(sex_tr_clip) | np.isnan(age_tr_clip))
+        sex_centered = sex_tr_clip[valid] - np.nanmean(sex_tr_clip[valid])
+        age_centered = age_tr_clip[valid] - np.nanmean(age_tr_clip[valid])
+        age_centered = age_centered / (age_centered.std() + 1e-8)
+        S_tr = np.stack([sex_centered, age_centered], axis=1)  # [N_valid, 2]
+        X_for_fit = Xtr_flat_clips[valid]
+        # W = (X^T X)^-1 X^T S, shape [D, 2]
+        XtX = X_for_fit.T @ X_for_fit
+        W = np.linalg.pinv(XtX) @ X_for_fit.T @ S_tr
+        WtW_inv = np.linalg.pinv(W.T @ W)
+        proj = W @ WtW_inv @ W.T  # [D, D]; null span(W) via I - proj
+
+        def _orth(X):
+            return X - X @ proj
+
+        Xtr_flat_clips = _orth(Xtr_flat_clips)
+        Xv_flat_clips = _orth(Xv_flat_clips)
+        Xt_flat_clips = _orth(Xt_flat_clips)
+        logger.info(
+            "Orthogonalized stim features against (sex, age): %d-d residual",
+            Xtr_flat_clips.shape[1],
+        )
     Ytr_rec = Ytr_g.mean(axis=1)
     Yv_rec = Yv_g.mean(axis=1)
     Yt_rec = Yt_g.mean(axis=1)
