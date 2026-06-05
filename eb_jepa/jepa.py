@@ -273,11 +273,12 @@ class MaskedJEPA(nn.Module):
         for p_ctx, p_tgt in zip(self.context_encoder.parameters(), self.target_encoder.parameters()):
             p_tgt.data.lerp_(p_ctx.data, 1.0 - momentum)
 
-    def forward(self, eeg: torch.Tensor) -> tuple[torch.Tensor, dict]:
+    def forward(self, eeg: torch.Tensor, global_step: int = 0) -> tuple[torch.Tensor, dict]:
         """Forward pass: mask, encode, predict, compute loss.
 
         Args:
             eeg: [B, T, C, W] raw EEG
+            global_step: training step (forwarded to step-seeded regularizers like SIGReg)
 
         Returns:
             (total_loss, loss_dict) where loss_dict contains individual loss components
@@ -351,20 +352,29 @@ class MaskedJEPA(nn.Module):
             "pred_loss_norm": pred_loss_norm.item(),
         }
         reg_loss = torch.tensor(0.0, device=device)
+        total_loss = pred_loss
         if self.regularizer is not None:
             from eb_jepa.losses import SIGRegLoss
             if isinstance(self.regularizer, SIGRegLoss):
-                # SIGReg on mean-pooled embeddings [B, D] to avoid OOM
-                ctx_pooled = ctx_tokens.mean(dim=1)  # [B, D]
-                reg_loss, reg_loss_unweighted, reg_dict = self.regularizer(ctx_pooled)
+                # NOTE: with EMA on, SIGReg pushes the trainable context encoder
+                # toward isotropic Gaussian while probes read the EMA target
+                # encoder — different representations. Prefer use_ema=false
+                # (LeJEPA recipe). Kept here for compatibility.
+                pooled = self.context_encoder.pool_to_windows(
+                    self.context_encoder.encode_tokens(eeg, mask=None)
+                )  # [B, D, T, 1, 1]
+                D = pooled.shape[1]
+                pooled = pooled.squeeze(-1).squeeze(-1).permute(0, 2, 1).reshape(-1, D)
+                reg_loss, _, reg_dict = self.regularizer(pooled, global_step)
+                lam = self.regularizer.coeff
+                total_loss = (1.0 - lam) * pred_loss + lam * reg_loss
             else:
-                # VCLoss expects [B, C, T, H, W] — reshape ctx_tokens
                 ctx_for_reg = ctx_tokens.permute(0, 2, 1).unsqueeze(-1).unsqueeze(-1)
-                reg_loss, reg_loss_unweighted, reg_dict = self.regularizer(ctx_for_reg)
+                reg_loss, _, reg_dict = self.regularizer(ctx_for_reg)
+                total_loss = pred_loss + reg_loss
             loss_dict["reg_loss"] = reg_loss.item()
             loss_dict.update(reg_dict)
 
-        total_loss = pred_loss + reg_loss
         loss_dict["total_loss"] = total_loss.item()
 
         return total_loss, loss_dict
@@ -408,7 +418,7 @@ class MaskedJEPANoEMA(nn.Module):
         self.regularizer = regularizer
         self.pred_loss_type = pred_loss_type
 
-    def forward(self, eeg: torch.Tensor) -> tuple[torch.Tensor, dict]:
+    def forward(self, eeg: torch.Tensor, global_step: int = 0) -> tuple[torch.Tensor, dict]:
         B = eeg.shape[0]
         device = eeg.device
 
@@ -458,7 +468,6 @@ class MaskedJEPANoEMA(nn.Module):
             pred_var = pred_flat.var(dim=0).mean()
             pred_loss_norm = pred_loss.detach() / target_var.clamp_min(1e-8)
 
-        # 8. SIGReg on mean-pooled encoder embeddings [B, D] to avoid OOM
         loss_dict = {
             "pred_loss": pred_loss.item(),
             "pred_target_cosim": pred_target_cosim.item(),
@@ -467,18 +476,26 @@ class MaskedJEPANoEMA(nn.Module):
             "pred_loss_norm": pred_loss_norm.item(),
         }
         reg_loss = torch.tensor(0.0, device=device)
+        total_loss = pred_loss
         if self.regularizer is not None:
             from eb_jepa.losses import SIGRegLoss
             if isinstance(self.regularizer, SIGRegLoss):
-                all_pooled = all_tokens.mean(dim=1)  # [B, D]
-                reg_loss, _, reg_dict = self.regularizer(all_pooled)
+                # Apply SIGReg on the same representation the probes consume:
+                # per-window pooled embeddings [B*T, D] (pool_to_windows mean-
+                # pools over channels and patches per window).
+                pooled = self.context_encoder.pool_to_windows(all_tokens)  # [B, D, T, 1, 1]
+                D = pooled.shape[1]
+                pooled = pooled.squeeze(-1).squeeze(-1).permute(0, 2, 1).reshape(-1, D)
+                reg_loss, _, reg_dict = self.regularizer(pooled, global_step)
+                lam = self.regularizer.coeff
+                total_loss = (1.0 - lam) * pred_loss + lam * reg_loss
             else:
                 ctx_for_reg = ctx_tokens.permute(0, 2, 1).unsqueeze(-1).unsqueeze(-1)
                 reg_loss, _, reg_dict = self.regularizer(ctx_for_reg)
+                total_loss = pred_loss + reg_loss
             loss_dict["reg_loss"] = reg_loss.item()
             loss_dict.update(reg_dict)
 
-        total_loss = pred_loss + reg_loss
         loss_dict["total_loss"] = total_loss.item()
         return total_loss, loss_dict
 

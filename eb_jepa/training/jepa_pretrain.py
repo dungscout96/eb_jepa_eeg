@@ -415,7 +415,7 @@ def run(
 
             # --- Masked JEPA pretraining ---
             optimizer.zero_grad()
-            jepa_loss, loss_dict = jepa(eeg)
+            jepa_loss, loss_dict = jepa(eeg, global_step=global_step)
             jepa_loss.backward()
             torch.nn.utils.clip_grad_norm_(
                 list(jepa.context_encoder.parameters())

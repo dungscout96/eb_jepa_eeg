@@ -358,20 +358,33 @@ def all_reduce(x, op):
         return x
 
 
-def epps_pulley(x, t_min=-3, t_max=3, n_points=10):
-    """Epps-Pulley test statistic for Gaussianity."""
-    # integration points
+def epps_pulley(x, t_min=-5.0, t_max=5.0, n_points=17):
+    """Epps-Pulley test statistic for Gaussianity.
+
+    Matches LeJEPA (arXiv:2511.08544) Algorithm 1: integration domain
+    [-5, 5] with 17 quadrature points and per-slice scaling by N so the
+    output is a true test statistic, not a sample-average.
+
+    Args:
+        x: [N, M] N samples projected onto M slicing directions.
+
+    Returns:
+        T: [M] per-slice EP statistic.
+    """
+    import torch.distributed as dist
+
     t = torch.linspace(t_min, t_max, n_points, device=x.device)
-    # theoretical CF for N(0, 1)
-    exp_f = torch.exp(-0.5 * t**2)
-    # ECF
+    exp_f = torch.exp(-0.5 * t**2)  # theoretical CF for N(0, 1) on real line
     x_t = x.unsqueeze(2) * t  # (N, M, T)
-    ecf = (1j * x_t).exp().mean(0)
+    ecf = (1j * x_t).exp().mean(0)  # (M, T)
     ecf = all_reduce(ecf, op="AVG")
-    # weighted L2 distance
-    err = exp_f * (ecf - exp_f).abs() ** 2
-    T = torch.trapz(err, t, dim=1)
-    return T
+    err = (ecf - exp_f).abs().square().mul(exp_f)  # |φ̂−φ|² · w(t)
+    integral = torch.trapz(err, t, dim=1)
+    world_size = (
+        dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
+    )
+    N = x.size(0) * world_size
+    return integral * N
 
 
 class BCS(nn.Module):
@@ -402,42 +415,48 @@ class BCS(nn.Module):
 
 
 class SIGRegLoss(nn.Module):
-    """SIGReg regularizer for masked JEPA (single-view).
+    """SIGReg regularizer (LeJEPA, arXiv:2511.08544 Algorithm 1).
 
-    Enforces that encoder embeddings follow an isotropic Gaussian distribution
-    using the Epps-Pulley test on random 1D projections (Cramér-Wold theorem).
+    Enforces that encoder embeddings follow an isotropic Gaussian by
+    averaging an Epps-Pulley Gaussianity test over random unit-norm
+    1D projections (sketched Cramér-Wold).
 
-    Reference: LeWorldModel (arXiv:2603.19312)
+    Returns the raw EP statistic as the "weighted" value too — the
+    convex combination with the prediction loss is done at the caller
+    so both terms remain visible in the loss dict.
     """
 
-    def __init__(self, num_slices=256, coeff=0.1):
+    def __init__(self, num_slices=1024, coeff=0.05, ep_t_range=5.0, ep_n_points=17):
         super().__init__()
         self.num_slices = num_slices
-        self.coeff = coeff
-        self.step = 0
+        self.coeff = coeff  # λ in the convex loss; used by caller
+        self.ep_t_range = ep_t_range
+        self.ep_n_points = ep_n_points
 
-    def forward(self, z):
+    def forward(self, z, global_step: int):
         """Compute SIGReg loss on embeddings.
 
         Args:
-            z: [N, D] flattened embeddings (batch*tokens, embed_dim)
+            z: [N, D] embeddings used by downstream probes.
+            global_step: training step; seeds the projection matrix so
+                ranks under DDP draw the same `A`.
 
         Returns:
-            (weighted_loss, unweighted_loss, loss_dict)
+            (sigreg, sigreg, {"sigreg_loss": value})
         """
         with torch.no_grad():
             dev = z.device
             g = torch.Generator(device=dev)
-            g.manual_seed(self.step)
+            g.manual_seed(int(global_step))
             A = torch.randn(z.size(1), self.num_slices, device=dev, generator=g)
             A /= A.norm(p=2, dim=0)
 
         proj = z @ A  # [N, num_slices]
-        self.step += 1
-
-        sigreg = epps_pulley(proj).mean()
-        weighted = self.coeff * sigreg
-        return weighted, sigreg, {"sigreg_loss": sigreg.item()}
+        sigreg = epps_pulley(
+            proj, t_min=-self.ep_t_range, t_max=self.ep_t_range,
+            n_points=self.ep_n_points,
+        ).mean()
+        return sigreg, sigreg, {"sigreg_loss": sigreg.item()}
 
 
 # ---------------------------------------------------------------------------
