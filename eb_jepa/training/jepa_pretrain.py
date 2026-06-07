@@ -243,6 +243,13 @@ def run(
         mlp_dim_ratio=cfg.model.get("mlp_dim_ratio", 2.66),
     )
     use_ema = cfg.model.get("use_ema", True)
+    # LeJEPA recipe: SIGReg needs to act on the encoder probes read from.
+    # With EMA on, SIGReg pushes the trainable context encoder while probes
+    # read the EMA target — so force LeWM-style training when sigreg is on.
+    if cfg.loss.get("regularizer", "vc") == "sigreg" and use_ema:
+        print("[train] regularizer=sigreg → forcing use_ema=False (LeJEPA recipe)")
+        use_ema = False
+        cfg.model.use_ema = False  # reflect override in logged config
     if use_ema:
         target_encoder = copy.deepcopy(encoder)
     predictor_dim = cfg.model.get("predictor_embed_dim", None)
@@ -274,8 +281,10 @@ def run(
     if reg_type == "sigreg":
         sigreg_cfg = cfg.loss.get("sigreg", {})
         regularizer = SIGRegLoss(
-            num_slices=sigreg_cfg.get("num_slices", 256),
-            coeff=sigreg_cfg.get("coeff", 0.1),
+            num_slices=sigreg_cfg.get("num_slices", 1024),
+            coeff=sigreg_cfg.get("coeff", 0.05),
+            ep_t_range=sigreg_cfg.get("ep_t_range", 5.0),
+            ep_n_points=sigreg_cfg.get("ep_n_points", 17),
         )
     elif cfg.loss.std_coeff > 0 or cfg.loss.cov_coeff > 0:
         projector = Projector(f"{embed_dim}-{embed_dim * 4}-{embed_dim * 4}") if use_proj else None

@@ -68,10 +68,14 @@ loss:
   # VCLoss settings (only used when regularizer=vc)
   cov_coeff: 1.0    # Covariance loss weight (reduced from 100)
   std_coeff: 1.0    # Standard deviation loss weight (reduced from 10)
-  # SIGReg settings (only used when regularizer=sigreg)
+  # SIGReg settings (only used when regularizer=sigreg).
+  # When regularizer=sigreg, use_ema is forced to false (LeJEPA recipe).
+  # Total loss = (1-coeff)*pred_loss + coeff*sigreg.
   sigreg:
-    num_slices: 256   # Number of random projection directions
-    coeff: 0.1        # SIGReg loss weight (lambda)
+    num_slices: 1024   # Number of random projection directions (paper default)
+    coeff: 0.05        # λ — convex weight on SIGReg vs pred_loss (paper default)
+    ep_t_range: 5.0    # Epps-Pulley integration domain [-ep_t_range, ep_t_range]
+    ep_n_points: 17    # Epps-Pulley quadrature points
   pred_loss_type: mse  # Prediction loss: "mse" or "smooth_l1" (Huber, used in V-JEPA)
 
 optim:
