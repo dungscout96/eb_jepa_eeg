@@ -36,10 +36,6 @@ model:
   mlp_dim_ratio: 2.66   # FFN hidden dim = embed_dim * mlp_dim_ratio
   predictor_depth: 2     # Transformer depth for predictor (shallower than encoder)
   predictor_embed_dim: null  # Predictor bottleneck dim (null = same as encoder_embed_dim)
-  # EMA momentum schedule for the DINO anti-collapse strategy
-  # (ignored when loss.anti_collapse != "dino").
-  ema_momentum: 0.996
-  ema_momentum_end: 1.0
 
 masking:
   n_pred_masks_short: 2             # Number of short-range prediction masks
@@ -57,6 +53,11 @@ loss:
   #   "sigreg" — sketched Gaussianity test on pooled embeddings (LeJEPA).
   #   "none"   — no anti-collapse (representations will collapse; for ablations).
   anti_collapse: vicreg
+  # DINO settings (only used when anti_collapse=dino).
+  # Cosine EMA momentum schedule for the target encoder.
+  dino:
+    ema_momentum: 0.996
+    ema_momentum_end: 1.0
   # VICReg settings (only used when anti_collapse=vicreg)
   vicreg:
     std_coeff: 1.0      # Standard deviation (variance hinge) loss weight

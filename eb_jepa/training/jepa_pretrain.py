@@ -1,23 +1,58 @@
 """eb_jepa.training.jepa_pretrain -- canonical JEPA pretraining entry.
 
-Train a self-supervised EEG prediction model on HBN movie-watching data using
-the masked Joint Embedding Predictive Architecture (V-JEPA style) with VC
-regularization.
+Self-supervised pretraining of an EEG encoder on HBN movie-watching data
+using a masked Joint Embedding Predictive Architecture (V-JEPA style).
+Labels are not consumed during pretraining; movie features are loaded
+only at eval time.
 
-Probe performance is evaluated only after pretraining via the auto-eval
-block (run_probe_eval + bootstrap_predictions on the saved checkpoint).
-No online probes or sanity-check probes run during training.
+Pipeline
+--------
+1. Build a `JEPAMovieDataset` over HBN recordings: each sample is
+   `n_windows` consecutive EEG windows. Movie-feature labels are skipped
+   (`feature_names=[]`). The dataset's visual_processing_delay_s
+   defaults to 0.0, so no windows are dropped during pretraining.
+2. Build the JEPA model via `eb_jepa.training.builder.build_jepa`:
+   encoder + predictor + an `AntiCollapse` regularizer chosen by
+   `cfg.loss.anti_collapse`:
+     - `vicreg`  — variance + covariance penalty (default).
+     - `dino`    — EMA target encoder; cosine momentum schedule from
+                   `cfg.loss.dino.ema_momentum{,_end}`.
+     - `sigreg`  — sketched Gaussianity test (LeJEPA).
+     - `none`    — ablation; representations collapse.
+3. Train with Adam + cosine LR (linear warmup). Each step:
+   `pred_loss + ac_loss → backward → step → (DINO only) EMA update`.
+4. Checkpoint `latest.pth.tar` every epoch and `epoch_N.pth.tar` every
+   `cfg.logging.save_every` epochs. No val loop, no best-checkpoint
+   tracking — probe metrics are not computed during pretraining.
+5. Post-training auto-eval (gated by `cfg.eval.auto_run`, default true):
+   `eb_jepa.evaluation.run_probe_eval` trains movie-feature + subject-
+   trait linear probes on `latest.pth.tar`, then `bootstrap_predictions`
+   computes recording-level CIs over the saved predictions.
 
-Invoke from any experiment sweep:
+Configuration
+-------------
+Default config: `config/jepa_pretrain.yaml`. Pass `--fname=...` to
+override. Sections:
+  meta     — seed, device
+  data     — batch size, windows, task, preprocessing, normalization
+  model    — encoder/predictor architecture, masking patch geometry
+  masking  — short/long mask block scales and counts
+  loss     — anti_collapse strategy + per-strategy subblock
+             (dino / vicreg / sigreg) + pred_loss_type
+  optim    — epochs, lr, lr_min, warmup_epochs
+  logging  — wandb, log/save cadence
+  eval     — auto_run, feature_names, visual_processing_delay_s,
+             probe epochs, bootstrap settings (post-training only)
 
+Invoke
+------
     PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.jepa_pretrain \\
         --optim.lr=5e-4 --data.n_windows=2 --data.window_size_seconds=4
 
-Default config: `config/jepa_pretrain.yaml` at the repo root (resolved
-relative to this module). Pass `--fname=...` to use a different config file.
-
-Promoted from `experiments/eeg_jepa/train.py` (which is preserved as a legacy
-frozen snapshot for reproducibility of prior runs).
+Legacy
+------
+Promoted from `experiments/eeg_jepa/train.py`, preserved as a frozen
+reproducibility snapshot — do not patch.
 """
 
 import math
@@ -250,8 +285,9 @@ def run(
     # Training loop
     # ------------------------------------------------------------------
     logger.info("Starting training for %d epochs...", cfg.optim.epochs)
-    ema_start = cfg.model.get("ema_momentum", 0.996)
-    ema_end = cfg.model.get("ema_momentum_end", 1.0)
+    dino_cfg = cfg.loss.get("dino", {}) or {}
+    ema_start = dino_cfg.get("ema_momentum", 0.996)
+    ema_end = dino_cfg.get("ema_momentum_end", 1.0)
     total_steps = cfg.optim.epochs * len(train_loader)
 
     for epoch in range(start_epoch, cfg.optim.epochs):
