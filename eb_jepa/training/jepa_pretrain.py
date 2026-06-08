@@ -13,8 +13,8 @@ Invoke from any experiment sweep:
     PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.jepa_pretrain \\
         --optim.lr=5e-4 --data.n_windows=2 --data.window_size_seconds=4
 
-Default config: `eb_jepa/training/cfgs/default.yaml` (resolved relative to this
-module). Pass `--fname=...` to use a different config file.
+Default config: `config/jepa_pretrain.yaml` at the repo root (resolved
+relative to this module). Pass `--fname=...` to use a different config file.
 
 Promoted from `experiments/eeg_jepa/train.py` (which is preserved as a legacy
 frozen snapshot for reproducibility of prior runs).
@@ -64,9 +64,12 @@ logger = get_logger(__name__)
 
 NUMERIC_FEATURES = None  # resolved from cfg.data.feature_names at runtime
 
-# Default config bundled with the library (resolved relative to this module so
-# `python -m eb_jepa.training.jepa_pretrain` works from any cwd).
-_DEFAULT_CFG_PATH = str(Path(__file__).parent / "cfgs" / "default.yaml")
+# Default config lives in the repo-root `config/` directory (resolved
+# relative to this module so `python -m eb_jepa.training.jepa_pretrain`
+# works from any cwd).
+_DEFAULT_CFG_PATH = str(
+    Path(__file__).resolve().parents[2] / "config" / "jepa_pretrain.yaml"
+)
 
 
 # ---------------------------------------------------------------------------
