@@ -243,6 +243,15 @@ def run(
         mlp_dim_ratio=cfg.model.get("mlp_dim_ratio", 2.66),
     )
     use_ema = cfg.model.get("use_ema", True)
+    # SIGReg is incompatible with EMA: SIGReg pushes the trainable context
+    # encoder toward isotropic Gaussian while probes read the EMA target
+    # encoder — different representations. Refuse the combination rather
+    # than silently overriding the user's config.
+    if cfg.loss.get("regularizer", "vc") == "sigreg" and use_ema:
+        raise ValueError(
+            "regularizer=sigreg requires model.use_ema=false. "
+            "Pass --model.use_ema=false (LeJEPA recipe)."
+        )
     if use_ema:
         target_encoder = copy.deepcopy(encoder)
     predictor_dim = cfg.model.get("predictor_embed_dim", None)
@@ -274,8 +283,10 @@ def run(
     if reg_type == "sigreg":
         sigreg_cfg = cfg.loss.get("sigreg", {})
         regularizer = SIGRegLoss(
-            num_slices=sigreg_cfg.get("num_slices", 256),
-            coeff=sigreg_cfg.get("coeff", 0.1),
+            num_slices=sigreg_cfg.get("num_slices", 1024),
+            coeff=sigreg_cfg.get("coeff", 0.05),
+            ep_t_range=sigreg_cfg.get("ep_t_range", 5.0),
+            ep_n_points=sigreg_cfg.get("ep_n_points", 17),
         )
     elif cfg.loss.std_coeff > 0 or cfg.loss.cov_coeff > 0:
         projector = Projector(f"{embed_dim}-{embed_dim * 4}-{embed_dim * 4}") if use_proj else None
@@ -284,7 +295,10 @@ def run(
     # Prediction loss type: "mse" (default) or "smooth_l1" (Huber, used in V-JEPA)
     pred_loss_type = cfg.loss.get("pred_loss_type", "mse")
 
-    if use_ema:
+    # Class selection: SIGReg requires the no-EMA architecture; otherwise
+    # follow the use_ema flag. (sigreg + use_ema=True already errored above.)
+    use_no_ema_arch = reg_type == "sigreg" or not use_ema
+    if not use_no_ema_arch:
         jepa = MaskedJEPA(
             encoder, target_encoder, predictor, mask_collator, regularizer,
             pred_loss_type=pred_loss_type,
@@ -415,7 +429,7 @@ def run(
 
             # --- Masked JEPA pretraining ---
             optimizer.zero_grad()
-            jepa_loss, loss_dict = jepa(eeg)
+            jepa_loss, loss_dict = jepa(eeg, global_step=global_step)
             jepa_loss.backward()
             torch.nn.utils.clip_grad_norm_(
                 list(jepa.context_encoder.parameters())
