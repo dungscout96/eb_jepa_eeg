@@ -87,7 +87,11 @@ def load_split_data(split, cfg):
         sfreq: sampling frequency
     """
     print(f"Loading {split} split...")
-    dataset = HBNMovieProbeDataset(split=split, cfg=cfg.data)
+    dataset = HBNMovieProbeDataset(
+        split=split,
+        cfg=cfg.data,
+        visual_processing_delay_s=float(cfg.data.get("visual_processing_delay_s", 0.0)),
+    )
     sfreq = dataset.sfreq
 
     X_list = []

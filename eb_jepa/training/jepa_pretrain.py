@@ -4,9 +4,9 @@ Train a self-supervised EEG prediction model on HBN movie-watching data using
 the masked Joint Embedding Predictive Architecture (V-JEPA style) with VC
 regularization.
 
-Two online probes are trained alongside JEPA:
-  1. Regression probe: predicts continuous movie features (MSELoss)
-  2. Classification probe: predicts binary movie feature labels (BCEWithLogitsLoss)
+Probe performance is evaluated only after pretraining via the auto-eval
+block (run_probe_eval + bootstrap_predictions on the saved checkpoint).
+No online probes or sanity-check probes run during training.
 
 Invoke from any experiment sweep:
 
@@ -25,25 +25,16 @@ from pathlib import Path
 
 import fire
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from omegaconf import OmegaConf
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from eb_jepa.anti_collapse import DINOAntiCollapse
-from eb_jepa.architectures import (
-    MovieFeatureHead,
-    TemporalMovieFeatureHead,
-)
 from eb_jepa.datasets.hbn import JEPAMovieDataset
-from eb_jepa.jepa import MaskedJEPAProbe
 from eb_jepa.logging import get_logger
-from eb_jepa.losses import ClassificationLoss, RegressionLoss
 from eb_jepa.paths import resolve_preprocessed_dir
 from eb_jepa.training.builder import build_jepa
-from eb_jepa.sanity_checks import SanityCheckHook
 from eb_jepa.training_utils import (
     get_default_dev_name,
     get_unified_experiment_dir,
@@ -58,11 +49,8 @@ from eb_jepa.training_utils import (
     setup_seed,
     setup_wandb,
 )
-from eb_jepa.evaluation import validation_loop
 
 logger = get_logger(__name__)
-
-NUMERIC_FEATURES = None  # resolved from cfg.data.feature_names at runtime
 
 # Default config lives in the repo-root `config/` directory (resolved
 # relative to this module so `python -m eb_jepa.training.jepa_pretrain`
@@ -158,38 +146,23 @@ def run(
     logger.info("Loading HBN Movie datasets...")
     preprocessed = cfg.data.get("preprocessed", False)
     preprocessed_dir = resolve_preprocessed_dir(cfg.data.get("preprocessed_dir", None))
-    feature_names = list(cfg.data.get("feature_names", JEPAMovieDataset.DEFAULT_FEATURES))
     task_cfg = cfg.data.get("task", "ThePresent")
     task = list(task_cfg) if not isinstance(task_cfg, str) else task_cfg
-    global NUMERIC_FEATURES
-    NUMERIC_FEATURES = feature_names
 
+    # Pretraining is self-supervised: pass feature_names=[] to skip per-window
+    # movie-feature tensor construction. visual_processing_delay_s defaults to
+    # 0.0 — irrelevant since labels are unused; relevant only at eval time.
     train_set = JEPAMovieDataset(
         split="train",
         n_windows=cfg.data.n_windows,
         window_size_seconds=cfg.data.window_size_seconds,
         task=task,
         temporal_stride=temporal_stride,
-        feature_names=feature_names,
+        feature_names=[],
         cfg=cfg.data,
         preprocessed=preprocessed,
         preprocessed_dir=preprocessed_dir,
     )
-    val_set = JEPAMovieDataset(
-        split="val",
-        n_windows=cfg.data.n_windows,
-        window_size_seconds=cfg.data.window_size_seconds,
-        task=task,
-        temporal_stride=temporal_stride,
-        feature_names=feature_names,
-        eeg_norm_stats=train_set.get_eeg_norm_stats(),
-        cfg=cfg.data,
-        preprocessed=preprocessed,
-        preprocessed_dir=preprocessed_dir,
-    )
-
-    feature_stats = train_set.compute_feature_stats()
-    feature_median = train_set.compute_feature_median()
 
     num_workers = cfg.data.num_workers
     train_loader = DataLoader(
@@ -200,33 +173,22 @@ def run(
         pin_memory=True,
         persistent_workers=num_workers > 0,
     )
-    val_loader = DataLoader(
-        val_set,
-        batch_size=cfg.data.batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=True,
-        persistent_workers=num_workers > 0,
-    )
     log_data_info(
         "HBN EEG Movie",
         len(train_loader),
         cfg.data.batch_size,
         train_samples=len(train_set),
-        val_samples=len(val_set),
     )
 
     n_chans = train_set.n_chans
-    n_features = len(NUMERIC_FEATURES)
     chs_info = train_set.get_chs_info()
     n_times = train_set.n_times
-    logger.info("EEG channels: %d, Movie features: %d", n_chans, n_features)
+    logger.info("EEG channels: %d", n_chans)
 
     # ------------------------------------------------------------------
     # Model
     # ------------------------------------------------------------------
     logger.info("Initializing model...")
-    embed_dim = cfg.model.encoder_embed_dim
 
     jepa = build_jepa(
         cfg,
@@ -237,34 +199,15 @@ def run(
     ).to(device)
     is_dino = isinstance(jepa.anti_collapse, DINOAntiCollapse)
 
-    # ------------------------------------------------------------------
-    # Online evaluation probes (trained on frozen encoder representations)
-    # ------------------------------------------------------------------
-    HeadClass = TemporalMovieFeatureHead if cfg.model.get("temporal_probe", False) else MovieFeatureHead
-    reg_head = HeadClass(embed_dim, cfg.model.hdec, n_features)
-    reg_loss_fn = RegressionLoss(
-        feature_stats["mean"].to(device),
-        feature_stats["std"].to(device),
-    )
-    regression_probe = MaskedJEPAProbe(jepa, reg_head, reg_loss_fn).to(device)
-
-    cls_head = HeadClass(embed_dim, cfg.model.hdec, n_features)
-    cls_loss_fn = ClassificationLoss(feature_median.to(device))
-    classification_probe = MaskedJEPAProbe(jepa, cls_head, cls_loss_fn).to(device)
-
     log_model_info(
         jepa,
         {
             "encoder": sum(p.numel() for p in jepa.encoder.parameters()),
             "predictor": sum(p.numel() for p in jepa.predictor.parameters()),
-            "reg_head": sum(p.numel() for p in reg_head.parameters()),
-            "cls_head": sum(p.numel() for p in cls_head.parameters()),
         },
     )
 
     jepa.train()
-    regression_probe.train()
-    classification_probe.train()
 
     # Encoder + predictor + any trainable params owned by the anti-collapse
     # strategy (e.g. VICReg's projector). DINO's target encoder has
@@ -275,11 +218,6 @@ def run(
         + [p for p in jepa.anti_collapse.parameters() if p.requires_grad]
     )
     optimizer = Adam(jepa_params, lr=cfg.optim.lr)
-    probe_optimizer = Adam(
-        list(regression_probe.head.parameters())
-        + list(classification_probe.head.parameters()),
-        lr=cfg.optim.lr,
-    )
 
     # Cosine LR schedule with linear warmup (disabled if lr_min == 0)
     lr_min = cfg.optim.get("lr_min", 0.0)
@@ -296,38 +234,8 @@ def run(
         return lr_min / cfg.optim.lr + (1 - lr_min / cfg.optim.lr) * cosine
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-    probe_scheduler = torch.optim.lr_scheduler.LambdaLR(probe_optimizer, lr_lambda)
-
-    # ------------------------------------------------------------------
-    # Sanity check hook
-    # ------------------------------------------------------------------
-    sanity_cfg = cfg.get("sanity_checks", {})
-    probe_label_name = getattr(train_set, "probe_label_name", "none")
-    logger.info("Sanity-check linear probe label: '%s'", probe_label_name)
-    if wandb_run:
-        import wandb
-        wandb.config.update(
-            {"sanity_checks/probe_label": probe_label_name}, allow_val_change=True
-        )
-    sanity_hook = SanityCheckHook(
-        embed_dim=embed_dim,
-        feature_median=feature_median,   # luminance fallback when probe_labels are NaN
-        n_pred_masks_short=cfg.get("masking", {}).get("n_pred_masks_short", 2),
-        log_every_steps=sanity_cfg.get("log_every_steps", 50),
-        probe_every_steps=sanity_cfg.get("probe_every_steps", 200),
-        probe_train_steps=sanity_cfg.get("probe_train_steps", 30),
-        probe_buffer_size=sanity_cfg.get("probe_buffer_size", 512),
-        cosim_n_pairs=sanity_cfg.get("cosim_n_pairs", 128),
-        horizon_every_steps=sanity_cfg.get("horizon_every_steps", 200),
-        enabled=sanity_cfg.get("enabled", True),
-    )
 
     log_config(cfg)
-
-    # Early stopping and best checkpoint tracking
-    patience = cfg.optim.get("early_stopping_patience", 0)  # 0 = disabled
-    best_val_reg = float("inf")
-    epochs_without_improvement = 0
 
     # Load checkpoint if requested
     start_epoch = 0
@@ -353,10 +261,8 @@ def run(
             disable=cfg.logging.get("tqdm_silent", False),
         )
 
-        for eeg, features, probe_labels in pbar:
+        for eeg, _features, _probe_labels in pbar:
             eeg = eeg.to(device)
-            features = features.to(device)  # [B, T, n_features]
-            # probe_labels: [B] float (NaN where no subject metadata) — stays on CPU
 
             # --- Masked JEPA pretraining ---
             optimizer.zero_grad()
@@ -366,10 +272,6 @@ def run(
                 list(jepa.encoder.parameters())
                 + list(jepa.predictor.parameters()),
                 max_norm=1.0,
-            )
-            sanity_metrics = sanity_hook.step(
-                global_step, eeg, features, jepa, loss_dict,
-                probe_labels=probe_labels,
             )
             optimizer.step()
 
@@ -389,19 +291,10 @@ def run(
                 if k not in ("total_loss", "ac_loss", "pred_loss")
             }
 
-            # --- Online probe training (frozen encoder) ---
-            probe_optimizer.zero_grad()
-            reg_loss = regression_probe(eeg, features)
-            cls_loss = classification_probe(eeg, features)
-            (reg_loss + cls_loss).backward()
-            probe_optimizer.step()
-
             pbar.set_postfix({
                 "loss": f"{jepa_loss.item():.4f}",
                 "ac":   f"{float(acl):.4f}",
                 "pred": f"{float(pl):.4f}",
-                "reg":  f"{reg_loss.item():.4f}",
-                "cls":  f"{cls_loss.item():.4f}",
             })
 
             if wandb_run:
@@ -410,9 +303,6 @@ def run(
                     "train_step/jepa_loss": jepa_loss.item(),
                     "train_step/ac_loss":   float(acl),
                     "train_step/pred_loss": float(pl),
-                    "train_step/reg_loss":  reg_loss.item(),
-                    "train_step/cls_loss":  cls_loss.item(),
-                    **sanity_metrics,
                 }
                 for k, v in ac_subdict.items():
                     step_metrics[f"train_step/{k}"] = float(v)
@@ -420,72 +310,31 @@ def run(
 
             global_step += 1
 
-        # Validation
+        # Epoch logging
         if epoch % cfg.logging.log_every == 0:
-            val_logs = validation_loop(
-                val_loader,
-                jepa,
-                regression_probe,
-                classification_probe,
-                device,
-                feature_stats,
-                feature_median,
-                NUMERIC_FEATURES,
-            )
-
             train_metrics = {
-                "epoch":            epoch,
-                "train/loss":       jepa_loss.item(),
-                "train/ac_loss":    float(acl),
-                "train/pred_loss":  float(pl),
-                "train/reg_loss":   reg_loss.item(),
-                "train/cls_loss":   cls_loss.item(),
+                "epoch":           epoch,
+                "train/loss":      jepa_loss.item(),
+                "train/ac_loss":   float(acl),
+                "train/pred_loss": float(pl),
+                "train/lr":        scheduler.get_last_lr()[0],
             }
             for k, v in ac_subdict.items():
                 train_metrics[f"train/{k}"] = float(v)
 
-            train_metrics["train/lr"] = scheduler.get_last_lr()[0]
-
             if wandb_run:
                 import wandb
-                wandb.log({**train_metrics, **val_logs}, step=global_step)
+                wandb.log(train_metrics, step=global_step)
 
             log_epoch(
                 epoch,
                 {
-                    "loss":    jepa_loss.item(),
-                    "ac":      float(acl),
-                    "pred":    float(pl),
-                    "val_reg": val_logs.get("val/reg_loss", 0),
-                    "val_cls": val_logs.get("val/cls_loss", 0),
+                    "loss": jepa_loss.item(),
+                    "ac":   float(acl),
+                    "pred": float(pl),
                 },
                 total_epochs=cfg.optim.epochs,
             )
-
-            # Track best val/reg_loss and save best checkpoint
-            current_val_reg = val_logs.get("val/reg_loss", float("inf"))
-            if current_val_reg < best_val_reg:
-                best_val_reg = current_val_reg
-                epochs_without_improvement = 0
-                save_checkpoint(
-                    exp_dir / "best.pth.tar",
-                    model=jepa,
-                    optimizer=optimizer,
-                    epoch=epoch,
-                    step=global_step,
-                )
-                logger.info("New best val/reg_loss=%.4f at epoch %d", best_val_reg, epoch)
-            else:
-                epochs_without_improvement += 1
-
-            # Early stopping
-            if patience > 0 and epochs_without_improvement >= patience:
-                logger.info(
-                    "Early stopping at epoch %d (no improvement for %d epochs, "
-                    "best val/reg_loss=%.4f)",
-                    epoch, patience, best_val_reg,
-                )
-                break
 
         # Checkpointing
         save_checkpoint(
@@ -505,46 +354,9 @@ def run(
             )
 
         scheduler.step()
-        probe_scheduler.step()
-
-    # ------------------------------------------------------------------
-    # Test set evaluation
-    # ------------------------------------------------------------------
-    logger.info("Evaluating on test set...")
-    test_set = JEPAMovieDataset(
-        split="test",
-        n_windows=cfg.data.n_windows,
-        window_size_seconds=cfg.data.window_size_seconds,
-        task=task,
-        temporal_stride=temporal_stride,
-        feature_names=feature_names,
-        eeg_norm_stats=train_set.get_eeg_norm_stats(),
-        cfg=cfg.data,
-        preprocessed=preprocessed,
-        preprocessed_dir=preprocessed_dir,
-    )
-    test_loader = DataLoader(
-        test_set,
-        batch_size=cfg.data.batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=True,
-    )
-    test_logs = validation_loop(
-        test_loader,
-        jepa,
-        regression_probe,
-        classification_probe,
-        device,
-        feature_stats,
-        feature_median,
-        NUMERIC_FEATURES,
-    )
-    test_metrics = {k.replace("val/", "test/"): v for k, v in test_logs.items()}
 
     if wandb_run:
         import wandb
-        wandb.log(test_metrics, step=global_step)
         wandb.finish()
 
     logger.info("Training complete!")

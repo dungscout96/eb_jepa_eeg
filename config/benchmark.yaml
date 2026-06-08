@@ -1,9 +1,10 @@
 data:
   annotation_duration_tolerance_s: 1.0 # tolerance for difference in eeg movie recording and actual movie duration, to account for event imprecision
-  post_movie_visual_processing_s: 2.0
   max_recording_overshoot_s: 60.0
-  trial_stop_offset_s: 0.1
-  visual_processing_delay_s: 0.3
+  # EEG window at time t is paired with the movie frame at time
+  # t - visual_processing_delay_s. Windows whose paired frame falls
+  # outside the movie are discarded (no clamping).
+  visual_processing_delay_s: 0.0
 
 benchmark:
   task_mode: binary  # regression, binary, tertile
