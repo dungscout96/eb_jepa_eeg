@@ -92,11 +92,9 @@ logging:
 # submit eval as its own job.
 eval:
   auto_run: true
-  splits: val,test          # Comma-separated list passed to run_probe_eval
-  probe_epochs: 20
-  subject_probe_epochs: 100
-  bootstrap_split: test     # Split to bootstrap CIs over
-  n_bootstrap: 1000         # Recording-level bootstrap resamples
+  n_passes: 20              # Per-clip augmentation passes per recording
+  probe_seed: 42            # Probe RNG seed (fix across encoder seeds)
+  n_bootstrap: 2000         # Recording-level bootstrap resamples
   wandb_group: probe_eval_auto
   # Movie feature columns the post-training probes target.
   feature_names:

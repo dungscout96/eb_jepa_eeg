@@ -25,9 +25,12 @@ Pipeline
    `cfg.logging.save_every` epochs. No val loop, no best-checkpoint
    tracking — probe metrics are not computed during pretraining.
 5. Post-training auto-eval (gated by `cfg.eval.auto_run`, default true):
-   `eb_jepa.evaluation.run_probe_eval` trains movie-feature + subject-
-   trait linear probes on `latest.pth.tar`, then `bootstrap_predictions`
-   computes recording-level CIs over the saved predictions.
+   `eb_jepa.evaluation.run_probe_eval` fits closed-form sklearn linear
+   probes on `latest.pth.tar` (Ridge for stim/age regression,
+   LogisticRegression for binary cls + 20-way movie_id), saving per-clip
+   predictions to `saved_predictions/preds_seed{seed}.npz`. Then
+   `bootstrap_predictions` resamples those predictions at the recording
+   level and writes L1 + L2 metrics to `bootstrap_seed{seed}.json`.
 
 Configuration
 -------------
@@ -42,7 +45,7 @@ override. Sections:
   optim    — epochs, lr, lr_min, warmup_epochs
   logging  — wandb, log/save cadence
   eval     — auto_run, feature_names, visual_processing_delay_s,
-             probe epochs, bootstrap settings (post-training only)
+             n_passes, probe_seed, n_bootstrap (post-training only)
 
 Invoke
 ------
@@ -416,52 +419,46 @@ def _run_auto_eval(cfg, exp_dir, cfg_fname):
     from eb_jepa.evaluation import bootstrap_predictions, run_probe_eval
 
     eval_cfg = cfg.get("eval", {}) or {}
+    seed = cfg.meta.seed
     checkpoint_path = exp_dir / "latest.pth.tar"
     save_predictions_dir = exp_dir / "saved_predictions"
 
-    splits = eval_cfg.get("splits", "val,test")
-    probe_epochs = eval_cfg.get("probe_epochs", 20)
-    subject_probe_epochs = eval_cfg.get("subject_probe_epochs", 100)
     wandb_group = eval_cfg.get("wandb_group", "probe_eval_auto")
+    n_passes = eval_cfg.get("n_passes", 20)
+    probe_seed = eval_cfg.get("probe_seed", 42)
 
     logger.info("Auto-eval: running probe_eval on %s", checkpoint_path)
-    probe_run_id = ""
-    probe_project = "eb_jepa"
     try:
-        probe_metrics = run_probe_eval(
+        run_probe_eval(
             checkpoint=str(checkpoint_path),
             n_windows=cfg.data.n_windows,
             window_size_seconds=cfg.data.window_size_seconds,
             batch_size=cfg.data.batch_size,
             num_workers=cfg.data.num_workers,
-            probe_epochs=probe_epochs,
-            subject_probe_epochs=subject_probe_epochs,
-            splits=splits,
             norm_mode=cfg.data.norm_mode,
             add_envelope=cfg.data.add_envelope,
             corrca_filters=cfg.data.corrca_filters or "",
+            n_passes=n_passes,
+            probe_seed=probe_seed,
             save_predictions_dir=str(save_predictions_dir),
             wandb_group=wandb_group,
             fname=cfg_fname,
-            seed=cfg.meta.seed,
+            seed=seed,
         )
-        probe_run_id = probe_metrics.get("_wandb_run_id", "") or ""
-        probe_project = probe_metrics.get("_wandb_project", "eb_jepa") or "eb_jepa"
     except Exception as e:
         logger.warning("Auto-eval probe_eval failed: %s", e)
         return
 
-    bootstrap_split = eval_cfg.get("bootstrap_split", "test")
-    n_bootstrap = eval_cfg.get("n_bootstrap", 1000)
-    logger.info("Auto-eval: running bootstrap on %s split=%s (wandb_run_id=%s)",
-                save_predictions_dir, bootstrap_split, probe_run_id or "<none>")
+    predictions_npz = save_predictions_dir / f"preds_seed{seed}.npz"
+    bootstrap_out_json = exp_dir / f"bootstrap_seed{seed}.json"
+    n_bootstrap = eval_cfg.get("n_bootstrap", 2000)
+    logger.info("Auto-eval: running bootstrap on %s", predictions_npz)
     try:
         bootstrap_predictions(
-            predictions_dir=str(save_predictions_dir),
-            split=bootstrap_split,
+            predictions_npz=str(predictions_npz),
+            out_json=str(bootstrap_out_json),
             n_bootstrap=n_bootstrap,
-            wandb_run_id=probe_run_id,
-            wandb_project=probe_project,
+            seed=seed,
         )
     except Exception as e:
         logger.warning("Auto-eval bootstrap failed: %s", e)

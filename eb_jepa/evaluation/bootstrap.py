@@ -1,21 +1,31 @@
-"""Bootstrap probe_eval predictions over recordings to get population CIs.
+"""Recording-level bootstrap on probe_eval's saved per-clip predictions.
 
-Reads the per-split .npz files written by probe_eval.py when invoked with
---save_predictions_dir. For each metric (movie corr / cls AUC / movie_id
-top-k / subject trait), resamples recording indices with replacement B
-times and recomputes the metric → reports mean, std, and 95% CI.
+Reads test_*-prefixed keys ONLY from the saved NPZ (val_* are protocol-audit only,
+never reported). For each metric the per-clip array of shape (n_rec * n_passes,) is
+reshaped to (n_rec, n_passes), then B=2000 iterations resample n_rec indices with
+replacement and flatten back to (subset * n_passes,) before recomputing the metric.
 
-The seed-σ measured by re-running probe_eval with different seeds reflects
-*probe-init noise*. The bootstrap σ here reflects *population sampling
-noise* — the latter is what you'd want to compare to chance.
+Emits a JSON file in the {L1, L2, ...} shape consumed by
+`scripts/aggregate_and_print.py`:
+
+    {
+      "seed": <encoder seed>,
+      "probe_seed": <probe seed>,
+      "n_passes": <int>,
+      "n_bootstrap": <int>,
+      "L1": {metric: float, ...},          # single raw metric on full flat array
+      "L2": {metric: {mean, std, ci_lo, ci_hi}, ...}  # bootstrap mean & 95% CI
+    }
 
 Usage
 -----
 uv run --group eeg python -m eb_jepa.evaluation.bootstrap \\
-    --predictions_dir=/path/to/saved_predictions \\
-    --split=test --n_bootstrap=1000
+    --predictions_npz=/abs/path/preds_seed42.npz \\
+    --n_bootstrap=2000 \\
+    --out_json=/abs/path/L2_seed42.json
 """
 
+import json
 from pathlib import Path
 
 import fire
@@ -24,232 +34,273 @@ from scipy.stats import pearsonr
 from sklearn.metrics import balanced_accuracy_score, roc_auc_score
 
 
-def _safe_corr(y_true, y_pred):
-    if np.std(y_true) < 1e-10 or np.std(y_pred) < 1e-10:
-        return float("nan")
-    return float(pearsonr(y_pred, y_true).statistic)
+# ---------------------------------------------------------------------------
+# Metric helpers (safe to NaNs / degenerate inputs)
+# ---------------------------------------------------------------------------
 
-
-def _safe_auc(y_true, y_score):
-    if len(np.unique(y_true)) < 2:
+def _safe_corr(y, yhat):
+    if np.std(y) < 1e-10 or np.std(yhat) < 1e-10 or len(y) < 2:
         return float("nan")
     try:
-        return float(roc_auc_score(y_true, y_score))
+        return float(pearsonr(yhat, y).statistic)
+    except Exception:
+        return float("nan")
+
+
+def _safe_auc(y, p):
+    y = np.asarray(y); p = np.asarray(p)
+    valid = ~(np.isnan(y) | np.isnan(p))
+    y = y[valid]; p = p[valid]
+    if len(y) < 2 or len(np.unique(y)) < 2:
+        return float("nan")
+    try:
+        return float(roc_auc_score(y.astype(int), p))
+    except ValueError:
+        return float("nan")
+
+
+def _safe_bal_acc(y, p, threshold=0.5):
+    y = np.asarray(y); p = np.asarray(p)
+    valid = ~(np.isnan(y) | np.isnan(p))
+    y = y[valid]; p = p[valid]
+    if len(y) < 2 or len(np.unique(y)) < 2:
+        return float("nan")
+    yhat = (p > threshold).astype(int)
+    try:
+        return float(balanced_accuracy_score(y.astype(int), yhat))
     except ValueError:
         return float("nan")
 
 
 def _summarize(samples, alpha=0.05):
-    arr = np.array([s for s in samples if not np.isnan(s)])
+    arr = np.array([s for s in samples if not (s is None or np.isnan(s))])
     if len(arr) == 0:
         return {"mean": float("nan"), "std": float("nan"),
                 "ci_lo": float("nan"), "ci_hi": float("nan"), "n": 0}
     return {
         "mean": float(arr.mean()),
-        "std": float(arr.std(ddof=1)),
+        "std": float(arr.std(ddof=1)) if len(arr) > 1 else 0.0,
         "ci_lo": float(np.quantile(arr, alpha / 2)),
         "ci_hi": float(np.quantile(arr, 1 - alpha / 2)),
-        "n": len(arr),
+        "n": int(len(arr)),
     }
 
 
-def _bootstrap_movie(npz, n_bootstrap, rng):
-    """Bootstrap movie-feature regression corr & cls AUC over recordings.
+# ---------------------------------------------------------------------------
+# Bootstrap drivers
+# ---------------------------------------------------------------------------
 
-    movie_reg_preds, movie_cls_logits, movie_targets: [N_rec, T, n_features]
-    With one clip per rec and shuffle=False, axis 0 is rec_id.
+def _reshape_per_rec(flat, n_rec, n_passes):
+    """Reshape (n_rec * n_passes,) → (n_rec, n_passes). The probe_eval
+    extractor uses rec × passes (sequential) ordering for val/test so this is a
+    plain reshape, not a permutation."""
+    expected = n_rec * n_passes
+    assert flat.shape[0] == expected, (
+        f"Length mismatch: got {flat.shape[0]}, expected n_rec*n_passes={expected}"
+    )
+    extra = flat.shape[1:]
+    return flat.reshape((n_rec, n_passes) + extra)
+
+
+def _bootstrap_metric(pred_grp, tgt_grp, n_bootstrap, rng, kind):
+    """Resample n_rec recording indices with replacement, recompute metric.
+
+    kind ∈ {"corr", "auc", "bal_acc"}
     """
-    if "movie_reg_preds" not in npz:
-        return {}
-    reg_preds = npz["movie_reg_preds"]    # [N, T, F]
-    cls_logits = npz["movie_cls_logits"]
-    targets = npz["movie_targets"]
-    feature_names = list(npz["feature_names"])
-    f_mean = npz["feature_mean"]
-    f_std = npz["feature_std"]
-    f_median = npz["feature_median"]
-
-    # Unnormalize regression predictions
-    reg_preds_un = reg_preds * (f_std + 1e-8) + f_mean
-
-    # Flatten target binary labels
-    binary_targets = (targets > f_median).astype(int)
-    cls_probs = 1.0 / (1.0 + np.exp(-cls_logits))
-
-    n_rec = reg_preds.shape[0]
-    out = {}
-    for i, fname in enumerate(feature_names):
-        reg_corrs, cls_aucs, cls_baccs = [], [], []
-        for _ in range(n_bootstrap):
-            idx = rng.integers(0, n_rec, n_rec)
-            yb_pred = reg_preds_un[idx, :, i].ravel()
-            yb_targ = targets[idx, :, i].ravel()
-            reg_corrs.append(_safe_corr(yb_targ, yb_pred))
-
-            bin_idx = rng.integers(0, n_rec, n_rec)
-            yc_true = binary_targets[bin_idx, :, i].ravel()
-            yc_prob = cls_probs[bin_idx, :, i].ravel()
-            cls_aucs.append(_safe_auc(yc_true, yc_prob))
-            yc_pred = (yc_prob > 0.5).astype(int)
-            try:
-                cls_baccs.append(float(balanced_accuracy_score(yc_true, yc_pred)))
-            except ValueError:
-                cls_baccs.append(float("nan"))
-        out[f"reg_{fname}_corr"] = _summarize(reg_corrs)
-        out[f"cls_{fname}_auc"] = _summarize(cls_aucs)
-        out[f"cls_{fname}_bal_acc"] = _summarize(cls_baccs)
-    return out
-
-
-def _bootstrap_movie_id(npz, n_bootstrap, rng):
-    if "movie_id_logits" not in npz:
-        return {}
-    logits = npz["movie_id_logits"]            # [N, n_bins]
-    positions = npz["movie_id_positions"]      # [N]
-    bin_edges = npz["movie_id_bin_edges"]
-    n_bins = len(bin_edges) - 1
-    bin_labels = np.clip(np.digitize(positions, bin_edges) - 1, 0, n_bins - 1)
-    n = logits.shape[0]
-    top1, top5 = [], []
-    preds = logits.argmax(axis=1)
-    topk = np.argsort(-logits, axis=1)[:, :min(5, n_bins)]
-    correct1 = (preds == bin_labels).astype(float)
-    correct5 = (topk == bin_labels[:, None]).any(axis=1).astype(float)
+    n_rec = pred_grp.shape[0]
+    samples = []
     for _ in range(n_bootstrap):
-        idx = rng.integers(0, n, n)
-        top1.append(float(correct1[idx].mean()))
-        top5.append(float(correct5[idx].mean()))
-    return {"movie_id_top1": _summarize(top1),
-            "movie_id_top5": _summarize(top5),
-            "movie_id_chance": {"mean": 1.0 / n_bins, "std": 0,
-                                "ci_lo": 1.0 / n_bins, "ci_hi": 1.0 / n_bins, "n": 0}}
+        idx = rng.integers(0, n_rec, n_rec)
+        p = pred_grp[idx].reshape(-1)
+        t = tgt_grp[idx].reshape(-1)
+        if kind == "corr":
+            samples.append(_safe_corr(t, p))
+        elif kind == "auc":
+            samples.append(_safe_auc(t, p))
+        elif kind == "bal_acc":
+            samples.append(_safe_bal_acc(t, p))
+        else:
+            raise ValueError(kind)
+    return _summarize(samples)
 
 
-def _bootstrap_subject(npz, n_bootstrap, rng):
-    out = {}
-    npz_keys = list(npz.keys()) if isinstance(npz, dict) else list(npz.files)
-    keys = [k[5:-7] for k in npz_keys
-            if k.startswith("subj_") and k.endswith("_labels")]
-    for label_name in keys:
-        labels = npz[f"subj_{label_name}_labels"]
-        if f"subj_{label_name}_logits" in npz:
-            logits = npz[f"subj_{label_name}_logits"]
-            probs = 1.0 / (1.0 + np.exp(-logits))
-            preds = (probs > 0.5).astype(int)
-            valid = ~np.isnan(labels)
-            y_true = labels[valid].astype(int)
-            y_prob = probs[valid]
-            y_pred = preds[valid]
-            n = valid.sum()
-            aucs, baccs = [], []
-            for _ in range(n_bootstrap):
-                idx = rng.integers(0, n, n)
-                aucs.append(_safe_auc(y_true[idx], y_prob[idx]))
-                try:
-                    baccs.append(float(balanced_accuracy_score(y_true[idx], y_pred[idx])))
-                except ValueError:
-                    baccs.append(float("nan"))
-            out[f"{label_name}_auc"] = _summarize(aucs)
-            out[f"{label_name}_bal_acc"] = _summarize(baccs)
-        elif f"subj_{label_name}_pred_norm" in npz:
-            pred_norm = npz[f"subj_{label_name}_pred_norm"]
-            y_mean = float(npz[f"subj_{label_name}_y_mean"])
-            y_std = float(npz[f"subj_{label_name}_y_std"])
-            y_pred = pred_norm * y_std + y_mean
-            valid = ~np.isnan(labels)
-            y_true = labels[valid]
-            y_p = y_pred[valid]
-            n = valid.sum()
-            corrs, maes = [], []
-            for _ in range(n_bootstrap):
-                idx = rng.integers(0, n, n)
-                corrs.append(_safe_corr(y_true[idx], y_p[idx]))
-                maes.append(float(np.mean(np.abs(y_p[idx] - y_true[idx]))))
-            out[f"{label_name}_corr"] = _summarize(corrs)
-            out[f"{label_name}_mae"] = _summarize(maes)
-    return out
+def _bootstrap_movie_id(probs_grp, target_bin_grp, n_bootstrap, rng):
+    """Per-clip probs_grp: (n_rec, n_passes, n_bins). target_bin_grp: (n_rec, n_passes)."""
+    n_rec = probs_grp.shape[0]
+    n_bins = probs_grp.shape[-1]
+    k5 = min(5, n_bins)
+
+    # Precompute per-clip top1/top5 correctness
+    flat_probs = probs_grp.reshape(-1, n_bins)
+    flat_tgt = target_bin_grp.reshape(-1)
+    preds = flat_probs.argmax(axis=1)
+    top1 = (preds == flat_tgt).astype(np.float64).reshape(n_rec, -1)
+    top5_idx = np.argsort(-flat_probs, axis=1)[:, :k5]
+    top5 = (top5_idx == flat_tgt[:, None]).any(axis=1).astype(np.float64).reshape(n_rec, -1)
+
+    s1, s5 = [], []
+    for _ in range(n_bootstrap):
+        idx = rng.integers(0, n_rec, n_rec)
+        s1.append(float(top1[idx].mean()))
+        s5.append(float(top5[idx].mean()))
+    return _summarize(s1), _summarize(s5)
 
 
-def run(predictions_dir: str, split: str = "test",
-        n_bootstrap: int = 1000, seed: int = 0,
-        seeds_glob: str = "",
-        wandb_run_id: str = "", wandb_project: str = "eb_jepa"):
-    """Bootstrap recording-level CIs from saved predictions.
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
-    Args:
-        predictions_dir: Dir containing {split}_seed{S}.npz files.
-        split: Split to analyze ("val" or "test").
-        n_bootstrap: Number of bootstrap resamples per metric.
-        seed: RNG seed for bootstrap.
-        seeds_glob: If set, glob pattern matching multiple seed files; their
-                    predictions are averaged per recording before bootstrap.
-                    e.g. "test_seed*.npz" → avg over all seeds.
-        wandb_run_id: If set, resume this W&B run and log
-                      bootstrap/{split}/{metric}/{mean,std,ci_lo,ci_hi} so
-                      the CIs land on the same run as probe_eval.
-        wandb_project: W&B project (only used when wandb_run_id is set).
+def run(
+    predictions_npz: str,
+    out_json: str,
+    n_bootstrap: int = 2000,
+    seed: int = 0,
+    wandb_run_id: str = "",
+    wandb_project: str = "eb_jepa",
+):
+    """Bootstrap L2 + emit L1+L2 JSON for downstream aggregate_and_print.py.
 
-    Returns:
-        Dict mapping metric name to {mean, std, ci_lo, ci_hi, n}.
+    Args
+    ----
+    predictions_npz : path to NPZ written by probe_eval
+    out_json : where to write the per-seed L1+L2 JSON
+    n_bootstrap : bootstrap resamples (default 2000 per spec)
+    seed : RNG seed for resampling
     """
-    pred_dir = Path(predictions_dir)
+    npz_path = Path(predictions_npz)
+    assert npz_path.exists(), f"NPZ not found: {npz_path}"
+    out_path = Path(out_json)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    npz = dict(np.load(npz_path, allow_pickle=False))
+    n_passes = int(npz["n_passes"])
+    probe_seed = int(npz["probe_seed"])
+    enc_seed = int(npz["seed"])
+    rec_t = npz["test_rec_ids"]
+    n_rec = int(rec_t.max()) + 1
+    feature_names = [str(s) for s in npz["feature_names"]]
     rng = np.random.default_rng(seed)
 
-    if seeds_glob:
-        files = sorted(pred_dir.glob(seeds_glob))
-        if not files:
-            raise FileNotFoundError(f"No files matching {seeds_glob}")
-        print(f"Loading {len(files)} seed files: {[f.name for f in files]}")
-        npzs = [dict(np.load(f, allow_pickle=False)) for f in files]
-        # Average predictions across seeds (subject embeddings/logits identical
-        # only if encoder is deterministic; probe-trained heads vary by seed).
-        merged = {}
-        for k in npzs[0]:
-            vals = [d[k] for d in npzs]
-            try:
-                merged[k] = np.mean(np.stack(vals), axis=0)
-            except (ValueError, TypeError):
-                merged[k] = npzs[0][k]
-        npz = merged
-    else:
-        path = pred_dir / f"{split}_seed{seed}.npz"
-        if not path.exists():
-            cands = sorted(pred_dir.glob(f"{split}_seed*.npz"))
-            assert cands, f"No predictions found in {pred_dir}"
-            path = cands[0]
-        print(f"Loading {path}")
-        npz = dict(np.load(path, allow_pickle=False))
+    print(f"Loaded {npz_path.name}: n_rec={n_rec}, n_passes={n_passes}, "
+          f"encoder_seed={enc_seed}, probe_seed={probe_seed}")
 
-    print(f"\nBootstrap (B={n_bootstrap}) over recordings on '{split}':\n")
-    print(f"{'metric':<40} {'mean':>8} {'std':>8} {'95% CI':>20}")
-    print("-" * 78)
+    L1, L2 = {}, {}
 
-    results = {}
-    results.update(_bootstrap_movie(npz, n_bootstrap, rng))
-    results.update(_bootstrap_movie_id(npz, n_bootstrap, rng))
-    results.update(_bootstrap_subject(npz, n_bootstrap, rng))
+    # --- stim regression + classification --------------------------------
+    for fname_feat in feature_names:
+        rk = f"reg_{fname_feat}"
+        if f"test_{rk}_pred" in npz:
+            pred = npz[f"test_{rk}_pred"]
+            tgt = npz[f"test_{rk}_target"]
+            L1[f"{rk}_corr"] = _safe_corr(tgt, pred)
+            pred_g = _reshape_per_rec(pred, n_rec, n_passes)
+            tgt_g = _reshape_per_rec(tgt, n_rec, n_passes)
+            L2[f"{rk}_corr"] = _bootstrap_metric(pred_g, tgt_g, n_bootstrap, rng, "corr")
 
-    for name, s in results.items():
-        ci = f"[{s['ci_lo']:.3f}, {s['ci_hi']:.3f}]"
-        print(f"{name:<40} {s['mean']:>8.4f} {s['std']:>8.4f} {ci:>20}")
+        ck = f"cls_{fname_feat}"
+        if f"test_{ck}_prob" in npz:
+            prob = npz[f"test_{ck}_prob"]
+            tgt = npz[f"test_{ck}_target"]
+            L1[f"{ck}_auc"] = _safe_auc(tgt, prob)
+            L1[f"{ck}_bal_acc"] = _safe_bal_acc(tgt, prob)
+            prob_g = _reshape_per_rec(prob, n_rec, n_passes)
+            tgt_g = _reshape_per_rec(tgt, n_rec, n_passes)
+            L2[f"{ck}_auc"] = _bootstrap_metric(prob_g, tgt_g, n_bootstrap, rng, "auc")
+            L2[f"{ck}_bal_acc"] = _bootstrap_metric(prob_g, tgt_g, n_bootstrap, rng, "bal_acc")
 
+    # --- movie_id (top-1 / top-5) ----------------------------------------
+    if "test_movie_id_probs" in npz:
+        probs = npz["test_movie_id_probs"]            # (N, n_bins)
+        ybin = npz["test_movie_id_target_bin"]        # (N,)
+        n_bins = probs.shape[1]
+        # Flat L1
+        preds_flat = probs.argmax(axis=1)
+        k5 = min(5, n_bins)
+        top5_flat = np.argsort(-probs, axis=1)[:, :k5]
+        L1["movie_id_top1"] = float((preds_flat == ybin).mean())
+        L1["movie_id_top5"] = float((top5_flat == ybin[:, None]).any(axis=1).mean())
+
+        probs_g = _reshape_per_rec(probs, n_rec, n_passes)         # (n_rec, n_passes, n_bins)
+        ybin_g = _reshape_per_rec(ybin.astype(np.int64), n_rec, n_passes)
+        s1, s5 = _bootstrap_movie_id(probs_g, ybin_g, n_bootstrap, rng)
+        L2["movie_id_top1"] = s1
+        L2["movie_id_top5"] = s5
+
+    # --- age regression --------------------------------------------------
+    if "test_age_reg_pred" in npz:
+        pred = npz["test_age_reg_pred"]
+        tgt = npz["test_age_reg_target"]
+        valid = ~np.isnan(tgt)
+        if valid.any():
+            L1["age_reg_corr"] = _safe_corr(tgt[valid], pred[valid])
+            # Restrict to valid rows in (n_rec, n_passes) shape. Since age is per-rec
+            # (constant within a recording), NaN-validity is also per-rec.
+            pred_g = _reshape_per_rec(pred, n_rec, n_passes)
+            tgt_g = _reshape_per_rec(tgt, n_rec, n_passes)
+            rec_valid = ~np.isnan(tgt_g[:, 0])
+            L2["age_reg_corr"] = _bootstrap_metric(
+                pred_g[rec_valid], tgt_g[rec_valid], n_bootstrap, rng, "corr",
+            )
+
+    # --- sex AUC ---------------------------------------------------------
+    if "test_sex_prob" in npz:
+        prob = npz["test_sex_prob"]
+        tgt = npz["test_sex_target"]
+        valid = ~np.isnan(tgt)
+        if valid.any():
+            L1["sex_auc"] = _safe_auc(tgt[valid], prob[valid])
+            prob_g = _reshape_per_rec(prob, n_rec, n_passes)
+            tgt_g = _reshape_per_rec(tgt, n_rec, n_passes)
+            rec_valid = ~np.isnan(tgt_g[:, 0])
+            L2["sex_auc"] = _bootstrap_metric(
+                prob_g[rec_valid], tgt_g[rec_valid], n_bootstrap, rng, "auc",
+            )
+
+    # --- emit JSON -------------------------------------------------------
+    payload = {
+        "seed": enc_seed,
+        "probe_seed": probe_seed,
+        "n_passes": n_passes,
+        "n_bootstrap": n_bootstrap,
+        "n_rec_test": n_rec,
+        "predictions_npz": str(npz_path),
+        "L1": L1,
+        "L2": L2,
+    }
+    with open(out_path, "w") as f:
+        json.dump(payload, f, indent=2)
+    print(f"Wrote {out_path}")
+
+    # --- print summary table --------------------------------------------
+    print(f"\n{'metric':<40} {'L1':>9} {'L2 mean':>9} {'95% CI':>22}")
+    print("-" * 84)
+    for k in L1:
+        l1v = L1.get(k, float("nan"))
+        l2 = L2.get(k, {})
+        if l2:
+            ci = f"[{l2['ci_lo']:+.3f}, {l2['ci_hi']:+.3f}]"
+            print(f"{k:<40} {l1v:>+9.4f} {l2['mean']:>+9.4f} {ci:>22}")
+        else:
+            print(f"{k:<40} {l1v:>+9.4f}       —")
+
+    # --- W&B append ------------------------------------------------------
     if wandb_run_id:
         try:
             import wandb
             run = wandb.init(project=wandb_project, id=wandb_run_id, resume="must")
             flat = {}
-            for name, s in results.items():
+            for k, v in L1.items():
+                flat[f"bootstrap/L1/{k}"] = v
+            for k, s in L2.items():
                 for stat in ("mean", "std", "ci_lo", "ci_hi"):
-                    flat[f"bootstrap/{split}/{name}/{stat}"] = s[stat]
-            flat[f"bootstrap/{split}/n_bootstrap"] = n_bootstrap
+                    flat[f"bootstrap/L2/{k}/{stat}"] = s[stat]
+            flat["bootstrap/n_bootstrap"] = n_bootstrap
             run.log(flat)
             run.finish()
         except Exception as e:
             print(f"[bootstrap] W&B logging failed: {e}")
 
-    return results
-
-    return results
+    return payload
 
 
 if __name__ == "__main__":
