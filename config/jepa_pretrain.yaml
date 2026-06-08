@@ -9,12 +9,12 @@ data:
   batch_size: 64
   num_workers: 4
   task: ThePresent #[ThePresent, DespicableMe]  # str or list; recordings from all tasks are combined
-  n_windows: 4          # Number of windows per sample
+  n_windows: 1          # Number of windows per sample
   window_size_seconds: 2  # Window duration in seconds
   temporal_stride: 1      # Stride between sampled windows (1=contiguous, 4=8s apart)
   preprocessed: true     # Use preprocessed data (set true + preprocessed_dir to use)
   preprocessed_dir: null  # Auto-detects known paths; set explicitly to override
-  norm_mode: global       # "global" = dataset-wide mean/std; "per_recording" = removes subject fingerprint
+  norm_mode: per_recording       # "global" = dataset-wide mean/std; "per_recording" = removes subject fingerprint
   add_envelope: false     # Append 1-8 Hz analytic envelope as extra channels (doubles n_chans)
   corrca_filters: null    # null | str path (shared across tasks) | {task: path} for per-movie filters
                           # e.g. {ThePresent: corrca_filters_ThePresent.npz, DespicableMe: corrca_filters_DespicableMe.npz}
@@ -73,7 +73,7 @@ loss:
   pred_loss_type: mse  # Prediction loss: "mse" or "smooth_l1" (Huber, used in V-JEPA)
 
 optim:
-  epochs: 100
+  epochs: 50
   lr: 3.0e-4
   lr_min: 1.0e-6       # Cosine LR schedule minimum (set to 0 to disable schedule)
   warmup_epochs: 5     # Linear warmup epochs before cosine decay
