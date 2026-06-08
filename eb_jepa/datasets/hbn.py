@@ -922,8 +922,12 @@ class JEPAMovieDataset(HBNMovieDataset):
             len(self._probe_labels),
         )
 
-        # Compute or set per-channel normalization stats
-        if eeg_norm_stats is not None:
+        # Compute or set per-channel normalization stats. Skip entirely under
+        # per_recording mode -- __getitem__ computes mean/std per clip.
+        if self._norm_mode == "per_recording":
+            self._eeg_mean = None
+            self._eeg_std = None
+        elif eeg_norm_stats is not None:
             self._eeg_mean = eeg_norm_stats["mean"]
             self._eeg_std = eeg_norm_stats["std"]
         else:
