@@ -243,13 +243,15 @@ def run(
         mlp_dim_ratio=cfg.model.get("mlp_dim_ratio", 2.66),
     )
     use_ema = cfg.model.get("use_ema", True)
-    # LeJEPA recipe: SIGReg needs to act on the encoder probes read from.
-    # With EMA on, SIGReg pushes the trainable context encoder while probes
-    # read the EMA target — so force LeWM-style training when sigreg is on.
+    # SIGReg is incompatible with EMA: SIGReg pushes the trainable context
+    # encoder toward isotropic Gaussian while probes read the EMA target
+    # encoder — different representations. Refuse the combination rather
+    # than silently overriding the user's config.
     if cfg.loss.get("regularizer", "vc") == "sigreg" and use_ema:
-        print("[train] regularizer=sigreg → forcing use_ema=False (LeJEPA recipe)")
-        use_ema = False
-        cfg.model.use_ema = False  # reflect override in logged config
+        raise ValueError(
+            "regularizer=sigreg requires model.use_ema=false. "
+            "Pass --model.use_ema=false (LeJEPA recipe)."
+        )
     if use_ema:
         target_encoder = copy.deepcopy(encoder)
     predictor_dim = cfg.model.get("predictor_embed_dim", None)
@@ -293,7 +295,10 @@ def run(
     # Prediction loss type: "mse" (default) or "smooth_l1" (Huber, used in V-JEPA)
     pred_loss_type = cfg.loss.get("pred_loss_type", "mse")
 
-    if use_ema:
+    # Class selection: SIGReg requires the no-EMA architecture; otherwise
+    # follow the use_ema flag. (sigreg + use_ema=True already errored above.)
+    use_no_ema_arch = reg_type == "sigreg" or not use_ema
+    if not use_no_ema_arch:
         jepa = MaskedJEPA(
             encoder, target_encoder, predictor, mask_collator, regularizer,
             pred_loss_type=pred_loss_type,

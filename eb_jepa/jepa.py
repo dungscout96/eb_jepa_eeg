@@ -256,6 +256,14 @@ class MaskedJEPA(nn.Module):
     def __init__(self, context_encoder, target_encoder, predictor, mask_collator, regularizer=None,
                  pred_loss_type="mse"):
         super().__init__()
+        from eb_jepa.losses import SIGRegLoss
+        if isinstance(regularizer, SIGRegLoss):
+            raise ValueError(
+                "MaskedJEPA (EMA target) is incompatible with SIGRegLoss: "
+                "SIGReg constrains the trainable context encoder while probes "
+                "read the EMA target — different representations. "
+                "Use MaskedJEPANoEMA for SIGReg."
+            )
         self.context_encoder = context_encoder
         self.target_encoder = target_encoder
         self.predictor = predictor
@@ -278,11 +286,13 @@ class MaskedJEPA(nn.Module):
 
         Args:
             eeg: [B, T, C, W] raw EEG
-            global_step: training step (forwarded to step-seeded regularizers like SIGReg)
+            global_step: unused here (kept for call-site uniformity with
+                MaskedJEPANoEMA, which forwards it to SIGReg).
 
         Returns:
             (total_loss, loss_dict) where loss_dict contains individual loss components
         """
+        del global_step  # accepted for uniform signature, not used by VC regularizer
         B = eeg.shape[0]
         device = eeg.device
 
@@ -354,24 +364,10 @@ class MaskedJEPA(nn.Module):
         reg_loss = torch.tensor(0.0, device=device)
         total_loss = pred_loss
         if self.regularizer is not None:
-            from eb_jepa.losses import SIGRegLoss
-            if isinstance(self.regularizer, SIGRegLoss):
-                # NOTE: with EMA on, SIGReg pushes the trainable context encoder
-                # toward isotropic Gaussian while probes read the EMA target
-                # encoder — different representations. Prefer use_ema=false
-                # (LeJEPA recipe). Kept here for compatibility.
-                pooled = self.context_encoder.pool_to_windows(
-                    self.context_encoder.encode_tokens(eeg, mask=None)
-                )  # [B, D, T, 1, 1]
-                D = pooled.shape[1]
-                pooled = pooled.squeeze(-1).squeeze(-1).permute(0, 2, 1).reshape(-1, D)
-                reg_loss, _, reg_dict = self.regularizer(pooled, global_step)
-                lam = self.regularizer.coeff
-                total_loss = (1.0 - lam) * pred_loss + lam * reg_loss
-            else:
-                ctx_for_reg = ctx_tokens.permute(0, 2, 1).unsqueeze(-1).unsqueeze(-1)
-                reg_loss, _, reg_dict = self.regularizer(ctx_for_reg)
-                total_loss = pred_loss + reg_loss
+            # SIGReg is rejected at __init__ — only VC-style regularizers reach here.
+            ctx_for_reg = ctx_tokens.permute(0, 2, 1).unsqueeze(-1).unsqueeze(-1)
+            reg_loss, _, reg_dict = self.regularizer(ctx_for_reg)
+            total_loss = pred_loss + reg_loss
             loss_dict["reg_loss"] = reg_loss.item()
             loss_dict.update(reg_dict)
 

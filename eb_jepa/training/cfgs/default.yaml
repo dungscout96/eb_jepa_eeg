@@ -69,7 +69,7 @@ loss:
   cov_coeff: 1.0    # Covariance loss weight (reduced from 100)
   std_coeff: 1.0    # Standard deviation loss weight (reduced from 10)
   # SIGReg settings (only used when regularizer=sigreg).
-  # When regularizer=sigreg, use_ema is forced to false (LeJEPA recipe).
+  # regularizer=sigreg requires model.use_ema=false (errors otherwise).
   # Total loss = (1-coeff)*pred_loss + coeff*sigreg.
   sigreg:
     num_slices: 1024   # Number of random projection directions (paper default)
