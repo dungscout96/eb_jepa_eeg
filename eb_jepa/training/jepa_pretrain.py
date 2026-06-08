@@ -394,6 +394,7 @@ def run(
 
         scheduler.step()
 
+    wandb_run_id = wandb_run.id if wandb_run else ""
     if wandb_run:
         import wandb
         wandb.finish()
@@ -407,10 +408,10 @@ def run(
     # ------------------------------------------------------------------
     eval_cfg = cfg.get("eval", None)
     if eval_cfg is None or eval_cfg.get("auto_run", True):
-        _run_auto_eval(cfg, exp_dir, fname)
+        _run_auto_eval(cfg, exp_dir, fname, wandb_run_id=wandb_run_id)
 
 
-def _run_auto_eval(cfg, exp_dir, cfg_fname):
+def _run_auto_eval(cfg, exp_dir, cfg_fname, *, wandb_run_id: str = ""):
     """Run probe_eval + bootstrap on the just-saved checkpoint.
 
     Errors are logged but do not fail the training run -- the checkpoint
@@ -423,7 +424,6 @@ def _run_auto_eval(cfg, exp_dir, cfg_fname):
     checkpoint_path = exp_dir / "latest.pth.tar"
     save_predictions_dir = exp_dir / "saved_predictions"
 
-    wandb_group = eval_cfg.get("wandb_group", "probe_eval_auto")
     n_passes = eval_cfg.get("n_passes", 20)
     probe_seed = eval_cfg.get("probe_seed", 42)
 
@@ -441,7 +441,7 @@ def _run_auto_eval(cfg, exp_dir, cfg_fname):
             n_passes=n_passes,
             probe_seed=probe_seed,
             save_predictions_dir=str(save_predictions_dir),
-            wandb_group=wandb_group,
+            wandb_run_id=wandb_run_id,
             fname=cfg_fname,
             seed=seed,
         )
@@ -459,6 +459,7 @@ def _run_auto_eval(cfg, exp_dir, cfg_fname):
             out_json=str(bootstrap_out_json),
             n_bootstrap=n_bootstrap,
             seed=seed,
+            wandb_run_id=wandb_run_id,
         )
     except Exception as e:
         logger.warning("Auto-eval bootstrap failed: %s", e)

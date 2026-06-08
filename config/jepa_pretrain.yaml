@@ -95,7 +95,6 @@ eval:
   n_passes: 20              # Per-clip augmentation passes per recording
   probe_seed: 42            # Probe RNG seed (fix across encoder seeds)
   n_bootstrap: 2000         # Recording-level bootstrap resamples
-  wandb_group: probe_eval_auto
   # Movie feature columns the post-training probes target.
   feature_names:
     - contrast_rms

@@ -32,7 +32,6 @@ def _base_cfg(auto_run=True, **eval_overrides):
             "n_passes": 20,
             "probe_seed": 42,
             "n_bootstrap": 2000,
-            "wandb_group": "test_group",
             **eval_overrides,
         },
     }
@@ -69,7 +68,9 @@ def test_probe_eval_receives_expected_kwargs(tmp_path):
         pe.return_value = {}
         bs.return_value = {}
 
-        m._run_auto_eval(cfg, exp_dir, "config/jepa_pretrain.yaml")
+        m._run_auto_eval(
+            cfg, exp_dir, "config/jepa_pretrain.yaml", wandb_run_id="run-xyz"
+        )
 
         kwargs = pe.call_args.kwargs
         assert kwargs["checkpoint"] == str(exp_dir / "latest.pth.tar")
@@ -78,7 +79,7 @@ def test_probe_eval_receives_expected_kwargs(tmp_path):
         assert kwargs["window_size_seconds"] == 2
         assert kwargs["n_passes"] == 20
         assert kwargs["probe_seed"] == 42
-        assert kwargs["wandb_group"] == "test_group"
+        assert kwargs["wandb_run_id"] == "run-xyz"
         assert kwargs["seed"] == 42
         # corrca_filters=None in cfg becomes "" downstream
         assert kwargs["corrca_filters"] == ""
@@ -96,7 +97,9 @@ def test_bootstrap_receives_expected_kwargs(tmp_path):
         pe.return_value = {}
         bs.return_value = {}
 
-        m._run_auto_eval(cfg, exp_dir, "config/jepa_pretrain.yaml")
+        m._run_auto_eval(
+            cfg, exp_dir, "config/jepa_pretrain.yaml", wandb_run_id="run-xyz"
+        )
 
         kwargs = bs.call_args.kwargs
         assert kwargs["predictions_npz"] == str(
@@ -105,6 +108,7 @@ def test_bootstrap_receives_expected_kwargs(tmp_path):
         assert kwargs["out_json"] == str(exp_dir / "bootstrap_seed42.json")
         assert kwargs["n_bootstrap"] == 2000
         assert kwargs["seed"] == 42
+        assert kwargs["wandb_run_id"] == "run-xyz"
 
 
 def test_probe_eval_failure_does_not_propagate(tmp_path):
