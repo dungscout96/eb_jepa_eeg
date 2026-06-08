@@ -216,29 +216,23 @@ class TestWindowToFrameMapping:
 # 3. End-of-movie edge case handling
 # ===================================================================
 class TestEndOfMovieHandling:
-    """Windows that fall near or slightly past the movie end should be
-    clamped to the last frame's features (within 2-second tolerance)."""
+    """Windows whose computed frame falls outside the movie should return
+    None so callers can discard them. No clamping is performed."""
 
-    def test_window_slightly_past_movie_end_uses_last_frame(self):
-        """A window onset that maps to a frame just past frame_count should
-        still return valid features (the last row), as long as it's within
-        2 seconds (= 2*fps = 48 frames) past the movie end."""
+    def test_window_past_movie_end_returns_none(self):
+        """A window onset that maps to a frame past frame_count should
+        return None (out-of-bound), not clamp to the last frame."""
         n_frames = 100
         features = _make_movie_features(n_frames)
 
-        # Onset that maps to frame_count + 10 (within 48-frame tolerance)
-        # frame_index = int(onset / sfreq * fps) should exceed FRAME_COUNT
-        # but be within FRAME_COUNT + fps*2
-        target_frame = FRAME_COUNT + 10  # 4888
-        onset = int(target_frame / FPS * SFREQ)  # back-compute onset
+        target_frame = n_frames + 10
+        onset = int(target_frame / FPS * SFREQ)
 
         result = hbn.get_window_movie_metadata(
             window_onset=onset, sfreq=SFREQ, movie="ThePresent",
             movie_features=features, visual_processing_delay_s=0,
         )
-        # Should clamp to last row
-        expected = features.iloc[-1].to_dict()
-        assert result["frame_idx"] == expected["frame_idx"]
+        assert result is None
 
     def test_window_at_exact_last_frame(self):
         """Window at the exact last valid frame should work normally."""
@@ -281,16 +275,16 @@ class TestVisualProcessingDelay:
         )
         assert result["frame_idx"] == 24  # int(256/256 * 24)
 
-    def test_delay_clamps_negative_frame_to_zero(self):
+    def test_delay_drops_negative_frame_window(self):
         """When onset < delay_samples, frame index would be negative;
-        it should be clamped to 0."""
+        out-of-bound windows return None so callers can discard them."""
         features = _make_movie_features(100)
         # delay_samples = int(0.1 * 256) = 25, onset=10 < 25
         result = hbn.get_window_movie_metadata(
             window_onset=10, sfreq=SFREQ, movie="ThePresent",
             movie_features=features, visual_processing_delay_s=0.1,
         )
-        assert result["frame_idx"] == 0
+        assert result is None
 
 
 # ===================================================================
@@ -398,7 +392,6 @@ class TestGetItemOutputContract:
         ds = object.__new__(hbn.HBNMovieProbeDataset)
         ds.window_size_seconds = 2
         ds.task = "ThePresent"
-        ds.post_movie_visual_processing_s = hbn.DEFAULT_POST_MOVIE_VISUAL_PROCESSING_S
         ds.visual_processing_delay_s = hbn.VISUAL_PROCESSING_DELAY_S
         ds.sfreq = SFREQ
         n_samples = ds.window_size_seconds * SFREQ  # 512
@@ -484,7 +477,6 @@ class TestDataLoaderCollation:
         ds = object.__new__(hbn.HBNMovieProbeDataset)
         ds.window_size_seconds = 2
         ds.task = "ThePresent"
-        ds.post_movie_visual_processing_s = hbn.DEFAULT_POST_MOVIE_VISUAL_PROCESSING_S
         ds.visual_processing_delay_s = hbn.VISUAL_PROCESSING_DELAY_S
         ds.sfreq = SFREQ
         n_samples = ds.window_size_seconds * SFREQ

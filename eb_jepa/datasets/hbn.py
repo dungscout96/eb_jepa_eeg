@@ -72,11 +72,9 @@ DEFAULT_TASK = "ThePresent"
 
 # Default tolerances & thresholds (overridable via dataset constructor)
 # TODO: Verify
-VISUAL_PROCESSING_DELAY_S = 0.1
+VISUAL_PROCESSING_DELAY_S = 0.0
 DEFAULT_ANNOTATION_DURATION_TOLERANCE_S = 0.5
-DEFAULT_POST_MOVIE_VISUAL_PROCESSING_S = 2.0
 DEFAULT_MAX_RECORDING_OVERSHOOT_S = 60.0
-DEFAULT_TRIAL_STOP_OFFSET_S = 0.1
 
 MOVIE_METADATA = {
     "ThePresent": {
@@ -547,31 +545,23 @@ def get_window_movie_metadata(
     movie: str,
     movie_features: pd.DataFrame,
     *,
-    post_movie_visual_processing_s: float = DEFAULT_POST_MOVIE_VISUAL_PROCESSING_S,
     visual_processing_delay_s: float = VISUAL_PROCESSING_DELAY_S,
-) -> dict:
+) -> dict | None:
     """Map an EEG window onset (in samples) to the corresponding movie frame features.
 
     The EEG at *window_onset* reflects visual input from
     ``visual_processing_delay_s`` seconds earlier, so the frame index is
     computed from ``(window_onset - delay) / sfreq * fps``.
 
-    Assumes the movie starts at the same time as the recording with no dropped
-    frames.  Windows up to *post_movie_visual_processing_s* past the movie end
-    are clamped to the last available frame.
+    Returns ``None`` when the computed frame index falls outside the valid
+    range; callers are expected to discard such windows.
     """
     delay_samples = int(visual_processing_delay_s * sfreq)
     movie_timestamp = (window_onset - delay_samples) / sfreq
     frame_index = int(movie_timestamp * MOVIE_METADATA[movie]["fps"])
 
-    # Clamp to valid range (negative indices can occur when onset < delay).
-    frame_index = max(0, frame_index)
-
-    # Clamp frames that fall past the movie end.  Windows near the end of the
-    # movie may overshoot slightly due to annotation imprecision or the visual
-    # processing delay; always clamp to the last available frame.
-    if frame_index >= len(movie_features):
-        frame_index = len(movie_features) - 1
+    if frame_index < 0 or frame_index >= len(movie_features):
+        return None
 
     return movie_features.iloc[frame_index].to_dict()
 
@@ -621,6 +611,7 @@ class HBNMovieDataset(Dataset):
         task=DEFAULT_TASK,
         *,
         cfg: DictConfig | dict,
+        visual_processing_delay_s: float = 0.0,
         preprocessed: bool = False,
         preprocessed_dir: Path | str | None = None,
     ):
@@ -631,8 +622,7 @@ class HBNMovieDataset(Dataset):
         self.movie_features = {}
         for t in tasks:
             self.movie_features.update(_preload_movie_features(t))
-        self.post_movie_visual_processing_s = cfg.get("post_movie_visual_processing_s") if isinstance(cfg, dict) else cfg.post_movie_visual_processing_s
-        self.visual_processing_delay_s = cfg.get("visual_processing_delay_s") if isinstance(cfg, dict) else cfg.visual_processing_delay_s
+        self.visual_processing_delay_s = visual_processing_delay_s
         releases = _resolve_releases(split)
 
         self.sfreq = None
@@ -698,9 +688,6 @@ class HBNMovieDataset(Dataset):
             logger.info("Task %s: rejected %d/%d recordings", t, rejected, len(data.datasets))
 
             window_size_samples = int(window_size_seconds * sfreq)
-            visual_processing_delay = cfg.get("visual_processing_delay_s") if isinstance(cfg, dict) else cfg.visual_processing_delay_s
-            trial_stop_offset = cfg.get("trial_stop_offset_s") if isinstance(cfg, dict) else cfg.trial_stop_offset_s
-            trial_start_offset_samples = int(visual_processing_delay * sfreq)
 
             # Temporarily set self.task for _get_movie_features_for_window
             self.task = t
@@ -712,11 +699,15 @@ class HBNMovieDataset(Dataset):
                 events, event_id = mne.events_from_annotations(rec.raw, verbose=False)
                 video_start_sample = events[events[:, 2] == event_id["video_start"]][0, 0]
 
+                # Window grid starts exactly at video_start. Out-of-bound
+                # windows (label is None) are filtered below, so the EEG
+                # window at time t aligns with the movie frame at time
+                # t - visual_processing_delay_s.
                 window_ds = create_windows_from_events(
                     BaseConcatDataset([rec]),
                     mapping={"video_start": 0},
-                    trial_start_offset_samples=trial_start_offset_samples,
-                    trial_stop_offset_samples=-int(trial_stop_offset * sfreq),
+                    trial_start_offset_samples=0,
+                    trial_stop_offset_samples=0,
                     window_size_samples=window_size_samples,
                     window_stride_samples=window_size_samples,
                     drop_last_window=True,
@@ -733,6 +724,15 @@ class HBNMovieDataset(Dataset):
                 abs_onsets = window_meta_df["i_start_in_trial"]
                 window_onsets = abs_onsets - video_start_sample
                 movie_features_for_windows = window_onsets.apply(self._get_movie_features_for_window)
+
+                # Drop windows whose computed frame index fell out of bounds
+                # (returned None from get_window_movie_metadata).
+                keep_mask = movie_features_for_windows.notna().to_numpy()
+                if not keep_mask.any():
+                    logger.debug("All windows out-of-bound for %s; skipping", fif_path)
+                    continue
+                crop_inds = crop_inds[keep_mask]
+                movie_features_for_windows = movie_features_for_windows[keep_mask].reset_index(drop=True)
 
                 # Extract subject-level attributes (age, sex, …) from braindecode metadata.
                 # These are the same for every window in a recording, so we only look
@@ -789,13 +789,12 @@ class HBNMovieDataset(Dataset):
         logger.info("Total: rejected %d/%d recordings across %d task(s)",
                      total_rejected, total_recordings, len(tasks))
 
-    def _get_movie_features_for_window(self, window_onset) -> dict:
+    def _get_movie_features_for_window(self, window_onset) -> dict | None:
         return get_window_movie_metadata(
             window_onset=window_onset,
             sfreq=self.sfreq,
             movie=self.task,
             movie_features=self.movie_features[self.task],
-            post_movie_visual_processing_s=self.post_movie_visual_processing_s,
             visual_processing_delay_s=self.visual_processing_delay_s,
         )
 
@@ -835,16 +834,22 @@ class JEPAMovieDataset(HBNMovieDataset):
         temporal_stride=1,
         *,
         cfg: DictConfig | dict,
+        visual_processing_delay_s: float = 0.0,
         preprocessed: bool = False,
         preprocessed_dir: Path | str | None = None,
     ):
         super().__init__(
             split, window_size_seconds, task, cfg=cfg,
+            visual_processing_delay_s=visual_processing_delay_s,
             preprocessed=preprocessed, preprocessed_dir=preprocessed_dir,
         )
         self.n_windows = n_windows
         self.temporal_stride = temporal_stride
-        self.feature_names = feature_names or self.DEFAULT_FEATURES
+        # None → use class defaults; [] → skip feature extraction (e.g. JEPA
+        # pretraining doesn't need labels).
+        self.feature_names = (
+            list(self.DEFAULT_FEATURES) if feature_names is None else list(feature_names)
+        )
         self._norm_mode = cfg.get("norm_mode", "global") if not isinstance(cfg, dict) else cfg.get("norm_mode", "global")
         self._add_envelope = cfg.get("add_envelope", False) if not isinstance(cfg, dict) else cfg.get("add_envelope", False)
         # CorrCA spatial filters: project 129 channels → k stimulus-driven components
@@ -1109,12 +1114,14 @@ class HBNMovieProbeDataset(HBNMovieDataset):
         task=DEFAULT_TASK,
         *,
         cfg: DictConfig | dict,
+        visual_processing_delay_s: float = 0.0,
         preprocessed: bool = False,
         preprocessed_dir: Path | None = None,
     ):
         super().__init__(
             split, window_size_seconds, task,
             cfg=cfg,
+            visual_processing_delay_s=visual_processing_delay_s,
             preprocessed=preprocessed,
             preprocessed_dir=preprocessed_dir,
         )

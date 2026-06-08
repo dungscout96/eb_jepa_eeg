@@ -9,8 +9,8 @@ Components:
                        Invoke as: `python -m eb_jepa.training.jepa_pretrain ...`
   - `builder` -- shared MaskedJEPA builder used by training and probe-eval.
   - Default OmegaConf config lives at repo-root `config/jepa_pretrain.yaml`.
-  - `sbatch/canonical_*.sbatch` -- canonical Delta pipeline (pretrain ->
-                                   probe_eval_canonical -> bootstrap_canonical).
+  - `sbatch/canonical_*.sbatch` -- Delta pipeline (pretrain ->
+                                   probe_eval -> bootstrap).
 
 Legacy: `experiments/eeg_jepa/train.py` is preserved untouched as a frozen
 reproducibility snapshot of the pre-refactor entry point. Old sweeps under

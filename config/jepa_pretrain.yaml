@@ -18,18 +18,9 @@ data:
   add_envelope: false     # Append 1-8 Hz analytic envelope as extra channels (doubles n_chans)
   corrca_filters: null    # null | str path (shared across tasks) | {task: path} for per-movie filters
                           # e.g. {ThePresent: corrca_filters_ThePresent.npz, DespicableMe: corrca_filters_DespicableMe.npz}
-  # Movie feature names used for probe evaluation (regression + classification heads)
-  feature_names:
-    - contrast_rms
-    - luminance_mean
-    - position_in_movie
-    - narrative_event_score
   # HBN dataset parameters
   annotation_duration_tolerance_s: 1.0
-  post_movie_visual_processing_s: 2.0
   max_recording_overshoot_s: 60.0
-  trial_stop_offset_s: 0.1
-  visual_processing_delay_s: 0.3
 
 model:
   # REVE encoder architecture (n_chans auto-detected from data)
@@ -38,10 +29,6 @@ model:
   encoder_heads: 4
   encoder_head_dim: 16
 
-  # Decoder heads
-  hdec: 64          # Hidden dimension in movie feature heads
-  temporal_probe: false  # Concat global temporal mean to per-window probe input
-
   # Masked prediction (V-JEPA style)
   patch_size: 50         # Temporal patch size in samples
   patch_overlap: 20      # Overlap between patches
@@ -49,10 +36,6 @@ model:
   mlp_dim_ratio: 2.66   # FFN hidden dim = embed_dim * mlp_dim_ratio
   predictor_depth: 2     # Transformer depth for predictor (shallower than encoder)
   predictor_embed_dim: null  # Predictor bottleneck dim (null = same as encoder_embed_dim)
-  # EMA momentum schedule for the DINO anti-collapse strategy
-  # (ignored when loss.anti_collapse != "dino").
-  ema_momentum: 0.996
-  ema_momentum_end: 1.0
 
 masking:
   n_pred_masks_short: 2             # Number of short-range prediction masks
@@ -70,6 +53,11 @@ loss:
   #   "sigreg" — sketched Gaussianity test on pooled embeddings (LeJEPA).
   #   "none"   — no anti-collapse (representations will collapse; for ablations).
   anti_collapse: vicreg
+  # DINO settings (only used when anti_collapse=dino).
+  # Cosine EMA momentum schedule for the target encoder.
+  dino:
+    ema_momentum: 0.996
+    ema_momentum_end: 1.0
   # VICReg settings (only used when anti_collapse=vicreg)
   vicreg:
     std_coeff: 1.0      # Standard deviation (variance hinge) loss weight
@@ -86,7 +74,6 @@ loss:
 
 optim:
   epochs: 100
-  early_stopping_patience: 0  # 0 = disabled; N > 0 = stop after N epochs without val/reg_loss improvement
   lr: 3.0e-4
   lr_min: 1.0e-6       # Cosine LR schedule minimum (set to 0 to disable schedule)
   warmup_epochs: 5     # Linear warmup epochs before cosine decay
@@ -98,15 +85,6 @@ logging:
   save_every: 10      # Save checkpoint every N epochs
   tqdm_silent: false  # Disable tqdm progress bars
 
-sanity_checks:
-  enabled: true             # Set false to disable all sanity check logging
-  log_every_steps: 50       # How often (steps) to log embedding/collapse/grad metrics
-  probe_every_steps: 200    # How often (steps) to train & eval the downstream linear probe
-  probe_train_steps: 30     # SGD steps per linear probe evaluation round
-  probe_buffer_size: 512    # Max (embedding, label) samples kept for linear probe training
-  cosim_n_pairs: 128        # Random pairs for cosine-similarity collapse check
-  horizon_every_steps: 200  # How often (steps) to compute short vs long pred losses
-
 # Post-training auto-eval. When auto_run is true (default), the training
 # entry point invokes eb_jepa.evaluation.run_probe_eval on the saved
 # checkpoint, then eb_jepa.evaluation.bootstrap_predictions on the dumped
@@ -114,9 +92,17 @@ sanity_checks:
 # submit eval as its own job.
 eval:
   auto_run: true
-  splits: val,test          # Comma-separated list passed to run_probe_eval
-  probe_epochs: 20
-  subject_probe_epochs: 100
-  bootstrap_split: test     # Split to bootstrap CIs over
-  n_bootstrap: 1000         # Recording-level bootstrap resamples
+  n_passes: 20              # Per-clip augmentation passes per recording
+  probe_seed: 42            # Probe RNG seed (fix across encoder seeds)
+  n_bootstrap: 2000         # Recording-level bootstrap resamples
   wandb_group: probe_eval_auto
+  # Movie feature columns the post-training probes target.
+  feature_names:
+    - contrast_rms
+    - luminance_mean
+    - position_in_movie
+    - narrative_event_score
+  # EEG window at time t is paired with the movie frame at time
+  # t - visual_processing_delay_s. Windows whose paired frame falls
+  # outside the movie are discarded (no clamping). Sweepable.
+  visual_processing_delay_s: 0.0

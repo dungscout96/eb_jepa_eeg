@@ -219,11 +219,13 @@ def _build_dataset(n_windows, window_size_seconds, split, norm_mode, corrca_path
     preprocessed_dir = resolve_preprocessed_dir(cfg.data.get("preprocessed_dir", None))
     preprocessed = cfg.data.get("preprocessed", False)
     feature_names = list(cfg.data.get("feature_names", JEPAMovieDataset.DEFAULT_FEATURES))
+    visual_processing_delay_s = float(cfg.data.get("visual_processing_delay_s", 0.0))
 
     logger.info("Loading train set (for norm stats)...")
     train_set = JEPAMovieDataset(
         split="train", n_windows=n_windows, window_size_seconds=window_size_seconds,
         feature_names=feature_names, cfg=cfg.data,
+        visual_processing_delay_s=visual_processing_delay_s,
         preprocessed=preprocessed, preprocessed_dir=preprocessed_dir,
     )
     logger.info("Loading %s set...", split)
@@ -231,6 +233,7 @@ def _build_dataset(n_windows, window_size_seconds, split, norm_mode, corrca_path
         split=split, n_windows=n_windows, window_size_seconds=window_size_seconds,
         feature_names=feature_names, eeg_norm_stats=train_set.get_eeg_norm_stats(),
         cfg=cfg.data,
+        visual_processing_delay_s=visual_processing_delay_s,
         preprocessed=preprocessed, preprocessed_dir=preprocessed_dir,
     )
     return dataset

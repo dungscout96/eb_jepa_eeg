@@ -38,7 +38,6 @@ logger = logging.getLogger(__name__)
 
 # Probe-matched constants (see experiments/eeg_jepa/cfgs/default.yaml).
 SFREQ_RAW = 200
-VISUAL_DELAY_S = 0.3                # delay applied at dataset construction time
 DEFAULT_FEATURES = ("contrast_rms", "luminance_mean", "position_in_movie")
 DEFAULT_TASK = "ThePresent"
 
@@ -47,15 +46,15 @@ DEFAULT_TASK = "ThePresent"
 # Continuous data extraction
 # --------------------------------------------------------------------------
 
-def _video_start_sample(crop_inds: np.ndarray, sfreq: int) -> int:
-    """Recover the video_start absolute sample index from crop_inds.
+def _video_start_sample(raw: mne.io.BaseRaw) -> int:
+    """Read the absolute sample index of the ``video_start`` annotation.
 
-    JEPAMovieDataset's first window starts ``visual_processing_delay_s * sfreq``
-    samples after video_start (trial_start_offset_samples), so:
-        video_start = crop_inds[0, 1] - delay_samples
+    JEPAMovieDataset filters out windows whose paired frame is out-of-bound
+    (e.g. when ``visual_processing_delay_s > 0``), so ``crop_inds[0, 1]`` is
+    not a reliable proxy for video_start. Read the annotation directly.
     """
-    delay_samples = int(round(VISUAL_DELAY_S * sfreq))
-    return int(crop_inds[0, 1]) - delay_samples
+    events, event_id = mne.events_from_annotations(raw, verbose=False)
+    return int(events[events[:, 2] == event_id["video_start"]][0, 0])
 
 
 def load_continuous(
@@ -76,7 +75,7 @@ def load_continuous(
     sfreq = int(round(raw.info["sfreq"]))
     assert sfreq == SFREQ_RAW, f"unexpected sfreq {sfreq}"
 
-    vs = _video_start_sample(crop_inds, sfreq)
+    vs = _video_start_sample(raw)
     duration_s = MOVIE_METADATA[movie]["duration"]
     n_samples = int(duration_s * sfreq)
     start = max(0, vs)
