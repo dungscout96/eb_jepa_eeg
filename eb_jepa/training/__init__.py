@@ -7,7 +7,8 @@ depending on each other's local code.
 Components:
   - `jepa_pretrain` -- single-file pretraining CLI (Fire entry).
                        Invoke as: `python -m eb_jepa.training.jepa_pretrain ...`
-  - `cfgs/default.yaml` -- default OmegaConf config for jepa_pretrain.
+  - `builder` -- shared MaskedJEPA builder used by training and probe-eval.
+  - Default OmegaConf config lives at repo-root `config/jepa_pretrain.yaml`.
   - `sbatch/canonical_*.sbatch` -- canonical Delta pipeline (pretrain ->
                                    probe_eval_canonical -> bootstrap_canonical).
 

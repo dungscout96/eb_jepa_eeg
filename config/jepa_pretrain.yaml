@@ -49,9 +49,10 @@ model:
   mlp_dim_ratio: 2.66   # FFN hidden dim = embed_dim * mlp_dim_ratio
   predictor_depth: 2     # Transformer depth for predictor (shallower than encoder)
   predictor_embed_dim: null  # Predictor bottleneck dim (null = same as encoder_embed_dim)
-  use_ema: true           # Use EMA target encoder (V-JEPA style). Set false for LeWM style.
-  ema_momentum: 0.996    # EMA momentum start (ignored when use_ema=false)
-  ema_momentum_end: 1.0  # EMA momentum end (cosine schedule)
+  # EMA momentum schedule for the DINO anti-collapse strategy
+  # (ignored when loss.anti_collapse != "dino").
+  ema_momentum: 0.996
+  ema_momentum_end: 1.0
 
 masking:
   n_pred_masks_short: 2             # Number of short-range prediction masks
@@ -63,14 +64,19 @@ masking:
   min_context_fraction: 0.15        # Minimum fraction of tokens as context
 
 loss:
-  regularizer: vc     # "vc" (VCLoss), "sigreg", or "none" (when std/cov both 0)
-  use_projector: true # whether to wrap VICReg with Projector MLP (ignored for sigreg)
-  # VCLoss settings (only used when regularizer=vc)
-  cov_coeff: 1.0    # Covariance loss weight (reduced from 100)
-  std_coeff: 1.0    # Standard deviation loss weight (reduced from 10)
-  # SIGReg settings (only used when regularizer=sigreg).
-  # regularizer=sigreg requires model.use_ema=false (errors otherwise).
-  # Total loss = (1-coeff)*pred_loss + coeff*sigreg.
+  # Anti-collapse strategy. Each is wired to its canonical paper:
+  #   "dino"   — EMA target encoder (V-JEPA / DINO).
+  #   "vicreg" — variance/covariance loss on context tokens (VICReg).
+  #   "sigreg" — sketched Gaussianity test on pooled embeddings (LeJEPA).
+  #   "none"   — no anti-collapse (representations will collapse; for ablations).
+  anti_collapse: vicreg
+  # VICReg settings (only used when anti_collapse=vicreg)
+  vicreg:
+    std_coeff: 1.0      # Standard deviation (variance hinge) loss weight
+    cov_coeff: 1.0      # Covariance loss weight
+    use_projector: true # Wrap VICReg with a Projector MLP
+  # SIGReg settings (only used when anti_collapse=sigreg).
+  # Total loss = (1 - coeff) * pred_loss + coeff * sigreg.
   sigreg:
     num_slices: 1024   # Number of random projection directions (paper default)
     coeff: 0.05        # λ — convex weight on SIGReg vs pred_loss (paper default)

@@ -239,121 +239,91 @@ class JEPAProbe(nn.Module):
 
 
 class MaskedJEPA(nn.Module):
-    """V-JEPA style masked prediction for EEG.
+    """Masked-prediction JEPA composed with a pluggable anti-collapse strategy.
 
-    - context_encoder: processes only unmasked (context) tokens
-    - target_encoder: EMA copy, processes ALL tokens (no masking), frozen
-    - predictor: predicts masked token representations from context
+    A single online encoder produces both context and target tokens. The
+    ``anti_collapse`` argument decides:
+
+    - whether the targets come from an EMA copy of the encoder (DINO) or
+      from the online encoder (VICReg, SIGReg),
+    - whether gradients flow into the targets (SIGReg) or not (DINO, VICReg),
+    - whether an auxiliary loss is added and how it combines with the
+      prediction loss.
 
     Args:
-        context_encoder: EEGEncoderTokens instance (trainable)
-        target_encoder: EEGEncoderTokens instance (EMA copy, no gradients)
-        predictor: MaskedPredictor instance (trainable)
-        mask_collator: MultiBlockMaskCollator instance
-        regularizer: VCLoss or similar (optional, for anti-collapse)
+        encoder: EEGEncoderTokens instance (the single trainable encoder).
+        predictor: MaskedPredictor instance.
+        mask_collator: MultiBlockMaskCollator instance.
+        anti_collapse: AntiCollapse strategy (DINOAntiCollapse,
+            VICRegAntiCollapse, SIGRegAntiCollapse, or the base no-op).
+        pred_loss_type: "mse" or "smooth_l1".
     """
 
-    def __init__(self, context_encoder, target_encoder, predictor, mask_collator, regularizer=None,
+    def __init__(self, encoder, predictor, mask_collator, anti_collapse,
                  pred_loss_type="mse"):
         super().__init__()
-        from eb_jepa.losses import SIGRegLoss
-        if isinstance(regularizer, SIGRegLoss):
-            raise ValueError(
-                "MaskedJEPA (EMA target) is incompatible with SIGRegLoss: "
-                "SIGReg constrains the trainable context encoder while probes "
-                "read the EMA target — different representations. "
-                "Use MaskedJEPANoEMA for SIGReg."
-            )
-        self.context_encoder = context_encoder
-        self.target_encoder = target_encoder
+        self.encoder = encoder
         self.predictor = predictor
         self.mask_collator = mask_collator
-        self.regularizer = regularizer
+        self.anti_collapse = anti_collapse
         self.pred_loss_type = pred_loss_type
 
-        # Freeze target encoder
-        for p in self.target_encoder.parameters():
-            p.requires_grad = False
-
-    @torch.no_grad()
     def update_target_encoder(self, momentum: float):
-        """EMA update of target encoder from context encoder."""
-        for p_ctx, p_tgt in zip(self.context_encoder.parameters(), self.target_encoder.parameters()):
-            p_tgt.data.lerp_(p_ctx.data, 1.0 - momentum)
+        """Delegate to the anti-collapse strategy (no-op for VICReg/SIGReg)."""
+        self.anti_collapse.step(self.encoder, momentum)
 
     def forward(self, eeg: torch.Tensor, global_step: int = 0) -> tuple[torch.Tensor, dict]:
-        """Forward pass: mask, encode, predict, compute loss.
+        """Forward pass: mask, encode, predict, combine prediction + auxiliary loss.
 
         Args:
-            eeg: [B, T, C, W] raw EEG
-            global_step: unused here (kept for call-site uniformity with
-                MaskedJEPANoEMA, which forwards it to SIGReg).
+            eeg: [B, T, C, W] raw EEG.
+            global_step: training step; threaded to anti-collapse strategies
+                that need it (SIGReg seeds its random projection with it).
 
         Returns:
-            (total_loss, loss_dict) where loss_dict contains individual loss components
+            (total_loss, loss_dict) where loss_dict contains individual loss components.
         """
-        del global_step  # accepted for uniform signature, not used by VC regularizer
-        B = eeg.shape[0]
         device = eeg.device
 
-        # 1. Generate masks
         mask_result = self.mask_collator()
         context_mask = mask_result.context_mask.to(device)
         pred_masks = [pm.to(device) for pm in mask_result.pred_masks]
 
-        # 2. Get positional embeddings (full, unmasked)
-        _, pos_embed = self.context_encoder.tokenize(eeg)  # [B, C*T*P, D]
+        _, pos_embed = self.encoder.tokenize(eeg)  # [B, C*T*P, D]
+        ctx_tokens = self.encoder.encode_tokens(eeg, mask=context_mask)  # [B, n_ctx, D]
+        tgt_tokens = self.anti_collapse.target_representations(self.encoder, eeg)
 
-        # 3. Context encoding: only unmasked tokens
-        ctx_tokens = self.context_encoder.encode_tokens(eeg, mask=context_mask)  # [B, n_ctx, D]
+        ctx_pos = pos_embed[:, context_mask]
 
-        # 4. Target encoding: all tokens (no masking), no gradients
-        with torch.no_grad():
-            tgt_tokens = self.target_encoder.encode_tokens(eeg, mask=None)  # [B, C*T*P, D]
-
-        # 5. Gather positional embeddings for context and prediction targets
-        ctx_pos = pos_embed[:, context_mask]  # [B, n_ctx, D]
-
-        # Concatenate all prediction mask indices and their targets
         if len(pred_masks) == 0:
-            # No prediction masks (edge case) — return zero loss
             zero = torch.tensor(0.0, device=device, requires_grad=True)
-            return zero, {"pred_loss": 0.0, "reg_loss": 0.0}
+            return zero, {"pred_loss": 0.0, "ac_loss": 0.0}
 
         all_pred_indices = torch.cat(pred_masks).unique()
-        tgt_pos = pos_embed[:, all_pred_indices]  # [B, n_pred, D]
-        tgt_representations = tgt_tokens[:, all_pred_indices]  # [B, n_pred, D]
+        tgt_pos = pos_embed[:, all_pred_indices]
+        tgt_representations = tgt_tokens[:, all_pred_indices]
 
-        # 6. Predictor: predict representations at masked positions
-        predictions = self.predictor(ctx_tokens, ctx_pos, tgt_pos)  # [B, n_pred, D]
+        predictions = self.predictor(ctx_tokens, ctx_pos, tgt_pos)
 
-        # 7. Prediction loss between predictions and target representations
-        tgt_detached = tgt_representations.detach()
+        # Prediction loss. We do NOT call .detach() here: the anti-collapse
+        # strategy already controls grad flow into the target (DINO/VICReg
+        # have no graph on target_representations; SIGReg lets gradients
+        # flow on purpose).
         if self.pred_loss_type == "smooth_l1":
-            pred_loss = F.smooth_l1_loss(predictions, tgt_detached)
+            pred_loss = F.smooth_l1_loss(predictions, tgt_representations)
         else:
-            pred_loss = F.mse_loss(predictions, tgt_detached)
+            pred_loss = F.mse_loss(predictions, tgt_representations)
 
-        # 7b. Diagnostic metrics — distinguish "predictor learning" from
-        # "targets expanding under VC regularizer" (see issue: rising raw
-        # pred_loss while downstream regression improves).
+        # Diagnostics — distinguish "predictor learning" from "targets
+        # expanding under the anti-collapse loss".
         with torch.no_grad():
-            # Cosine similarity per token, averaged — scale-invariant
-            # measure of prediction quality.
-            pred_target_cosim = F.cosine_similarity(
-                predictions, tgt_detached, dim=-1
-            ).mean()
-            # Per-dim variance of targets, averaged across dims. Tracks
-            # how much the EMA target distribution is expanding.
-            tgt_flat = tgt_detached.reshape(-1, tgt_detached.shape[-1])
-            target_var = tgt_flat.var(dim=0).mean()
-            pred_flat = predictions.reshape(-1, predictions.shape[-1])
-            pred_var = pred_flat.var(dim=0).mean()
-            # Normalized pred loss: scale-corrected MSE. Should fall even
-            # when raw pred_loss rises if the predictor is genuinely learning.
+            tgt_d = tgt_representations.detach()
+            pred_d = predictions.detach()
+            pred_target_cosim = F.cosine_similarity(pred_d, tgt_d, dim=-1).mean()
+            target_var = tgt_d.reshape(-1, tgt_d.shape[-1]).var(dim=0).mean()
+            pred_var = pred_d.reshape(-1, pred_d.shape[-1]).var(dim=0).mean()
             pred_loss_norm = pred_loss.detach() / target_var.clamp_min(1e-8)
 
-        # 8. Regularizer loss (optional, on context representations)
         loss_dict = {
             "pred_loss": pred_loss.item(),
             "pred_target_cosim": pred_target_cosim.item(),
@@ -361,18 +331,29 @@ class MaskedJEPA(nn.Module):
             "pred_var": pred_var.item(),
             "pred_loss_norm": pred_loss_norm.item(),
         }
-        reg_loss = torch.tensor(0.0, device=device)
-        total_loss = pred_loss
-        if self.regularizer is not None:
-            # SIGReg is rejected at __init__ — only VC-style regularizers reach here.
-            ctx_for_reg = ctx_tokens.permute(0, 2, 1).unsqueeze(-1).unsqueeze(-1)
-            reg_loss, _, reg_dict = self.regularizer(ctx_for_reg)
-            total_loss = pred_loss + reg_loss
-            loss_dict["reg_loss"] = reg_loss.item()
-            loss_dict.update(reg_dict)
 
+        # Pool target tokens to per-window embeddings — the same shape probes
+        # consume. SIGRegAntiCollapse acts on this; other strategies ignore it.
+        pooled_map = self.encoder.pool_to_windows(tgt_tokens)  # [B, D, T, 1, 1]
+        D = pooled_map.shape[1]
+        pooled = pooled_map.squeeze(-1).squeeze(-1).permute(0, 2, 1).reshape(-1, D)
+
+        ac_loss, ac_dict = self.anti_collapse.auxiliary_loss(
+            context_tokens=ctx_tokens,
+            target_tokens=tgt_tokens,
+            pooled=pooled,
+            global_step=global_step,
+        )
+
+        if self.anti_collapse.combine_mode == "convex":
+            lam = self.anti_collapse.coeff
+            total_loss = (1.0 - lam) * pred_loss + lam * ac_loss
+        else:
+            total_loss = pred_loss + ac_loss
+
+        loss_dict["ac_loss"] = ac_loss.item() if torch.is_tensor(ac_loss) else float(ac_loss)
+        loss_dict.update(ac_dict)
         loss_dict["total_loss"] = total_loss.item()
-
         return total_loss, loss_dict
 
     @torch.no_grad()
@@ -384,134 +365,18 @@ class MaskedJEPA(nn.Module):
             eeg: [B, T, C, W]
             keep_channels: if True, ``pool_to_windows`` keeps the CorrCA
                 channel axis (concatenated into the feature dim →
-                [B, C*D, T, 1, 1]) instead of averaging it. See
-                ``EEGEncoderTokens.pool_to_windows``.
+                [B, C*D, T, 1, 1]) instead of averaging it.
 
         Returns:
             [B, D, T, 1, 1] (default) or [B, C*D, T, 1, 1] (keep_channels=True).
         """
-        tokens = self.context_encoder.encode_tokens(eeg, mask=None)
-        return self.context_encoder.pool_to_windows(
-            tokens, keep_channels=keep_channels,
-        )
-
-
-class MaskedJEPANoEMA(nn.Module):
-    """LeWorldModel-style masked prediction for EEG (no EMA target encoder).
-
-    Unlike MaskedJEPA, uses a single encoder for both context and target.
-    Gradients flow through both branches. SIGReg prevents collapse instead of EMA.
-
-    Reference: LeWorldModel (arXiv:2603.19312)
-    """
-
-    def __init__(self, encoder, predictor, mask_collator, regularizer,
-                 pred_loss_type="smooth_l1"):
-        super().__init__()
-        self.context_encoder = encoder  # single encoder, used for both context & target
-        self.predictor = predictor
-        self.mask_collator = mask_collator
-        self.regularizer = regularizer
-        self.pred_loss_type = pred_loss_type
-
-    def forward(self, eeg: torch.Tensor, global_step: int = 0) -> tuple[torch.Tensor, dict]:
-        B = eeg.shape[0]
-        device = eeg.device
-
-        # 1. Generate masks
-        mask_result = self.mask_collator()
-        context_mask = mask_result.context_mask.to(device)
-        pred_masks = [pm.to(device) for pm in mask_result.pred_masks]
-
-        # 2. Get positional embeddings
-        _, pos_embed = self.context_encoder.tokenize(eeg)
-
-        # 3. Full encoding (ALL tokens, WITH gradients — no EMA, no detach)
-        all_tokens = self.context_encoder.encode_tokens(eeg, mask=None)  # [B, C*T*P, D]
-
-        # 4. Context encoding (unmasked tokens only)
-        ctx_tokens = self.context_encoder.encode_tokens(eeg, mask=context_mask)  # [B, n_ctx, D]
-
-        # 5. Gather positions and targets
-        ctx_pos = pos_embed[:, context_mask]
-
-        if len(pred_masks) == 0:
-            zero = torch.tensor(0.0, device=device, requires_grad=True)
-            return zero, {"pred_loss": 0.0, "reg_loss": 0.0}
-
-        all_pred_indices = torch.cat(pred_masks).unique()
-        tgt_pos = pos_embed[:, all_pred_indices]
-        tgt_representations = all_tokens[:, all_pred_indices]  # gradients flow!
-
-        # 6. Predictor
-        predictions = self.predictor(ctx_tokens, ctx_pos, tgt_pos)
-
-        # 7. Prediction loss (NO .detach() — gradients flow through target)
-        if self.pred_loss_type == "smooth_l1":
-            pred_loss = F.smooth_l1_loss(predictions, tgt_representations)
-        else:
-            pred_loss = F.mse_loss(predictions, tgt_representations)
-
-        # 7b. Diagnostic metrics (see MaskedJEPA.forward for rationale).
-        with torch.no_grad():
-            tgt_d = tgt_representations.detach()
-            pred_target_cosim = F.cosine_similarity(
-                predictions.detach(), tgt_d, dim=-1
-            ).mean()
-            tgt_flat = tgt_d.reshape(-1, tgt_d.shape[-1])
-            pred_flat = predictions.detach().reshape(-1, predictions.shape[-1])
-            target_var = tgt_flat.var(dim=0).mean()
-            pred_var = pred_flat.var(dim=0).mean()
-            pred_loss_norm = pred_loss.detach() / target_var.clamp_min(1e-8)
-
-        loss_dict = {
-            "pred_loss": pred_loss.item(),
-            "pred_target_cosim": pred_target_cosim.item(),
-            "target_var": target_var.item(),
-            "pred_var": pred_var.item(),
-            "pred_loss_norm": pred_loss_norm.item(),
-        }
-        reg_loss = torch.tensor(0.0, device=device)
-        total_loss = pred_loss
-        if self.regularizer is not None:
-            from eb_jepa.losses import SIGRegLoss
-            if isinstance(self.regularizer, SIGRegLoss):
-                # Apply SIGReg on the same representation the probes consume:
-                # per-window pooled embeddings [B*T, D] (pool_to_windows mean-
-                # pools over channels and patches per window).
-                pooled = self.context_encoder.pool_to_windows(all_tokens)  # [B, D, T, 1, 1]
-                D = pooled.shape[1]
-                pooled = pooled.squeeze(-1).squeeze(-1).permute(0, 2, 1).reshape(-1, D)
-                reg_loss, _, reg_dict = self.regularizer(pooled, global_step)
-                lam = self.regularizer.coeff
-                total_loss = (1.0 - lam) * pred_loss + lam * reg_loss
-            else:
-                ctx_for_reg = ctx_tokens.permute(0, 2, 1).unsqueeze(-1).unsqueeze(-1)
-                reg_loss, _, reg_dict = self.regularizer(ctx_for_reg)
-                total_loss = pred_loss + reg_loss
-            loss_dict["reg_loss"] = reg_loss.item()
-            loss_dict.update(reg_dict)
-
-        loss_dict["total_loss"] = total_loss.item()
-        return total_loss, loss_dict
-
-    @torch.no_grad()
-    def encode(self, eeg: torch.Tensor,
-               keep_channels: bool = False) -> torch.Tensor:
-        tokens = self.context_encoder.encode_tokens(eeg, mask=None)
-        return self.context_encoder.pool_to_windows(
-            tokens, keep_channels=keep_channels,
-        )
-
-    def update_target_encoder(self, momentum: float):
-        """No-op — no EMA in this architecture."""
-        pass
+        tokens = self.encoder.encode_tokens(eeg, mask=None)
+        return self.encoder.pool_to_windows(tokens, keep_channels=keep_channels)
 
 
 class MaskedJEPAProbe(nn.Module):
     """Probe for MaskedJEPA: trains a head on frozen encoder representations.
 
-    Similar to JEPAProbe but works with MaskedJEPA's token-based encoder.
     Pass ``keep_channels=True`` to expose per-CorrCA-channel state to the
     probe head (probe input dim grows from D to C*D).
     """

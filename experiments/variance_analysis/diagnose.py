@@ -233,8 +233,8 @@ def main():
     cfg = load_config(args.config, {
         "model.encoder_depth": 2,
         "optim.lr": 5e-4,
-        "loss.std_coeff": 0.25,
-        "loss.cov_coeff": 0.25,
+        "loss.vicreg.std_coeff": 0.25,
+        "loss.vicreg.cov_coeff": 0.25,
     })
 
     print("Loading validation dataset...")

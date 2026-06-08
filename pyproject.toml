@@ -26,6 +26,11 @@ dependencies = [
     "scikit-learn>=1.7.0",
     "scipy",
     "torch==2.6.0",
+    # torchaudio is a transitive dep of braindecode; pin it to the matching
+    # release so resolution doesn't pull a newer wheel built against a CUDA
+    # toolkit incompatible with torch 2.6.0 (causes `libcudart.so.13` /
+    # `_aoti_torch_abi_version` errors at import time).
+    "torchaudio==2.6.0",
     "wandb[media]>=0.21.1",
     "seaborn",
     "submitit",
@@ -33,6 +38,7 @@ dependencies = [
     "omegaconf",
     "ruamel.yaml",
     "hydra-core",
+    "pyarrow",  # pandas parquet engine (movie-feature tables)
 ]
 requires-python = "==3.12.*"
 

@@ -197,7 +197,7 @@ class SanityCheckHook:
 
         with torch.no_grad():
             # Full encoding without masking → [B, N_tokens, D]
-            tokens = jepa.context_encoder.encode_tokens(eeg, mask=None)
+            tokens = jepa.encoder.encode_tokens(eeg, mask=None)
             # Pool over tokens → [B, D]
             emb = tokens.mean(dim=1)
 
@@ -236,7 +236,7 @@ class SanityCheckHook:
         """Combined L2 gradient norm for context encoder + predictor parameters."""
         total_sq = 0.0
         n_with_grad = 0
-        for module in (jepa.context_encoder, jepa.predictor):
+        for module in (jepa.encoder, jepa.predictor):
             for p in module.parameters():
                 if p.grad is not None:
                     total_sq += p.grad.data.norm(2).item() ** 2
@@ -290,11 +290,13 @@ class SanityCheckHook:
                 short_masks = all_pred_masks[:n_short]
                 long_masks = all_pred_masks[n_short:]
 
-                _, pos_embed = jepa.context_encoder.tokenize(eeg)
-                ctx_tokens = jepa.context_encoder.encode_tokens(
+                _, pos_embed = jepa.encoder.tokenize(eeg)
+                ctx_tokens = jepa.encoder.encode_tokens(
                     eeg, mask=context_mask
                 )
-                tgt_tokens = jepa.target_encoder.encode_tokens(eeg, mask=None)
+                tgt_tokens = jepa.anti_collapse.target_representations(
+                    jepa.encoder, eeg
+                )
                 ctx_pos = pos_embed[:, context_mask]
 
                 result: dict[str, float] = {}
@@ -334,7 +336,7 @@ class SanityCheckHook:
              provided ``feature_median`` was supplied at construction time.
         """
         with torch.no_grad():
-            tokens = jepa.context_encoder.encode_tokens(eeg, mask=None)
+            tokens = jepa.encoder.encode_tokens(eeg, mask=None)
             emb = tokens.mean(dim=1).cpu()  # [B, D]
 
         B = emb.shape[0]
