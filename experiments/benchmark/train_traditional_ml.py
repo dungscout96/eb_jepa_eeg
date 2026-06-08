@@ -222,7 +222,7 @@ def generate_report(results_df, results_dir):
 
 # ===================== Main =====================
 
-@hydra.main(version_base=None, config_path="../config", config_name="default")
+@hydra.main(version_base=None, config_path="../config", config_name="benchmark")
 def main(cfg: DictConfig):
     results_dir = Path(hydra.core.hydra_config.HydraConfig.get().runtime.output_dir)
     results_dir.mkdir(parents=True, exist_ok=True)

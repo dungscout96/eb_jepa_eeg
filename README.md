@@ -39,7 +39,7 @@ eb_jepa/                       # the library
 config/                        # OmegaConf / Hydra configs
   jepa_pretrain.yaml           # JEPA pretraining defaults
   preprocess_hbn.yaml          # HBN preprocessing defaults
-  default.yaml                 # benchmark experiment defaults
+  benchmark.yaml               # benchmark experiment defaults
 
 experiments/                   # one folder per study
   eeg_jepa/                    # FROZEN legacy snapshot of the original entry point
