@@ -23,7 +23,6 @@ uv run --group eeg python -m eb_jepa.evaluation.probe_eval_canonical \\
     --save_predictions_dir=/abs/path/preds --seed=42
 """
 
-import copy
 import json
 import math
 from pathlib import Path
@@ -36,12 +35,9 @@ from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.metrics import balanced_accuracy_score, roc_auc_score
 from scipy.stats import pearsonr
 
-from eb_jepa.architectures import EEGEncoderTokens, MaskedPredictor, Projector
+from eb_jepa.training.builder import build_jepa, check_old_checkpoint_format
 from eb_jepa.datasets.hbn import JEPAMovieDataset
-from eb_jepa.jepa import MaskedJEPA
 from eb_jepa.logging import get_logger
-from eb_jepa.losses import VCLoss
-from eb_jepa.masking import MultiBlockMaskCollator
 from eb_jepa.paths import resolve_preprocessed_dir
 from eb_jepa.training_utils import load_checkpoint, load_config, setup_device, setup_seed
 
@@ -195,10 +191,11 @@ def run(
 
     # Infer encoder_depth and predictor_embed_dim from saved state_dict
     _ckpt_sd = torch.load(checkpoint_path, map_location="cpu", weights_only=False).get("model_state_dict", {})
+    check_old_checkpoint_format(_ckpt_sd)
     _depth = max(
         int(k.split(".")[3]) + 1
         for k in _ckpt_sd
-        if k.startswith("context_encoder.transformer.layers.")
+        if k.startswith("encoder.transformer.layers.")
     )
     if "predictor.input_proj.weight" in _ckpt_sd:
         _pred_dim = int(_ckpt_sd["predictor.input_proj.weight"].shape[0])
@@ -267,46 +264,12 @@ def run(
     # ------------------------------------------------------------------
     n_chans = train_set.n_chans
     n_times = train_set.n_times
-    embed_dim = cfg.model.encoder_embed_dim
     chs_info = train_set.get_chs_info()
-    masking_cfg = cfg.get("masking", {})
 
-    encoder = EEGEncoderTokens(
-        n_chans=n_chans, n_times=n_times, embed_dim=embed_dim,
-        depth=cfg.model.encoder_depth, heads=cfg.model.encoder_heads,
-        head_dim=cfg.model.encoder_head_dim, n_windows=n_windows,
-        patch_size=cfg.model.get("patch_size", 50),
-        patch_overlap=cfg.model.get("patch_overlap", 20),
-        freqs=cfg.model.get("freqs", 4),
-        chs_info=chs_info,
-        mlp_dim_ratio=cfg.model.get("mlp_dim_ratio", 2.66),
-    )
-    target_encoder = copy.deepcopy(encoder)
-    predictor = MaskedPredictor(
-        embed_dim=embed_dim,
-        depth=cfg.model.get("predictor_depth", 2),
-        heads=cfg.model.encoder_heads,
-        head_dim=cfg.model.encoder_head_dim,
-        mlp_dim_ratio=cfg.model.get("mlp_dim_ratio", 2.66),
-        predictor_dim=cfg.model.get("predictor_embed_dim", None),
-    )
-    mask_collator = MultiBlockMaskCollator(
-        n_channels=n_chans, n_windows=n_windows,
-        n_patches_per_window=encoder.n_patches_per_window,
-        n_pred_masks_short=masking_cfg.get("n_pred_masks_short", 2),
-        n_pred_masks_long=masking_cfg.get("n_pred_masks_long", 2),
-        short_channel_scale=tuple(masking_cfg.get("short_channel_scale", [0.08, 0.15])),
-        short_patch_scale=tuple(masking_cfg.get("short_patch_scale", [0.3, 0.6])),
-        long_channel_scale=tuple(masking_cfg.get("long_channel_scale", [0.15, 0.35])),
-        long_patch_scale=tuple(masking_cfg.get("long_patch_scale", [0.5, 1.0])),
-        min_context_fraction=masking_cfg.get("min_context_fraction", 0.15),
-    )
-    regularizer = None
-    if any(k.startswith("regularizer.") for k in _ckpt_sd):
-        projector = Projector(f"{embed_dim}-{embed_dim * 4}-{embed_dim * 4}")
-        regularizer = VCLoss(cfg.loss.std_coeff, cfg.loss.cov_coeff, proj=projector)
-
-    jepa = MaskedJEPA(encoder, target_encoder, predictor, mask_collator, regularizer).to(device)
+    jepa = build_jepa(
+        cfg, n_chans=n_chans, n_times=n_times,
+        chs_info=chs_info, n_windows=n_windows,
+    ).to(device)
     ckpt_info = load_checkpoint(checkpoint_path, jepa, optimizer=None, device=device, strict=False)
     logger.info("Loaded checkpoint at epoch %d", ckpt_info.get("epoch", "?"))
     for p in jepa.parameters():

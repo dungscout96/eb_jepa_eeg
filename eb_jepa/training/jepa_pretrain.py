@@ -20,7 +20,6 @@ Promoted from `experiments/eeg_jepa/train.py` (which is preserved as a legacy
 frozen snapshot for reproducibility of prior runs).
 """
 
-import copy
 import math
 from pathlib import Path
 
@@ -33,24 +32,17 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from eb_jepa.anti_collapse import DINOAntiCollapse
 from eb_jepa.architectures import (
-    EEGEncoderTokens,
-    MaskedPredictor,
     MovieFeatureHead,
-    Projector,
     TemporalMovieFeatureHead,
 )
 from eb_jepa.datasets.hbn import JEPAMovieDataset
-from eb_jepa.jepa import MaskedJEPA, MaskedJEPANoEMA, MaskedJEPAProbe
+from eb_jepa.jepa import MaskedJEPAProbe
 from eb_jepa.logging import get_logger
-from eb_jepa.losses import (
-    ClassificationLoss,
-    RegressionLoss,
-    SIGRegLoss,
-    VCLoss,
-)
-from eb_jepa.masking import MultiBlockMaskCollator
+from eb_jepa.losses import ClassificationLoss, RegressionLoss
 from eb_jepa.paths import resolve_preprocessed_dir
+from eb_jepa.training.builder import build_jepa
 from eb_jepa.sanity_checks import SanityCheckHook
 from eb_jepa.training_utils import (
     get_default_dev_name,
@@ -111,21 +103,27 @@ def run(
         else:
             sweep_name = get_default_dev_name()
             stride_suffix = f"_stride{temporal_stride}" if temporal_stride > 1 else ""
-            reg_type = cfg.loss.get("regularizer", "vc")
-            _up = cfg.loss.get("use_projector", True)
-            use_proj = _up if isinstance(_up, bool) else str(_up).lower() not in ("false", "0", "no")
-            if reg_type == "sigreg":
-                reg_suffix = f"_sigreg{cfg.loss.sigreg.get('coeff', 0.1)}"
-            elif cfg.loss.std_coeff > 0 or cfg.loss.cov_coeff > 0:
+            ac_type = cfg.loss.get("anti_collapse", "vicreg")
+            if ac_type == "dino":
+                ac_suffix = "_dino"
+            elif ac_type == "sigreg":
+                ac_suffix = f"_sigreg{cfg.loss.sigreg.get('coeff', 0.1)}"
+            elif ac_type == "vicreg":
+                vicreg_cfg = cfg.loss.get("vicreg", {})
+                _up = vicreg_cfg.get("use_projector", True)
+                use_proj = _up if isinstance(_up, bool) else str(_up).lower() not in ("false", "0", "no")
                 proj_suffix = "" if use_proj else "_noproj"
-                reg_suffix = f"_std{cfg.loss.std_coeff}_cov{cfg.loss.cov_coeff}{proj_suffix}"
+                ac_suffix = (
+                    f"_vicreg_std{vicreg_cfg.get('std_coeff', 1.0)}"
+                    f"_cov{vicreg_cfg.get('cov_coeff', 1.0)}{proj_suffix}"
+                )
             else:
-                reg_suffix = "_noreg"
+                ac_suffix = "_noac"
             nw_suffix = f"_nw{cfg.data.n_windows}_ws{cfg.data.window_size_seconds}s"
             exp_name = (
                 f"eeg_jepa_bs{cfg.data.batch_size}"
                 f"_lr{cfg.optim.lr}"
-                f"{reg_suffix}"
+                f"{ac_suffix}"
                 f"{nw_suffix}"
                 f"{stride_suffix}"
             )
@@ -226,88 +224,15 @@ def run(
     # ------------------------------------------------------------------
     logger.info("Initializing model...")
     embed_dim = cfg.model.encoder_embed_dim
-    masking_cfg = cfg.get("masking", {})
 
-    encoder = EEGEncoderTokens(
+    jepa = build_jepa(
+        cfg,
         n_chans=n_chans,
         n_times=n_times,
-        embed_dim=embed_dim,
-        depth=cfg.model.encoder_depth,
-        heads=cfg.model.encoder_heads,
-        head_dim=cfg.model.encoder_head_dim,
-        n_windows=cfg.data.n_windows,
-        patch_size=cfg.model.get("patch_size", 200),
-        patch_overlap=cfg.model.get("patch_overlap", 20),
-        freqs=cfg.model.get("freqs", 4),
         chs_info=chs_info,
-        mlp_dim_ratio=cfg.model.get("mlp_dim_ratio", 2.66),
-    )
-    use_ema = cfg.model.get("use_ema", True)
-    # SIGReg is incompatible with EMA: SIGReg pushes the trainable context
-    # encoder toward isotropic Gaussian while probes read the EMA target
-    # encoder — different representations. Refuse the combination rather
-    # than silently overriding the user's config.
-    if cfg.loss.get("regularizer", "vc") == "sigreg" and use_ema:
-        raise ValueError(
-            "regularizer=sigreg requires model.use_ema=false. "
-            "Pass --model.use_ema=false (LeJEPA recipe)."
-        )
-    if use_ema:
-        target_encoder = copy.deepcopy(encoder)
-    predictor_dim = cfg.model.get("predictor_embed_dim", None)
-    predictor = MaskedPredictor(
-        embed_dim=embed_dim,
-        depth=cfg.model.get("predictor_depth", 2),
-        heads=cfg.model.encoder_heads,
-        head_dim=cfg.model.encoder_head_dim,
-        mlp_dim_ratio=cfg.model.get("mlp_dim_ratio", 2.66),
-        predictor_dim=predictor_dim,
-    )
-    mask_collator = MultiBlockMaskCollator(
-        n_channels=n_chans,
         n_windows=cfg.data.n_windows,
-        n_patches_per_window=encoder.n_patches_per_window,
-        n_pred_masks_short=masking_cfg.get("n_pred_masks_short", 2),
-        n_pred_masks_long=masking_cfg.get("n_pred_masks_long", 2),
-        short_channel_scale=tuple(masking_cfg.get("short_channel_scale", [0.08, 0.15])),
-        short_patch_scale=tuple(masking_cfg.get("short_patch_scale", [0.3, 0.6])),
-        long_channel_scale=tuple(masking_cfg.get("long_channel_scale", [0.15, 0.35])),
-        long_patch_scale=tuple(masking_cfg.get("long_patch_scale", [0.5, 1.0])),
-        min_context_fraction=masking_cfg.get("min_context_fraction", 0.15),
-    )
-    # Regularizer — VCLoss, SIGReg, or none
-    regularizer = None
-    reg_type = cfg.loss.get("regularizer", "vc")
-    _use_proj_raw = cfg.loss.get("use_projector", True)
-    use_proj = _use_proj_raw if isinstance(_use_proj_raw, bool) else str(_use_proj_raw).lower() not in ("false", "0", "no")
-    if reg_type == "sigreg":
-        sigreg_cfg = cfg.loss.get("sigreg", {})
-        regularizer = SIGRegLoss(
-            num_slices=sigreg_cfg.get("num_slices", 1024),
-            coeff=sigreg_cfg.get("coeff", 0.05),
-            ep_t_range=sigreg_cfg.get("ep_t_range", 5.0),
-            ep_n_points=sigreg_cfg.get("ep_n_points", 17),
-        )
-    elif cfg.loss.std_coeff > 0 or cfg.loss.cov_coeff > 0:
-        projector = Projector(f"{embed_dim}-{embed_dim * 4}-{embed_dim * 4}") if use_proj else None
-        regularizer = VCLoss(cfg.loss.std_coeff, cfg.loss.cov_coeff, proj=projector)
-
-    # Prediction loss type: "mse" (default) or "smooth_l1" (Huber, used in V-JEPA)
-    pred_loss_type = cfg.loss.get("pred_loss_type", "mse")
-
-    # Class selection: SIGReg requires the no-EMA architecture; otherwise
-    # follow the use_ema flag. (sigreg + use_ema=True already errored above.)
-    use_no_ema_arch = reg_type == "sigreg" or not use_ema
-    if not use_no_ema_arch:
-        jepa = MaskedJEPA(
-            encoder, target_encoder, predictor, mask_collator, regularizer,
-            pred_loss_type=pred_loss_type,
-        ).to(device)
-    else:
-        jepa = MaskedJEPANoEMA(
-            encoder, predictor, mask_collator, regularizer,
-            pred_loss_type=pred_loss_type,
-        ).to(device)
+    ).to(device)
+    is_dino = isinstance(jepa.anti_collapse, DINOAntiCollapse)
 
     # ------------------------------------------------------------------
     # Online evaluation probes (trained on frozen encoder representations)
@@ -327,8 +252,8 @@ def run(
     log_model_info(
         jepa,
         {
-            "encoder": sum(p.numel() for p in encoder.parameters()),
-            "predictor": sum(p.numel() for p in predictor.parameters()),
+            "encoder": sum(p.numel() for p in jepa.encoder.parameters()),
+            "predictor": sum(p.numel() for p in jepa.predictor.parameters()),
             "reg_head": sum(p.numel() for p in reg_head.parameters()),
             "cls_head": sum(p.numel() for p in cls_head.parameters()),
         },
@@ -338,11 +263,14 @@ def run(
     regression_probe.train()
     classification_probe.train()
 
-    # Context encoder + predictor + regularizer projector (if any);
-    # target encoder is updated via EMA
-    jepa_params = list(jepa.context_encoder.parameters()) + list(jepa.predictor.parameters())
-    if jepa.regularizer is not None:
-        jepa_params += [p for p in jepa.regularizer.parameters() if p.requires_grad]
+    # Encoder + predictor + any trainable params owned by the anti-collapse
+    # strategy (e.g. VICReg's projector). DINO's target encoder has
+    # requires_grad=False so it contributes nothing here.
+    jepa_params = (
+        list(jepa.encoder.parameters())
+        + list(jepa.predictor.parameters())
+        + [p for p in jepa.anti_collapse.parameters() if p.requires_grad]
+    )
     optimizer = Adam(jepa_params, lr=cfg.optim.lr)
     probe_optimizer = Adam(
         list(regression_probe.head.parameters())
@@ -381,7 +309,7 @@ def run(
     sanity_hook = SanityCheckHook(
         embed_dim=embed_dim,
         feature_median=feature_median,   # luminance fallback when probe_labels are NaN
-        n_pred_masks_short=masking_cfg.get("n_pred_masks_short", 2),
+        n_pred_masks_short=cfg.get("masking", {}).get("n_pred_masks_short", 2),
         log_every_steps=sanity_cfg.get("log_every_steps", 50),
         probe_every_steps=sanity_cfg.get("probe_every_steps", 200),
         probe_train_steps=sanity_cfg.get("probe_train_steps", 30),
@@ -432,7 +360,7 @@ def run(
             jepa_loss, loss_dict = jepa(eeg, global_step=global_step)
             jepa_loss.backward()
             torch.nn.utils.clip_grad_norm_(
-                list(jepa.context_encoder.parameters())
+                list(jepa.encoder.parameters())
                 + list(jepa.predictor.parameters()),
                 max_norm=1.0,
             )
@@ -442,17 +370,20 @@ def run(
             )
             optimizer.step()
 
-            # EMA update of target encoder (cosine momentum schedule)
-            momentum = ema_end - (ema_end - ema_start) * (
-                math.cos(math.pi * global_step / total_steps) + 1
-            ) / 2
-            jepa.update_target_encoder(momentum)
+            # EMA update of target encoder (cosine momentum schedule).
+            # No-op for non-DINO strategies; gated to skip the schedule
+            # computation entirely when unused.
+            if is_dino:
+                momentum = ema_end - (ema_end - ema_start) * (
+                    math.cos(math.pi * global_step / total_steps) + 1
+                ) / 2
+                jepa.update_target_encoder(momentum)
 
-            regl = loss_dict.get("reg_loss", 0.0)
+            acl = loss_dict.get("ac_loss", 0.0)
             pl = loss_dict.get("pred_loss", 0.0)
-            regldict = {
+            ac_subdict = {
                 k: v for k, v in loss_dict.items()
-                if k not in ("total_loss", "reg_loss", "pred_loss")
+                if k not in ("total_loss", "ac_loss", "pred_loss")
             }
 
             # --- Online probe training (frozen encoder) ---
@@ -464,7 +395,7 @@ def run(
 
             pbar.set_postfix({
                 "loss": f"{jepa_loss.item():.4f}",
-                "vc":   f"{float(regl):.4f}",
+                "ac":   f"{float(acl):.4f}",
                 "pred": f"{float(pl):.4f}",
                 "reg":  f"{reg_loss.item():.4f}",
                 "cls":  f"{cls_loss.item():.4f}",
@@ -474,13 +405,13 @@ def run(
                 import wandb
                 step_metrics = {
                     "train_step/jepa_loss": jepa_loss.item(),
-                    "train_step/vc_loss":   float(regl),
+                    "train_step/ac_loss":   float(acl),
                     "train_step/pred_loss": float(pl),
                     "train_step/reg_loss":  reg_loss.item(),
                     "train_step/cls_loss":  cls_loss.item(),
                     **sanity_metrics,
                 }
-                for k, v in regldict.items():
+                for k, v in ac_subdict.items():
                     step_metrics[f"train_step/{k}"] = float(v)
                 wandb.log(step_metrics, step=global_step)
 
@@ -502,12 +433,12 @@ def run(
             train_metrics = {
                 "epoch":            epoch,
                 "train/loss":       jepa_loss.item(),
-                "train/vc_loss":    float(regl),
+                "train/ac_loss":    float(acl),
                 "train/pred_loss":  float(pl),
                 "train/reg_loss":   reg_loss.item(),
                 "train/cls_loss":   cls_loss.item(),
             }
-            for k, v in regldict.items():
+            for k, v in ac_subdict.items():
                 train_metrics[f"train/{k}"] = float(v)
 
             train_metrics["train/lr"] = scheduler.get_last_lr()[0]
@@ -520,7 +451,7 @@ def run(
                 epoch,
                 {
                     "loss":    jepa_loss.item(),
-                    "vc":      float(regl),
+                    "ac":      float(acl),
                     "pred":    float(pl),
                     "val_reg": val_logs.get("val/reg_loss", 0),
                     "val_cls": val_logs.get("val/cls_loss", 0),

@@ -50,7 +50,7 @@ FIXED_ARGS = (
     " --optim.warmup_epochs=5"
     " --loss.pred_loss_type=smooth_l1"
     " --optim.epochs=100"
-    " --loss.regularizer=sigreg"
+    " --loss.anti_collapse=sigreg"
     " --logging.wandb_group=sweep_sigreg"
 )
 

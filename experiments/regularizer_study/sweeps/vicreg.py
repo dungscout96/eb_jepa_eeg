@@ -44,7 +44,7 @@ FIXED_ARGS = (
     " --optim.lr_min=1e-6"
     " --optim.warmup_epochs=5"
     " --loss.pred_loss_type=smooth_l1"
-    " --loss.regularizer=vc"
+    " --loss.anti_collapse=vicreg"
     " --optim.epochs=100"
     " --logging.wandb_group=sweep_vicreg"
 )
@@ -81,9 +81,9 @@ def _make_run_cmd(nw, ws, bs, seed, coeff, use_proj):
         f" --data.batch_size={bs}"
         f" --data.num_workers=4"
         f" --meta.seed={seed}"
-        f" --loss.std_coeff={coeff}"
-        f" --loss.cov_coeff={coeff}"
-        f" --loss.use_projector={proj_flag}"
+        f" --loss.vicreg.std_coeff={coeff}"
+        f" --loss.vicreg.cov_coeff={coeff}"
+        f" --loss.vicreg.use_projector={proj_flag}"
         f"{FIXED_ARGS}"
     )
 
