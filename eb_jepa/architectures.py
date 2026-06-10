@@ -585,6 +585,73 @@ class MovieFeatureHead(nn.Module):
         return out.view(B, T, -1)  # [B, T, n_features]
 
 
+class FrameEmbeddingHead(nn.Module):
+    """MLP head for predicting per-window pretrained frame embedding (e.g. V-JEPA 2).
+
+    Takes ``[B, D, T, 1, 1]`` encoder output and predicts ``[B, T, out_dim]``.
+    Trained against window-anchored, mean-pooled V-JEPA 2 embeddings.
+    """
+
+    def __init__(self, in_dim, hidden_dim, out_dim):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, out_dim),
+        )
+        self.apply(init_module_weights)
+
+    def forward(self, x):
+        B, D, T = x.shape[:3]
+        x = x.view(B, D, T).permute(0, 2, 1).reshape(B * T, D)
+        out = self.net(x)
+        return out.view(B, T, -1)
+
+
+class ShotIDHead(nn.Module):
+    """Linear classifier head for shot-ID prediction from per-window EEG embedding."""
+
+    def __init__(self, in_dim, n_shots):
+        super().__init__()
+        self.fc = nn.Linear(in_dim, n_shots)
+        self.apply(init_module_weights)
+
+    def forward(self, x):
+        # x: [B, D, T, 1, 1] → logits [B, T, n_shots]
+        B, D, T = x.shape[:3]
+        x = x.view(B, D, T).permute(0, 2, 1).reshape(B * T, D)
+        logits = self.fc(x)
+        return logits.view(B, T, -1)
+
+
+class ContrastiveShotHead(nn.Module):
+    """Two-tower projection head for CLIP-style EEG-window ↔ shot-embedding NCE.
+
+    Projects EEG window tokens and V-JEPA-2 shot embeddings into a shared
+    L2-normalized space for InfoNCE training. Scaffolded for future experiments
+    (`shot_id.contrastive: true`); not used in default pretraining.
+    """
+
+    def __init__(self, eeg_in_dim, vision_in_dim, proj_dim=256, temperature=0.07):
+        super().__init__()
+        self.eeg_proj = nn.Linear(eeg_in_dim, proj_dim)
+        self.vision_proj = nn.Linear(vision_in_dim, proj_dim)
+        self.logit_scale = nn.Parameter(torch.tensor(1.0 / temperature).log())
+        self.apply(init_module_weights)
+
+    def project_eeg(self, x):
+        # x: [B, D, T, 1, 1] → [B*T, proj_dim] (L2-normalized)
+        B, D, T = x.shape[:3]
+        x = x.view(B, D, T).permute(0, 2, 1).reshape(B * T, D)
+        z = self.eeg_proj(x)
+        return torch.nn.functional.normalize(z, dim=-1)
+
+    def project_vision(self, v):
+        # v: [N, vision_in_dim] → [N, proj_dim] (L2-normalized)
+        z = self.vision_proj(v)
+        return torch.nn.functional.normalize(z, dim=-1)
+
+
 class TemporalMovieFeatureHead(nn.Module):
     """MLP head with temporal context for predicting per-timestep movie features.
 

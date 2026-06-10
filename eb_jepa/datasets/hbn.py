@@ -84,6 +84,13 @@ MOVIE_METADATA = {
         "feature_parquet": str(
             PROJECT_ROOT / "movie_annotation" / "output" / "The_Present" / "features_enriched.parquet"
         ),
+        "vjepa2_embeddings": str(
+            PROJECT_ROOT / "movie_annotation" / "output" / "The_Present" / "vjepa2_embeddings.npz"
+        ),
+        "shot_boundaries": str(
+            PROJECT_ROOT / "movie_annotation" / "output" / "The_Present"
+            / "shot_detection" / "transnetv2_boundaries.csv"
+        ),
     },
     "DespicableMe": {
         "duration": 170.6,
@@ -92,6 +99,8 @@ MOVIE_METADATA = {
         "feature_parquet": str(
             PROJECT_ROOT / "movie_annotation" / "output" / "despicable_me" / "features_enriched.parquet"
         ),
+        "vjepa2_embeddings": None,
+        "shot_boundaries": None,
     },
 }
 
@@ -566,6 +575,104 @@ def get_window_movie_metadata(
     return movie_features.iloc[frame_index].to_dict()
 
 
+# ---------------------------------------------------------------------------
+# Window-anchored target extraction (V-JEPA 2 embeddings + shot IDs)
+# ---------------------------------------------------------------------------
+
+_MOVIE_EMBEDDINGS_CACHE: dict[str, dict] = {}
+_SHOT_BOUNDARIES_CACHE: dict[str, np.ndarray] = {}
+
+
+def _load_movie_embeddings(movie: str) -> dict | None:
+    """Load and cache pretrained frame embeddings for *movie* (e.g. V-JEPA 2).
+
+    Returns ``{"embeddings": [N, D], "timestamps": [N], "dim": D, "freq": float}``
+    or ``None`` if the movie has no embeddings configured.
+    """
+    if movie in _MOVIE_EMBEDDINGS_CACHE:
+        return _MOVIE_EMBEDDINGS_CACHE[movie]
+    path = MOVIE_METADATA.get(movie, {}).get("vjepa2_embeddings")
+    if path is None or not Path(path).exists():
+        _MOVIE_EMBEDDINGS_CACHE[movie] = None
+        return None
+    data = np.load(path)
+    bundle = {
+        "embeddings": data["embeddings"].astype(np.float32),
+        "timestamps": data["timestamps"].astype(np.float64),
+        "freq": float(data["frequency"]) if "frequency" in data.files else None,
+        "dim": int(data["embeddings"].shape[1]),
+    }
+    _MOVIE_EMBEDDINGS_CACHE[movie] = bundle
+    logger.info("Loaded %s embeddings from %s: %s", movie, path, bundle["embeddings"].shape)
+    return bundle
+
+
+def _load_shot_boundaries(movie: str) -> np.ndarray | None:
+    """Load and cache shot-boundary frames (first frame of each new shot) for *movie*."""
+    if movie in _SHOT_BOUNDARIES_CACHE:
+        return _SHOT_BOUNDARIES_CACHE[movie]
+    path = MOVIE_METADATA.get(movie, {}).get("shot_boundaries")
+    if path is None or not Path(path).exists():
+        _SHOT_BOUNDARIES_CACHE[movie] = None
+        return None
+    df = pd.read_csv(path)
+    boundaries = np.sort(df["boundary_frame"].to_numpy().astype(np.int64))
+    _SHOT_BOUNDARIES_CACHE[movie] = boundaries
+    logger.info("Loaded %s shot boundaries from %s: %d shots", movie, path, len(boundaries) + 1)
+    return boundaries
+
+
+def get_window_frame_embedding(
+    frame_idx: int,
+    fps: float,
+    window_size_seconds: float,
+    embeddings: np.ndarray,
+    timestamps: np.ndarray,
+) -> np.ndarray | None:
+    """Mean-pool pretrained frame embeddings over the EEG window's movie span.
+
+    The window covers movie time ``[frame_idx / fps, frame_idx / fps + window_size_seconds]``.
+    Returns ``None`` if no embedding timestamps fall in that range.
+    """
+    t_start = frame_idx / fps
+    t_end = t_start + window_size_seconds
+    lo = int(np.searchsorted(timestamps, t_start, side="left"))
+    hi = int(np.searchsorted(timestamps, t_end, side="left"))
+    if hi <= lo:
+        return None
+    return embeddings[lo:hi].mean(axis=0).astype(np.float32)
+
+
+def get_window_shot_id(
+    frame_idx: int,
+    n_window_frames: int,
+    boundary_frames: np.ndarray,
+) -> tuple[int, bool]:
+    """Dominant-shot rule: return the shot occupying the longest fraction of the window.
+
+    Shots are 0-indexed. Shot ``k`` covers frames ``[boundary_frames[k-1], boundary_frames[k])``,
+    with shot 0 covering ``[0, boundary_frames[0])`` and the last shot extending to +inf.
+
+    Returns ``(dominant_shot_id, crosses_boundary)``.
+    """
+    start = int(frame_idx)
+    end = start + int(n_window_frames)
+    first_shot = int(np.searchsorted(boundary_frames, start, side="right"))
+    last_shot = int(np.searchsorted(boundary_frames, end - 1, side="right"))
+    if last_shot == first_shot:
+        return first_shot, False
+    best_shot = first_shot
+    best_overlap = -1
+    for shot in range(first_shot, last_shot + 1):
+        shot_start = int(boundary_frames[shot - 1]) if shot > 0 else 0
+        shot_end = int(boundary_frames[shot]) if shot < len(boundary_frames) else end
+        overlap = min(shot_end, end) - max(shot_start, start)
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best_shot = shot
+    return best_shot, True
+
+
 def _read_raw_windows(fif_path, crop_inds):
     """Read multiple windows from a FIF file by absolute sample indices.
 
@@ -864,12 +971,29 @@ class JEPAMovieDataset(HBNMovieDataset):
 
         required_windows = (n_windows - 1) * temporal_stride + 1
 
+        # Window-anchored prediction targets: pretrained frame embedding (V-JEPA 2 by
+        # default) and shot ID. Both are loaded lazily and shared across recordings;
+        # missing files leave the corresponding per-window tensor as zeros / -1.
+        self._frame_embeddings = _load_movie_embeddings(self.task)
+        self._shot_boundaries = _load_shot_boundaries(self.task)
+        self._frame_embedding_dim = (
+            self._frame_embeddings["dim"] if self._frame_embeddings is not None else 0
+        )
+        self._n_shots = (
+            len(self._shot_boundaries) + 1 if self._shot_boundaries is not None else 0
+        )
+
+        movie_fps = MOVIE_METADATA[self.task]["fps"]
+        window_n_frames = int(window_size_seconds * movie_fps)
+
         # Filter recordings with enough windows and pre-extract feature tensors.
         # Parent already stored _fif_paths, _crop_inds, labels (all lightweight).
         filtered_paths = []
         filtered_crops = []
         filtered_metadata = []
         self.feature_recordings = []
+        self.embedding_recordings = []   # [n_win, D] per recording (float32)
+        self.shot_id_recordings = []     # [n_win] per recording (int64)
         self._n_chans = None
         self._n_times = None
 
@@ -883,16 +1007,41 @@ class JEPAMovieDataset(HBNMovieDataset):
 
             # Extract feature tensor (small: n_win x n_features floats)
             feats = []
+            embeds = []
+            shot_ids = []
             for i in range(n_win):
                 d = labels.iloc[i]
                 feats.append([float(d.get(f, 0.0)) for f in self.feature_names])
+                frame_idx = int(d["frame_idx"])
+                if self._frame_embeddings is not None:
+                    e = get_window_frame_embedding(
+                        frame_idx, movie_fps, window_size_seconds,
+                        self._frame_embeddings["embeddings"],
+                        self._frame_embeddings["timestamps"],
+                    )
+                    if e is None:
+                        e = np.zeros(self._frame_embedding_dim, dtype=np.float32)
+                    embeds.append(e)
+                if self._shot_boundaries is not None:
+                    sid, _ = get_window_shot_id(frame_idx, window_n_frames, self._shot_boundaries)
+                    shot_ids.append(sid)
             feats = torch.tensor(feats, dtype=torch.float32)
             feats = torch.nan_to_num(feats, nan=0.0)
+            if embeds:
+                embeds_t = torch.from_numpy(np.stack(embeds))
+            else:
+                embeds_t = torch.zeros(n_win, 0, dtype=torch.float32)
+            if shot_ids:
+                shot_ids_t = torch.tensor(shot_ids, dtype=torch.long)
+            else:
+                shot_ids_t = torch.full((n_win,), -1, dtype=torch.long)
 
             filtered_paths.append(self._fif_paths[rec_idx])
             filtered_crops.append(crop_inds)
             filtered_metadata.append(self._recording_metadata[rec_idx])
             self.feature_recordings.append(feats)
+            self.embedding_recordings.append(embeds_t)
+            self.shot_id_recordings.append(shot_ids_t)
 
             # Capture shape from first valid recording (one cheap read)
             if self._n_chans is None:
@@ -1031,6 +1180,16 @@ class JEPAMovieDataset(HBNMovieDataset):
         """Return EEG normalization stats dict with 'mean' and 'std' tensors."""
         return {"mean": self._eeg_mean, "std": self._eeg_std}
 
+    @property
+    def frame_embedding_dim(self) -> int:
+        """Dim of the per-window pretrained frame embedding target (0 if disabled)."""
+        return self._frame_embedding_dim
+
+    @property
+    def n_shots(self) -> int:
+        """Number of distinct shot IDs in the movie (0 if shot boundaries missing)."""
+        return self._n_shots
+
     def compute_feature_stats(self):
         all_feats = torch.cat(self.feature_recordings, dim=0)
         return {"mean": all_feats.mean(0), "std": all_feats.std(0)}
@@ -1045,6 +1204,8 @@ class JEPAMovieDataset(HBNMovieDataset):
     def __getitem__(self, idx):
         crop_inds = self._crop_inds[idx]
         feats = self.feature_recordings[idx]
+        embeds = self.embedding_recordings[idx]
+        shot_ids = self.shot_id_recordings[idx]
         n = len(crop_inds)
         required = (self.n_windows - 1) * self.temporal_stride + 1
         start = torch.randint(0, n - required + 1, (1,)).item()
@@ -1076,7 +1237,7 @@ class JEPAMovieDataset(HBNMovieDataset):
         # NaN means metadata was unavailable for this recording.
         probe_label = torch.tensor(self._probe_labels[idx], dtype=torch.float32)
 
-        return eeg, feats[indices], probe_label
+        return eeg, feats[indices], embeds[indices], shot_ids[indices], probe_label
 
     @staticmethod
     def _append_lowfreq_envelope(eeg: torch.Tensor) -> torch.Tensor:
