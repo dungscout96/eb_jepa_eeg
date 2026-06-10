@@ -61,7 +61,7 @@ def _embed_clip(dataset, jepa, rec_idx, device, sample_seed):
     feats_mean : np.ndarray [n_features]   target features (mean over n_windows)
     """
     torch.manual_seed(sample_seed)
-    eeg, feats, _ = dataset[rec_idx]              # eeg: [n_windows, C, T]
+    eeg, feats, _, _, _ = dataset[rec_idx]        # eeg: [n_windows, C, T]
     eeg = eeg.unsqueeze(0).to(device)             # [1, n_windows, C, T]
     with torch.no_grad():
         # encode returns [1, D, T, 1, 1]; mean over T windows → [1, D]

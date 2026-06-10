@@ -260,19 +260,36 @@ class MaskedJEPA(nn.Module):
     """
 
     def __init__(self, encoder, predictor, mask_collator, anti_collapse,
-                 pred_loss_type="mse"):
+                 pred_loss_type="mse",
+                 frame_embedding_head=None,
+                 shot_id_head=None,
+                 frame_embedding_cosine_weight: float = 0.5,
+                 frame_embedding_loss_weight: float = 1.0,
+                 shot_id_loss_weight: float = 0.0):
         super().__init__()
         self.encoder = encoder
         self.predictor = predictor
         self.mask_collator = mask_collator
         self.anti_collapse = anti_collapse
         self.pred_loss_type = pred_loss_type
+        self.frame_embedding_head = frame_embedding_head
+        self.shot_id_head = shot_id_head
+        self.frame_embedding_cosine_weight = frame_embedding_cosine_weight
+        self.frame_embedding_loss_weight = frame_embedding_loss_weight
+        self.shot_id_loss_weight = shot_id_loss_weight
 
     def update_target_encoder(self, momentum: float):
         """Delegate to the anti-collapse strategy (no-op for VICReg/SIGReg)."""
         self.anti_collapse.step(self.encoder, momentum)
 
-    def forward(self, eeg: torch.Tensor, global_step: int = 0) -> tuple[torch.Tensor, dict]:
+    def forward(
+        self,
+        eeg: torch.Tensor,
+        global_step: int = 0,
+        *,
+        frame_embedding_target: torch.Tensor | None = None,
+        shot_id_target: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, dict]:
         """Forward pass: mask, encode, predict, combine prediction + auxiliary loss.
 
         Args:
@@ -353,6 +370,49 @@ class MaskedJEPA(nn.Module):
 
         loss_dict["ac_loss"] = ac_loss.item() if torch.is_tensor(ac_loss) else float(ac_loss)
         loss_dict.update(ac_dict)
+
+        # Auxiliary supervised losses on online-encoded per-window representations.
+        # Only computed when both the head and the target are present, so disabling
+        # via config (or omitting from the batch) skips them with zero cost.
+        need_online_pooled = (
+            (self.frame_embedding_head is not None and frame_embedding_target is not None)
+            or (self.shot_id_head is not None and shot_id_target is not None)
+        )
+        if need_online_pooled:
+            online_tokens = self.encoder.encode_tokens(eeg, mask=None)
+            online_pooled = self.encoder.pool_to_windows(online_tokens)  # [B, D, T, 1, 1]
+
+            if self.frame_embedding_head is not None and frame_embedding_target is not None:
+                pred_emb = self.frame_embedding_head(online_pooled)  # [B, T, D_emb]
+                tgt_emb = frame_embedding_target.to(pred_emb.dtype)
+                mse = F.mse_loss(pred_emb, tgt_emb)
+                cos = 1.0 - F.cosine_similarity(pred_emb, tgt_emb, dim=-1).mean()
+                w_cos = self.frame_embedding_cosine_weight
+                emb_loss = (1.0 - w_cos) * mse + w_cos * cos
+                total_loss = total_loss + self.frame_embedding_loss_weight * emb_loss
+                loss_dict["frame_emb_mse"] = mse.item()
+                loss_dict["frame_emb_cosine_dist"] = cos.item()
+                loss_dict["frame_emb_loss"] = emb_loss.item()
+
+            if (self.shot_id_head is not None and shot_id_target is not None
+                    and self.shot_id_loss_weight > 0):
+                logits = self.shot_id_head(online_pooled)  # [B, T, n_shots]
+                B, T, K = logits.shape
+                shot_loss = F.cross_entropy(
+                    logits.reshape(B * T, K),
+                    shot_id_target.reshape(B * T).long(),
+                    ignore_index=-1,
+                )
+                if torch.isfinite(shot_loss):
+                    total_loss = total_loss + self.shot_id_loss_weight * shot_loss
+                    loss_dict["shot_id_loss"] = shot_loss.item()
+                    with torch.no_grad():
+                        preds = logits.argmax(dim=-1).reshape(-1)
+                        tgt = shot_id_target.reshape(-1)
+                        valid = tgt != -1
+                        if valid.any():
+                            loss_dict["shot_id_top1"] = (preds[valid] == tgt[valid]).float().mean().item()
+
         loss_dict["total_loss"] = total_loss.item()
         return total_loss, loss_dict
 

@@ -105,3 +105,24 @@ eval:
   # t - visual_processing_delay_s. Windows whose paired frame falls
   # outside the movie are discarded (no clamping). Sweepable.
   visual_processing_delay_s: 0.0
+
+# Window-anchored prediction targets layered on top of the JEPA pretraining loss.
+# Each 2-s EEG window is paired with the V-JEPA-2 frame embedding (mean-pooled
+# over clips inside the window) and the dominant shot ID for that span. Heads
+# and losses are gated by `enabled`; turning them off costs zero compute.
+movie_targets:
+  frame_embedding:
+    enabled: true
+    source: vjepa2                 # currently informational; path drives loading
+    dim: 1408                      # V-JEPA 2 ViT-g hidden size
+    hidden_dim: 256                # MLP head hidden dim; encoder D * 2 if omitted
+    loss_weight: 1.0               # scales (cos + mse) term added to JEPA loss
+    cosine_weight: 0.5             # convex mix: (1-w)*MSE + w*(1 - cosine)
+  shot_id:
+    enabled: true                  # head always built so probes can read logits
+    boundary_strategy: dominant    # only "dominant" implemented in the dataset
+    use_as_pretraining_target: false  # set true to add CE loss to pretraining
+    pretraining_loss_weight: 0.1
+    contrastive: false             # scaffold: CLIP-style EEG↔V-JEPA-2 NCE
+    contrastive_temperature: 0.07
+    contrastive_proj_dim: 256
