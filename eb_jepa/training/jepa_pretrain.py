@@ -69,7 +69,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from eb_jepa.anti_collapse import DINOAntiCollapse
-from eb_jepa.architectures import FrameEmbeddingHead, ShotIDHead
+from eb_jepa.architectures import MovieCLIPHead
 from eb_jepa.datasets.hbn import JEPAMovieDataset
 from eb_jepa.logging import get_logger
 from eb_jepa.paths import resolve_preprocessed_dir
@@ -238,35 +238,25 @@ def run(
     ).to(device)
     is_dino = isinstance(jepa.anti_collapse, DINOAntiCollapse)
 
-    # Auxiliary movie-prediction heads (frame embedding + shot ID).
-    # Both gated by `movie_targets` config; missing config keeps them off.
-    movie_targets = cfg.get("movie_targets", {}) or {}
-    embed_cfg = movie_targets.get("frame_embedding", {}) or {}
-    shot_cfg = movie_targets.get("shot_id", {}) or {}
+    # Auxiliary CLIP head: symmetric InfoNCE between per-window EEG embeddings
+    # and V-JEPA-2 mean-pooled frame embeddings. Gated by `cfg.loss.clip.enabled`.
+    # V-JEPA-2 embeddings are auto-loaded by JEPAMovieDataset from MOVIE_METADATA.
+    clip_cfg = cfg.loss.get("clip", {}) or {}
     embed_dim = cfg.model.encoder_embed_dim
     head_params = []
-    if embed_cfg.get("enabled", False) and train_set.frame_embedding_dim > 0:
-        out_dim = int(embed_cfg.get("dim", train_set.frame_embedding_dim))
-        jepa.frame_embedding_head = FrameEmbeddingHead(
-            in_dim=embed_dim,
-            hidden_dim=int(embed_cfg.get("hidden_dim", embed_dim * 2)),
-            out_dim=out_dim,
+    if clip_cfg.get("enabled", False) and train_set.frame_embedding_dim > 0:
+        jepa.clip_head = MovieCLIPHead(
+            eeg_in_dim=embed_dim,
+            vision_in_dim=train_set.frame_embedding_dim,
+            proj_dim=int(clip_cfg.get("proj_dim", 256)),
+            temperature=float(clip_cfg.get("temperature", 0.07)),
         ).to(device)
-        jepa.frame_embedding_loss_weight = float(embed_cfg.get("loss_weight", 1.0))
-        jepa.frame_embedding_cosine_weight = float(embed_cfg.get("cosine_weight", 0.5))
-        head_params += list(jepa.frame_embedding_head.parameters())
-        logger.info("FrameEmbeddingHead enabled: D=%d → %d", embed_dim, out_dim)
-    if shot_cfg.get("enabled", False) and train_set.n_shots > 0:
-        # `use_as_pretraining_target=True` adds CE to total_loss; otherwise the
-        # head is still constructed so a probe can read its logits during eval.
-        jepa.shot_id_head = ShotIDHead(in_dim=embed_dim, n_shots=train_set.n_shots).to(device)
-        if shot_cfg.get("use_as_pretraining_target", False):
-            jepa.shot_id_loss_weight = float(shot_cfg.get("pretraining_loss_weight", 0.1))
-            head_params += list(jepa.shot_id_head.parameters())
-        logger.info(
-            "ShotIDHead enabled: D=%d → %d shots (pretraining weight=%.3f)",
-            embed_dim, train_set.n_shots, jepa.shot_id_loss_weight,
-        )
+        jepa.clip_loss_weight = float(clip_cfg.get("loss_weight", 1.0))
+        head_params += list(jepa.clip_head.parameters())
+        logger.info("MovieCLIPHead enabled: D=%d ↔ V=%d → P=%d (weight=%.3f, T_init=%.3f)",
+                    embed_dim, train_set.frame_embedding_dim,
+                    jepa.clip_head.eeg_proj.out_features, jepa.clip_loss_weight,
+                    float(clip_cfg.get("temperature", 0.07)))
 
     log_model_info(
         jepa,
@@ -332,15 +322,12 @@ def run(
             disable=cfg.logging.get("tqdm_silent", False),
         )
 
-        for eeg, _features, embeds, shot_ids, _probe_labels in pbar:
+        for eeg, _features, embeds, _shot_ids, _probe_labels in pbar:
             eeg = eeg.to(device)
             frame_embedding_target = None
-            shot_id_target = None
-            if jepa.frame_embedding_head is not None and embeds.shape[-1] > 0:
-                # embeds: [B, T, D_emb]
+            if jepa.clip_head is not None and embeds.shape[-1] > 0:
+                # embeds: [B, T, D_emb] — V-JEPA-2 mean-pooled per window
                 frame_embedding_target = embeds.to(device, non_blocking=True)
-            if jepa.shot_id_head is not None:
-                shot_id_target = shot_ids.to(device, non_blocking=True)
 
             # --- Masked JEPA pretraining ---
             optimizer.zero_grad()
@@ -348,17 +335,14 @@ def run(
                 eeg,
                 global_step=global_step,
                 frame_embedding_target=frame_embedding_target,
-                shot_id_target=shot_id_target,
             )
             jepa_loss.backward()
             clip_params = (
                 list(jepa.encoder.parameters())
                 + list(jepa.predictor.parameters())
             )
-            if jepa.frame_embedding_head is not None:
-                clip_params += list(jepa.frame_embedding_head.parameters())
-            if jepa.shot_id_head is not None and jepa.shot_id_loss_weight > 0:
-                clip_params += list(jepa.shot_id_head.parameters())
+            if jepa.clip_head is not None and jepa.clip_loss_weight > 0:
+                clip_params += list(jepa.clip_head.parameters())
             torch.nn.utils.clip_grad_norm_(clip_params, max_norm=1.0)
             optimizer.step()
 

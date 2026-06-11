@@ -1,6 +1,11 @@
 """Unit tests for window-anchored frame embedding + shot ID helpers."""
-import numpy as np
+import math
 
+import numpy as np
+import torch
+import torch.nn.functional as F
+
+from eb_jepa.architectures import MovieCLIPHead
 from eb_jepa.datasets.hbn import (
     get_window_frame_embedding,
     get_window_shot_id,
@@ -63,3 +68,69 @@ def test_shot_id_final_shot():
     # Window deep in shot 2 (last shot, unbounded)
     sid, crossed = get_window_shot_id(500, 48, boundaries)
     assert sid == 2 and crossed is False
+
+
+# ---------------------------------------------------------------------------
+# MovieCLIPHead — symmetric InfoNCE sanity
+# ---------------------------------------------------------------------------
+
+
+def _clip_loss(head: MovieCLIPHead, eeg_pooled: torch.Tensor, vis: torch.Tensor):
+    """Replicate the symmetric InfoNCE used in MaskedJEPA.forward."""
+    z_eeg = head.project_eeg(eeg_pooled)
+    z_vis = head.project_vision(vis)
+    scale = head.logit_scale.exp().clamp(max=100.0)
+    logits = scale * (z_eeg @ z_vis.T)
+    labels = torch.arange(logits.shape[0], device=logits.device)
+    loss_e2v = F.cross_entropy(logits, labels)
+    loss_v2e = F.cross_entropy(logits.T, labels)
+    return 0.5 * (loss_e2v + loss_v2e), logits, labels
+
+
+def test_movie_clip_head_random_init_near_log_bt():
+    """At random init the symmetric CLIP loss should be close to log(B*T)."""
+    torch.manual_seed(0)
+    B, T, D, V = 4, 8, 32, 1408
+    head = MovieCLIPHead(eeg_in_dim=D, vision_in_dim=V, proj_dim=64, temperature=1.0)
+    head.eval()
+    eeg = torch.randn(B, D, T, 1, 1)
+    vis = torch.randn(B * T, V)
+    loss, logits, _ = _clip_loss(head, eeg, vis)
+    expected = math.log(B * T)
+    # With temperature=1 (scale=e) and random projections, logits are small and
+    # the loss sits close to log(N). Allow a 25% band for finite-batch noise.
+    assert abs(loss.item() - expected) / expected < 0.25, (
+        f"loss={loss.item():.3f} vs log(B*T)={expected:.3f}"
+    )
+
+
+def test_movie_clip_head_temperature_is_learnable():
+    """logit_scale must receive gradient when its loss is non-trivial."""
+    torch.manual_seed(0)
+    B, T, D, V = 2, 4, 16, 64
+    head = MovieCLIPHead(eeg_in_dim=D, vision_in_dim=V, proj_dim=32)
+    eeg = torch.randn(B, D, T, 1, 1, requires_grad=True)
+    vis = torch.randn(B * T, V)
+    loss, _, _ = _clip_loss(head, eeg, vis)
+    loss.backward()
+    assert head.logit_scale.grad is not None
+    assert head.logit_scale.grad.abs().item() > 0
+    assert head.eeg_proj.weight.grad.abs().sum().item() > 0
+    assert head.vision_proj.weight.grad.abs().sum().item() > 0
+
+
+def test_movie_clip_head_perfect_alignment_low_loss():
+    """If z_eeg == z_vis (identical paired vectors), loss drops far below log(N)."""
+    torch.manual_seed(0)
+    B, T, D, V = 2, 4, 8, 8
+    head = MovieCLIPHead(eeg_in_dim=D, vision_in_dim=V, proj_dim=8, temperature=0.07)
+    # Force both projections to identity by reusing one tensor as both inputs.
+    head.eeg_proj.weight.data.copy_(torch.eye(8))
+    head.eeg_proj.bias.data.zero_()
+    head.vision_proj.weight.data.copy_(torch.eye(8))
+    head.vision_proj.bias.data.zero_()
+    x = torch.randn(B * T, 8)
+    # Fake the [B, D, T, 1, 1] shape from a per-window vector.
+    eeg_pooled = x.T.view(D, B, T).permute(1, 0, 2).unsqueeze(-1).unsqueeze(-1)
+    loss, _, _ = _clip_loss(head, eeg_pooled, x)
+    assert loss.item() < math.log(B * T) * 0.5

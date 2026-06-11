@@ -585,51 +585,16 @@ class MovieFeatureHead(nn.Module):
         return out.view(B, T, -1)  # [B, T, n_features]
 
 
-class FrameEmbeddingHead(nn.Module):
-    """MLP head for predicting per-window pretrained frame embedding (e.g. V-JEPA 2).
+class MovieCLIPHead(nn.Module):
+    """Two-tower projection head for symmetric CLIP-style EEG ↔ V-JEPA-2 InfoNCE.
 
-    Takes ``[B, D, T, 1, 1]`` encoder output and predicts ``[B, T, out_dim]``.
-    Trained against window-anchored, mean-pooled V-JEPA 2 embeddings.
-    """
+    Projects EEG per-window tokens and V-JEPA-2 per-window (mean-pooled) embeddings
+    into a shared L2-normalized space. A learnable scalar log-temperature controls
+    the softmax sharpness, initialised to log(1/0.07) as in OpenAI CLIP.
 
-    def __init__(self, in_dim, hidden_dim, out_dim):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(in_dim, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, out_dim),
-        )
-        self.apply(init_module_weights)
-
-    def forward(self, x):
-        B, D, T = x.shape[:3]
-        x = x.view(B, D, T).permute(0, 2, 1).reshape(B * T, D)
-        out = self.net(x)
-        return out.view(B, T, -1)
-
-
-class ShotIDHead(nn.Module):
-    """Linear classifier head for shot-ID prediction from per-window EEG embedding."""
-
-    def __init__(self, in_dim, n_shots):
-        super().__init__()
-        self.fc = nn.Linear(in_dim, n_shots)
-        self.apply(init_module_weights)
-
-    def forward(self, x):
-        # x: [B, D, T, 1, 1] → logits [B, T, n_shots]
-        B, D, T = x.shape[:3]
-        x = x.view(B, D, T).permute(0, 2, 1).reshape(B * T, D)
-        logits = self.fc(x)
-        return logits.view(B, T, -1)
-
-
-class ContrastiveShotHead(nn.Module):
-    """Two-tower projection head for CLIP-style EEG-window ↔ shot-embedding NCE.
-
-    Projects EEG window tokens and V-JEPA-2 shot embeddings into a shared
-    L2-normalized space for InfoNCE training. Scaffolded for future experiments
-    (`shot_id.contrastive: true`); not used in default pretraining.
+    Caveat: per-window vision vectors can duplicate across recordings in a batch
+    when two subjects are sampled at the same window position. With B=64, T=8 this
+    is rare in practice and treated as a hard-negative collision (no dedup).
     """
 
     def __init__(self, eeg_in_dim, vision_in_dim, proj_dim=256, temperature=0.07):
