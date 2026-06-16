@@ -69,7 +69,6 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from eb_jepa.anti_collapse import DINOAntiCollapse
-from eb_jepa.architectures import MovieCLIPHead
 from eb_jepa.datasets.hbn import JEPAMovieDataset
 from eb_jepa.logging import get_logger
 from eb_jepa.paths import resolve_preprocessed_dir
@@ -238,26 +237,6 @@ def run(
     ).to(device)
     is_dino = isinstance(jepa.anti_collapse, DINOAntiCollapse)
 
-    # Auxiliary CLIP head: symmetric InfoNCE between per-window EEG embeddings
-    # and V-JEPA-2 mean-pooled frame embeddings. Gated by `cfg.loss.clip.enabled`.
-    # V-JEPA-2 embeddings are auto-loaded by JEPAMovieDataset from MOVIE_METADATA.
-    clip_cfg = cfg.loss.get("clip", {}) or {}
-    embed_dim = cfg.model.encoder_embed_dim
-    head_params = []
-    if clip_cfg.get("enabled", False) and train_set.frame_embedding_dim > 0:
-        jepa.clip_head = MovieCLIPHead(
-            eeg_in_dim=embed_dim,
-            vision_in_dim=train_set.frame_embedding_dim,
-            proj_dim=int(clip_cfg.get("proj_dim", 256)),
-            temperature=float(clip_cfg.get("temperature", 0.07)),
-        ).to(device)
-        jepa.clip_loss_weight = float(clip_cfg.get("loss_weight", 1.0))
-        head_params += list(jepa.clip_head.parameters())
-        logger.info("MovieCLIPHead enabled: D=%d ↔ V=%d → P=%d (weight=%.3f, T_init=%.3f)",
-                    embed_dim, train_set.frame_embedding_dim,
-                    jepa.clip_head.eeg_proj.out_features, jepa.clip_loss_weight,
-                    float(clip_cfg.get("temperature", 0.07)))
-
     log_model_info(
         jepa,
         {
@@ -275,7 +254,6 @@ def run(
         list(jepa.encoder.parameters())
         + list(jepa.predictor.parameters())
         + [p for p in jepa.anti_collapse.parameters() if p.requires_grad]
-        + head_params
     )
     optimizer = Adam(jepa_params, lr=cfg.optim.lr)
 
@@ -322,28 +300,18 @@ def run(
             disable=cfg.logging.get("tqdm_silent", False),
         )
 
-        for eeg, _features, embeds, _shot_ids, _probe_labels in pbar:
+        for eeg, _features, _embeds, _shot_ids, _probe_labels in pbar:
             eeg = eeg.to(device)
-            frame_embedding_target = None
-            if jepa.clip_head is not None and embeds.shape[-1] > 0:
-                # embeds: [B, T, D_emb] — V-JEPA-2 mean-pooled per window
-                frame_embedding_target = embeds.to(device, non_blocking=True)
 
             # --- Masked JEPA pretraining ---
             optimizer.zero_grad()
-            jepa_loss, loss_dict = jepa(
-                eeg,
-                global_step=global_step,
-                frame_embedding_target=frame_embedding_target,
-            )
+            jepa_loss, loss_dict = jepa(eeg, global_step=global_step)
             jepa_loss.backward()
-            clip_params = (
+            torch.nn.utils.clip_grad_norm_(
                 list(jepa.encoder.parameters())
-                + list(jepa.predictor.parameters())
+                + list(jepa.predictor.parameters()),
+                max_norm=1.0,
             )
-            if jepa.clip_head is not None and jepa.clip_loss_weight > 0:
-                clip_params += list(jepa.clip_head.parameters())
-            torch.nn.utils.clip_grad_norm_(clip_params, max_norm=1.0)
             optimizer.step()
 
             # EMA update of target encoder (cosine momentum schedule).

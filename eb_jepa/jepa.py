@@ -260,29 +260,19 @@ class MaskedJEPA(nn.Module):
     """
 
     def __init__(self, encoder, predictor, mask_collator, anti_collapse,
-                 pred_loss_type="mse",
-                 clip_head=None,
-                 clip_loss_weight: float = 0.0):
+                 pred_loss_type="mse"):
         super().__init__()
         self.encoder = encoder
         self.predictor = predictor
         self.mask_collator = mask_collator
         self.anti_collapse = anti_collapse
         self.pred_loss_type = pred_loss_type
-        self.clip_head = clip_head
-        self.clip_loss_weight = clip_loss_weight
 
     def update_target_encoder(self, momentum: float):
         """Delegate to the anti-collapse strategy (no-op for VICReg/SIGReg)."""
         self.anti_collapse.step(self.encoder, momentum)
 
-    def forward(
-        self,
-        eeg: torch.Tensor,
-        global_step: int = 0,
-        *,
-        frame_embedding_target: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, dict]:
+    def forward(self, eeg: torch.Tensor, global_step: int = 0) -> tuple[torch.Tensor, dict]:
         """Forward pass: mask, encode, predict, combine prediction + auxiliary loss.
 
         Args:
@@ -363,36 +353,6 @@ class MaskedJEPA(nn.Module):
 
         loss_dict["ac_loss"] = ac_loss.item() if torch.is_tensor(ac_loss) else float(ac_loss)
         loss_dict.update(ac_dict)
-
-        # Auxiliary supervised loss: symmetric CLIP InfoNCE between per-window
-        # EEG embeddings and V-JEPA-2 mean-pooled frame embeddings. Only computed
-        # when the head and target are both present, so disabling via config
-        # skips the extra encoder pass entirely.
-        if (self.clip_head is not None and frame_embedding_target is not None
-                and self.clip_loss_weight > 0):
-            # Symmetric InfoNCE: each per-window EEG embedding is paired with
-            # its V-JEPA-2 mean-pooled vision vector; all other B*T-1 vision
-            # vectors in the batch are negatives.
-            online_tokens = self.encoder.encode_tokens(eeg, mask=None)
-            online_pooled = self.encoder.pool_to_windows(online_tokens)  # [B, D, T, 1, 1]
-            z_eeg = self.clip_head.project_eeg(online_pooled)        # [B*T, P]
-            tgt_emb = frame_embedding_target.to(z_eeg.dtype)
-            z_vis = self.clip_head.project_vision(
-                tgt_emb.reshape(-1, tgt_emb.shape[-1])
-            )                                                        # [B*T, P]
-            scale = self.clip_head.logit_scale.exp().clamp(max=100.0)
-            logits = scale * (z_eeg @ z_vis.T)                       # [B*T, B*T]
-            labels = torch.arange(logits.shape[0], device=logits.device)
-            loss_e2v = F.cross_entropy(logits, labels)
-            loss_v2e = F.cross_entropy(logits.T, labels)
-            clip_loss = 0.5 * (loss_e2v + loss_v2e)
-            total_loss = total_loss + self.clip_loss_weight * clip_loss
-            loss_dict["clip_loss"] = clip_loss.item()
-            loss_dict["clip_logit_scale"] = scale.item()
-            with torch.no_grad():
-                loss_dict["clip_top1_e2v"] = (logits.argmax(-1) == labels).float().mean().item()
-                loss_dict["clip_top1_v2e"] = (logits.argmax(0) == labels).float().mean().item()
-
         loss_dict["total_loss"] = total_loss.item()
         return total_loss, loss_dict
 

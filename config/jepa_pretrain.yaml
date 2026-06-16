@@ -72,16 +72,6 @@ loss:
     ep_n_points: 17    # Epps-Pulley quadrature points
   pred_loss_type: mse  # Prediction loss: "mse" or "smooth_l1" (Huber, used in V-JEPA)
 
-  # Window-anchored auxiliary loss: symmetric CLIP InfoNCE between per-window
-  # EEG embeddings and V-JEPA-2 mean-pooled frame embeddings. The V-JEPA-2 .npz
-  # is auto-loaded by JEPAMovieDataset from MOVIE_METADATA; only the head and
-  # the loss are gated by `clip.enabled`.
-  clip:
-    enabled: true        # symmetric InfoNCE EEG↔V-JEPA-2 per-window
-    proj_dim: 256        # shared projection space dim
-    temperature: 0.07    # initial logit-scale value (1/temperature, learnable)
-    loss_weight: 1.0     # scales the (e2v + v2e) / 2 NCE loss
-
 optim:
   epochs: 50
   lr: 3.0e-4
