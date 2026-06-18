@@ -162,6 +162,8 @@ def run(
         vision_in_dim=train_set.frame_embedding_dim,
         proj_dim=int(cfg.loss.proj_dim),
         temperature=float(cfg.loss.temperature),
+        drop_proj=float(cfg.loss.get("drop_proj", 0.5)),
+        vision_passthrough=bool(cfg.loss.get("vision_passthrough", True)),
     )
     model = CLIPPretrain(encoder, clip_head).to(device)
 

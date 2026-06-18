@@ -91,7 +91,10 @@ def test_movie_clip_head_random_init_near_log_bt():
     """At random init the symmetric CLIP loss should be close to log(B*T)."""
     torch.manual_seed(0)
     B, T, D, V = 4, 8, 32, 1408
-    head = MovieCLIPHead(eeg_in_dim=D, vision_in_dim=V, proj_dim=64, temperature=1.0)
+    head = MovieCLIPHead(
+        eeg_in_dim=D, vision_in_dim=V, proj_dim=64,
+        temperature=1.0, drop_proj=0.0, vision_passthrough=False,
+    )
     head.eval()
     eeg = torch.randn(B, D, T, 1, 1)
     vis = torch.randn(B * T, V)
@@ -108,29 +111,56 @@ def test_movie_clip_head_temperature_is_learnable():
     """logit_scale must receive gradient when its loss is non-trivial."""
     torch.manual_seed(0)
     B, T, D, V = 2, 4, 16, 64
-    head = MovieCLIPHead(eeg_in_dim=D, vision_in_dim=V, proj_dim=32)
+    head = MovieCLIPHead(
+        eeg_in_dim=D, vision_in_dim=V, proj_dim=32,
+        drop_proj=0.0, vision_passthrough=False,
+    )
     eeg = torch.randn(B, D, T, 1, 1, requires_grad=True)
     vis = torch.randn(B * T, V)
     loss, _, _ = _clip_loss(head, eeg, vis)
     loss.backward()
     assert head.logit_scale.grad is not None
     assert head.logit_scale.grad.abs().item() > 0
-    assert head.eeg_proj.weight.grad.abs().sum().item() > 0
+    # EEG MLP first Linear and vision Linear both receive gradients.
+    assert head.eeg_proj[0].weight.grad.abs().sum().item() > 0
     assert head.vision_proj.weight.grad.abs().sum().item() > 0
 
 
-def test_movie_clip_head_perfect_alignment_low_loss():
-    """If z_eeg == z_vis (identical paired vectors), loss drops far below log(N)."""
+def test_movie_clip_head_optimizable_to_below_log_bt():
+    """Fitting head on fixed (EEG, vision) pairs should drop loss below log(B*T)."""
     torch.manual_seed(0)
-    B, T, D, V = 2, 4, 8, 8
-    head = MovieCLIPHead(eeg_in_dim=D, vision_in_dim=V, proj_dim=8, temperature=0.07)
-    # Force both projections to identity by reusing one tensor as both inputs.
-    head.eeg_proj.weight.data.copy_(torch.eye(8))
-    head.eeg_proj.bias.data.zero_()
-    head.vision_proj.weight.data.copy_(torch.eye(8))
-    head.vision_proj.bias.data.zero_()
-    x = torch.randn(B * T, 8)
-    # Fake the [B, D, T, 1, 1] shape from a per-window vector.
-    eeg_pooled = x.T.view(D, B, T).permute(1, 0, 2).unsqueeze(-1).unsqueeze(-1)
-    loss, _, _ = _clip_loss(head, eeg_pooled, x)
-    assert loss.item() < math.log(B * T) * 0.5
+    B, T, D, V = 2, 4, 16, 32
+    head = MovieCLIPHead(
+        eeg_in_dim=D, vision_in_dim=V, proj_dim=32,
+        drop_proj=0.0, vision_passthrough=False,
+    )
+    head.train()
+    eeg = torch.randn(B, D, T, 1, 1)
+    vis = torch.randn(B * T, V)
+    opt = torch.optim.Adam(head.parameters(), lr=1e-2)
+    baseline = math.log(B * T)
+    for _ in range(300):
+        opt.zero_grad()
+        loss, _, _ = _clip_loss(head, eeg, vis)
+        loss.backward()
+        opt.step()
+    assert loss.item() < baseline * 0.5, f"final loss {loss.item():.4f} >= {baseline * 0.5:.4f}"
+
+
+def test_movie_clip_head_vision_passthrough_is_identity():
+    """In passthrough mode `vision_proj` is nn.Identity and EEG output dim == V."""
+    head = MovieCLIPHead(
+        eeg_in_dim=16, vision_in_dim=64, proj_dim=256,  # proj_dim ignored
+        vision_passthrough=True, drop_proj=0.0,
+    )
+    assert isinstance(head.vision_proj, torch.nn.Identity)
+    assert head.proj_dim == 64
+    # EEG projection output dim must match vision_in_dim.
+    eeg = torch.randn(2, 16, 3, 1, 1)
+    z_eeg = head.project_eeg(eeg)
+    assert z_eeg.shape == (6, 64)
+    # Vision passthrough preserves direction (only L2-norm).
+    v = torch.randn(5, 64)
+    z_vis = head.project_vision(v)
+    expected = torch.nn.functional.normalize(v, dim=-1)
+    assert torch.allclose(z_vis, expected)

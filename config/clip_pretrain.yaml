@@ -28,7 +28,7 @@ model:
   # REVE encoder — same fields as jepa_pretrain.yaml so a JEPA checkpoint loads
   # cleanly via encoder_init_from. Predictor / masking blocks are intentionally
   # absent since the CLIP path doesn't use them.
-  encoder_embed_dim: 64
+  encoder_embed_dim: 1024
   encoder_depth: 4
   encoder_heads: 4
   encoder_head_dim: 16
@@ -38,8 +38,15 @@ model:
   mlp_dim_ratio: 2.66
 
 loss:
-  proj_dim: 256        # shared EEG↔vision projection space
-  temperature: 0.07    # initial logit-scale value (learnable)
+  # Symmetric mode: both EEG and V-JEPA-2 project into a learned proj_dim-d
+  # space. proj_dim=1024 matches the encoder embed dim so the EEG MLP doesn't
+  # have to expand (less collapse risk than 1024->1408 of asymmetric mode).
+  # vision_proj is a learnable Linear(1408, 1024). Set vision_passthrough=true
+  # for strict NICE-style asymmetric (vision identity, proj_dim auto = 1408).
+  vision_passthrough: false
+  proj_dim: 1024       # only used when vision_passthrough=false
+  temperature: 0.07    # initial logit-scale value (learnable; clamped exp ≤ 100)
+  drop_proj: 0.5       # dropout inside the EEG-side residual block
 
 optim:
   epochs: 50

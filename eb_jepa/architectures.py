@@ -585,34 +585,84 @@ class MovieFeatureHead(nn.Module):
         return out.view(B, T, -1)  # [B, T, n_features]
 
 
-class MovieCLIPHead(nn.Module):
-    """Two-tower projection head for symmetric CLIP-style EEG ↔ V-JEPA-2 InfoNCE.
+class _ResidualAdd(nn.Module):
+    """Pre-norm residual wrapper: ``out = fn(x) + x`` (not in-place)."""
 
-    Projects EEG per-window tokens and V-JEPA-2 per-window (mean-pooled) embeddings
-    into a shared L2-normalized space. A learnable scalar log-temperature controls
-    the softmax sharpness, initialised to log(1/0.07) as in OpenAI CLIP.
+    def __init__(self, fn: nn.Module):
+        super().__init__()
+        self.fn = fn
+
+    def forward(self, x):
+        return self.fn(x) + x
+
+
+class MovieCLIPHead(nn.Module):
+    """Two-tower projection head for CLIP-style EEG ↔ V-JEPA-2 InfoNCE.
+
+    EEG side: NICE-EEG-style MLP — ``Linear(D, P) → Residual(GELU + Linear(P, P)
+    + Dropout) → LayerNorm(P)``. Higher capacity than a single Linear so the
+    EEG encoder doesn't have to do all the alignment work itself.
+
+    Vision side: asymmetric (NICE-style) by default — the V-JEPA-2 space is
+    already well-organized, so we treat it as a fixed anchor and let only the
+    EEG side learn into it. Set ``vision_passthrough=False`` for the symmetric
+    variant with a learnable Linear vision projector.
+
+    When ``vision_passthrough=True``, the EEG projector output dim is forced to
+    ``vision_in_dim`` so EEG and vision embeddings live in the same space.
+    The ``proj_dim`` argument is ignored in that mode.
+
+    A learnable scalar log-temperature controls softmax sharpness, initialised
+    to ``log(1 / 0.07)`` as in OpenAI CLIP.
 
     Caveat: per-window vision vectors can duplicate across recordings in a batch
-    when two subjects are sampled at the same window position. With B=64, T=8 this
-    is rare in practice and treated as a hard-negative collision (no dedup).
+    when two subjects are sampled at the same window position. With B=64, T=8
+    this is rare in practice and treated as a hard-negative collision (no dedup).
     """
 
-    def __init__(self, eeg_in_dim, vision_in_dim, proj_dim=256, temperature=0.07):
+    def __init__(
+        self,
+        eeg_in_dim: int,
+        vision_in_dim: int,
+        proj_dim: int = 256,
+        temperature: float = 0.07,
+        drop_proj: float = 0.5,
+        vision_passthrough: bool = True,
+    ):
         super().__init__()
-        self.eeg_proj = nn.Linear(eeg_in_dim, proj_dim)
-        self.vision_proj = nn.Linear(vision_in_dim, proj_dim)
+        self.vision_passthrough = vision_passthrough
+        out_dim = vision_in_dim if vision_passthrough else proj_dim
+        self.proj_dim = out_dim
+
+        # EEG side: NICE-style residual MLP head.
+        self.eeg_proj = nn.Sequential(
+            nn.Linear(eeg_in_dim, out_dim),
+            _ResidualAdd(nn.Sequential(
+                nn.GELU(),
+                nn.Linear(out_dim, out_dim),
+                nn.Dropout(drop_proj),
+            )),
+            nn.LayerNorm(out_dim),
+        )
+
+        # Vision side: identity (asymmetric/NICE) or learnable Linear (symmetric).
+        if vision_passthrough:
+            self.vision_proj = nn.Identity()
+        else:
+            self.vision_proj = nn.Linear(vision_in_dim, proj_dim)
+
         self.logit_scale = nn.Parameter(torch.tensor(1.0 / temperature).log())
         self.apply(init_module_weights)
 
     def project_eeg(self, x):
-        # x: [B, D, T, 1, 1] → [B*T, proj_dim] (L2-normalized)
+        # x: [B, D, T, 1, 1] → [B*T, out_dim] (L2-normalized)
         B, D, T = x.shape[:3]
         x = x.view(B, D, T).permute(0, 2, 1).reshape(B * T, D)
         z = self.eeg_proj(x)
         return torch.nn.functional.normalize(z, dim=-1)
 
     def project_vision(self, v):
-        # v: [N, vision_in_dim] → [N, proj_dim] (L2-normalized)
+        # v: [N, vision_in_dim] → [N, out_dim] (L2-normalized)
         z = self.vision_proj(v)
         return torch.nn.functional.normalize(z, dim=-1)
 
