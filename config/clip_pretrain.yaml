@@ -34,7 +34,7 @@ model:
   encoder_head_dim: 16
   patch_size: 50
   patch_overlap: 20
-  freqs: 4
+  freqs: 6              # FourierEmb4D needs freqs^4 >= encoder_embed_dim/2 (512 for 1024-d)
   mlp_dim_ratio: 2.66
 
 loss:
