@@ -38,6 +38,17 @@ model:
   mlp_dim_ratio: 2.66
 
 loss:
+  # mode=clip   : legacy symmetric InfoNCE (CLIPPretrain). Diagonal positives.
+  # mode=scene_clip: §9 bottom-line recipe. Requires vjepa2_recipe.npz built via
+  #                  experiments/embedding_feature_correlation/precompute_vjepa2_recipe.py.
+  mode: scene_clip
+  # Recipe knobs (only used when mode=scene_clip):
+  mean_center: true            # subtract V-JEPA-2 global mean at dataset init
+  target_kind: shot_mean       # {per_window, shot_mean}; per_window keeps the
+                               # mean-pooled clip vector, shot_mean replaces it
+                               # with the recipe's shot-mean lookup
+  temporal_buffer_s: 2.0       # mask cross-scene pairs with |Δt|<2s from denom
+
   # Symmetric mode: both EEG and V-JEPA-2 project into a learned proj_dim-d
   # space. proj_dim=1024 matches the encoder embed dim so the EEG MLP doesn't
   # have to expand (less collapse risk than 1024->1408 of asymmetric mode).
@@ -75,3 +86,11 @@ eval:
     - position_in_movie
     - narrative_event_score
   visual_processing_delay_s: 0.0
+
+  # In-loop recipe diagnostics (only fires when loss.mode=scene_clip).
+  # Logs val/{vision,clip}_{shot,scene}_auc, val/clip_nn_top1,
+  # val/scene_collapse_ratio. Doc §9 #8 sanity numbers: vision_scene_auc≈0.94,
+  # vision_shot_auc≈0.92; clip_* metrics rise with training.
+  val_every: 1                  # 0 disables
+  val_recording_fraction: 0.1
+  val_max_windows: 2000

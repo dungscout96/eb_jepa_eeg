@@ -7,17 +7,20 @@ anti-collapse. Optionally warm-starts the encoder from a JEPA checkpoint via
 step counter are still fresh.
 """
 import math
+import random
 from pathlib import Path
 
 import fire
+import numpy as np
 import torch
+import torch.nn.functional as F
 from omegaconf import OmegaConf
 from torch.optim import Adam
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
 from eb_jepa.architectures import MovieCLIPHead
-from eb_jepa.clip import CLIPPretrain
+from eb_jepa.clip import CLIPPretrain, SceneCLIPPretrain
 from eb_jepa.datasets.hbn import JEPAMovieDataset
 from eb_jepa.logging import get_logger
 from eb_jepa.paths import resolve_preprocessed_dir
@@ -44,6 +47,112 @@ _DEFAULT_CFG_PATH = str(
 )
 
 
+@torch.no_grad()
+def evaluate_recipe(model, val_loader, device, *, max_windows: int = 2000) -> dict:
+    """Per-epoch diagnostics for the §9 recipe.
+
+    Accumulates ``z_eeg, z_vis, shot_ids, scene_ids`` across val batches (up to
+    ``max_windows``), then computes:
+
+    - ``val/vision_shot_auc`` / ``val/vision_scene_auc``: pairwise cosine on
+      ``z_vis`` classified by same-shot / same-scene. Sanity check on the
+      preprocessing — should hit the doc's 0.92 / 0.94 numbers if centering and
+      shot-mean replacement worked.
+    - ``val/clip_shot_auc`` / ``val/clip_scene_auc``: same labels but pairwise
+      cosine of ``z_eeg @ z_vis.T``. The actual cross-modal alignment metric.
+    - ``val/clip_nn_top1``: top-1 retrieval purity at shot level (exclude self).
+    - ``val/scene_collapse_ratio``: ``mean(within_scene_spread) /
+      between_scene_spread`` on ``z_eeg``. >> 1 = healthy; → 0 = scene collapse.
+    """
+    model.eval()
+    zs_eeg, zs_vis, all_shot, all_scene = [], [], [], []
+    head = getattr(model, "clip_head", None)
+    if head is None:
+        model.train()
+        return {}
+    n_accum = 0
+    for batch in val_loader:
+        eeg, _features, embeds, shot_ids, scene_ids, _t_starts, _probe = batch
+        eeg = eeg.to(device, non_blocking=True)
+        embeds = embeds.to(device, non_blocking=True)
+        tokens = model.encoder.encode_tokens(eeg, mask=None)
+        pooled = model.encoder.pool_to_windows(tokens)
+        z_eeg = head.project_eeg(pooled)
+        z_vis = head.project_vision(embeds.reshape(-1, embeds.shape[-1]))
+        zs_eeg.append(z_eeg.float().cpu())
+        zs_vis.append(z_vis.float().cpu())
+        all_shot.append(shot_ids.reshape(-1).cpu())
+        all_scene.append(scene_ids.reshape(-1).cpu())
+        n_accum += z_eeg.shape[0]
+        if n_accum >= max_windows:
+            break
+    model.train()
+    if not zs_eeg:
+        return {}
+    Z_eeg = torch.cat(zs_eeg, dim=0)[:max_windows]
+    Z_vis = torch.cat(zs_vis, dim=0)[:max_windows]
+    shot = torch.cat(all_shot, dim=0)[:max_windows]
+    scene = torch.cat(all_scene, dim=0)[:max_windows]
+    N = Z_eeg.shape[0]
+    if N < 4:
+        return {}
+
+    valid = (shot >= 0) & (scene >= 0)
+    Z_eeg, Z_vis, shot, scene = Z_eeg[valid], Z_vis[valid], shot[valid], scene[valid]
+    if Z_eeg.shape[0] < 4:
+        return {}
+
+    S_vv = (Z_vis @ Z_vis.T).numpy()
+    S_ev = (Z_eeg @ Z_vis.T).numpy()
+    shot_np = shot.numpy()
+    scene_np = scene.numpy()
+    N = shot_np.shape[0]
+    iu = np.triu_indices(N, k=1)
+    shot_eq = (shot_np[iu[0]] == shot_np[iu[1]]).astype(np.int32)
+    scene_eq = (scene_np[iu[0]] == scene_np[iu[1]]).astype(np.int32)
+    sym_ev = 0.5 * (S_ev + S_ev.T)
+
+    metrics: dict[str, float] = {}
+    try:
+        from sklearn.metrics import roc_auc_score
+        if shot_eq.sum() > 0 and shot_eq.sum() < shot_eq.shape[0]:
+            metrics["val/vision_shot_auc"] = float(roc_auc_score(shot_eq, S_vv[iu]))
+            metrics["val/clip_shot_auc"] = float(roc_auc_score(shot_eq, sym_ev[iu]))
+        if scene_eq.sum() > 0 and scene_eq.sum() < scene_eq.shape[0]:
+            metrics["val/vision_scene_auc"] = float(roc_auc_score(scene_eq, S_vv[iu]))
+            metrics["val/clip_scene_auc"] = float(roc_auc_score(scene_eq, sym_ev[iu]))
+    except ImportError:
+        logger.warning("sklearn not available — skipping AUC metrics")
+
+    # NN top-1 (shot level), excluding self
+    sim_self_excluded = S_ev.copy()
+    np.fill_diagonal(sim_self_excluded, -np.inf)
+    nn = sim_self_excluded.argmax(axis=1)
+    metrics["val/clip_nn_top1"] = float((shot_np[nn] == shot_np).mean())
+
+    # Scene-collapse on z_eeg: within-scene spread / between-scene spread
+    Z_eeg_np = Z_eeg.numpy()
+    centroids = []
+    within = []
+    for s in np.unique(scene_np):
+        members = Z_eeg_np[scene_np == s]
+        if members.shape[0] < 2:
+            continue
+        c = members.mean(axis=0)
+        centroids.append(c)
+        within.append(np.linalg.norm(members - c, axis=1).mean())
+    if len(centroids) >= 2:
+        C = np.stack(centroids)
+        between = np.linalg.norm(C - C.mean(axis=0), axis=1).mean()
+        within_mean = float(np.mean(within)) if within else 0.0
+        metrics["val/scene_collapse_ratio"] = (
+            float(within_mean / between) if between > 1e-8 else float("inf")
+        )
+
+    metrics["val/n_windows"] = float(N)
+    return metrics
+
+
 def run(
     fname: str = _DEFAULT_CFG_PATH,
     cfg=None,
@@ -57,6 +166,14 @@ def run(
     device = setup_device(cfg.meta.device)
     setup_seed(cfg.meta.seed)
     temporal_stride = cfg.data.get("temporal_stride", 1)
+
+    loss_mode = str(cfg.loss.get("mode", "clip"))
+    if loss_mode not in {"clip", "scene_clip"}:
+        raise ValueError(f"Unknown loss.mode={loss_mode!r}; expected 'clip' or 'scene_clip'.")
+    recipe_mode = loss_mode == "scene_clip"
+    recipe_target_kind = str(cfg.loss.get("target_kind", "shot_mean"))
+    recipe_mean_center = bool(cfg.loss.get("mean_center", True))
+    temporal_buffer_s = float(cfg.loss.get("temporal_buffer_s", 2.0))
 
     # ------------------------------------------------------------------
     # Experiment directory + W&B
@@ -118,6 +235,9 @@ def run(
         cfg=cfg.data,
         preprocessed=preprocessed,
         preprocessed_dir=preprocessed_dir,
+        recipe_mode=recipe_mode,
+        recipe_target_kind=recipe_target_kind,
+        recipe_mean_center=recipe_mean_center,
     )
     if train_set.frame_embedding_dim == 0:
         raise RuntimeError(
@@ -140,6 +260,44 @@ def run(
         cfg.data.batch_size,
         train_samples=len(train_set),
     )
+
+    # Optional val loader for recipe diagnostics (only in scene_clip mode).
+    val_loader = None
+    val_every = int(cfg.get("eval", {}).get("val_every", 0))
+    if recipe_mode and val_every > 0:
+        val_max_windows = int(cfg.eval.get("val_max_windows", 2000))
+        val_rec_frac = float(cfg.eval.get("val_recording_fraction", 0.1))
+        val_set = JEPAMovieDataset(
+            split="val",
+            n_windows=cfg.data.n_windows,
+            window_size_seconds=cfg.data.window_size_seconds,
+            task=task,
+            temporal_stride=temporal_stride,
+            feature_names=[],
+            cfg=cfg.data,
+            preprocessed=preprocessed,
+            preprocessed_dir=preprocessed_dir,
+            recipe_mode=True,
+            recipe_target_kind=recipe_target_kind,
+            recipe_mean_center=recipe_mean_center,
+            eeg_norm_stats=train_set.get_eeg_norm_stats(),
+        )
+        # Deterministic recording subset for stable per-epoch diagnostics.
+        n_val_rec = max(1, int(len(val_set) * val_rec_frac))
+        rng = random.Random(cfg.meta.seed)
+        sub_idx = rng.sample(range(len(val_set)), min(n_val_rec, len(val_set)))
+        val_loader = DataLoader(
+            Subset(val_set, sub_idx),
+            batch_size=cfg.data.batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=True,
+            persistent_workers=num_workers > 0,
+        )
+        logger.info(
+            "Val diagnostics enabled: %d/%d val recordings sampled, cap=%d windows",
+            n_val_rec, len(val_set), val_max_windows,
+        )
 
     n_chans = train_set.n_chans
     chs_info = train_set.get_chs_info()
@@ -165,7 +323,12 @@ def run(
         drop_proj=float(cfg.loss.get("drop_proj", 0.5)),
         vision_passthrough=bool(cfg.loss.get("vision_passthrough", True)),
     )
-    model = CLIPPretrain(encoder, clip_head).to(device)
+    if loss_mode == "scene_clip":
+        model = SceneCLIPPretrain(
+            encoder, clip_head, temporal_buffer_s=temporal_buffer_s
+        ).to(device)
+    else:
+        model = CLIPPretrain(encoder, clip_head).to(device)
 
     log_model_info(
         model,
@@ -207,12 +370,23 @@ def run(
             disable=cfg.logging.get("tqdm_silent", False),
         )
 
-        for eeg, _features, embeds, _shot_ids, _probe_labels in pbar:
-            eeg = eeg.to(device, non_blocking=True)
-            embeds = embeds.to(device, non_blocking=True)
+        for batch in pbar:
+            if recipe_mode:
+                eeg, _features, embeds, _shot_ids, scene_ids, t_starts, _probe_labels = batch
+                eeg = eeg.to(device, non_blocking=True)
+                embeds = embeds.to(device, non_blocking=True)
+                scene_ids = scene_ids.to(device, non_blocking=True)
+                t_starts = t_starts.to(device, non_blocking=True)
+            else:
+                eeg, _features, embeds, _shot_ids, _probe_labels = batch
+                eeg = eeg.to(device, non_blocking=True)
+                embeds = embeds.to(device, non_blocking=True)
 
             optimizer.zero_grad()
-            loss, loss_dict = model(eeg, embeds)
+            if recipe_mode:
+                loss, loss_dict = model(eeg, embeds, scene_ids, t_starts)
+            else:
+                loss, loss_dict = model(eeg, embeds)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
@@ -254,6 +428,21 @@ def run(
                 },
                 total_epochs=cfg.optim.epochs,
             )
+
+        # Per-epoch val diagnostics (recipe-mode only).
+        if val_loader is not None and (epoch % val_every == 0):
+            val_metrics = evaluate_recipe(
+                model, val_loader, device,
+                max_windows=int(cfg.eval.val_max_windows),
+            )
+            if val_metrics:
+                logger.info(
+                    "val/ep%d: %s", epoch,
+                    " ".join(f"{k.split('/')[-1]}={v:.3f}" for k, v in val_metrics.items()),
+                )
+                if wandb_run:
+                    import wandb
+                    wandb.log(val_metrics, step=global_step)
 
         save_checkpoint(
             exp_dir / "latest.pth.tar",
