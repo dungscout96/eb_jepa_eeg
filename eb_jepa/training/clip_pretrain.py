@@ -28,6 +28,7 @@ from eb_jepa.training.builder import build_encoder
 from eb_jepa.training_utils import (
     get_default_dev_name,
     get_unified_experiment_dir,
+    load_checkpoint,
     load_config,
     load_encoder_weights,
     log_config,
@@ -313,6 +314,9 @@ def run(
         n_windows=cfg.data.n_windows,
     )
     encoder_init_from = cfg.meta.get("encoder_init_from")
+    resume_from = cfg.meta.get("resume_from")
+    if encoder_init_from and resume_from:
+        raise ValueError("Set either meta.encoder_init_from or meta.resume_from, not both.")
     if encoder_init_from:
         load_encoder_weights(encoder, encoder_init_from, device=torch.device("cpu"))
     clip_head = MovieCLIPHead(
@@ -356,13 +360,25 @@ def run(
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
+    # Optional: resume model + optimizer state from a previous run. The new
+    # LR schedule (cfg.optim.epochs, lr, lr_min, warmup_epochs) is applied
+    # fresh — the resumed optimizer state is the *adaptive moments*, not the
+    # learning rate. Useful for continuation runs from a converged checkpoint.
+    start_step = 0
+    if resume_from:
+        state = load_checkpoint(resume_from, model=model, optimizer=optimizer,
+                                device=torch.device("cpu"), strict=True)
+        start_step = int(state.get("step", 0))
+        logger.info("Resumed from %s (step=%d). New LR schedule applies fresh.",
+                    resume_from, start_step)
+
     log_config(cfg)
 
     # ------------------------------------------------------------------
     # Training loop
     # ------------------------------------------------------------------
     logger.info("Starting CLIP pretraining for %d epochs...", cfg.optim.epochs)
-    global_step = 0
+    global_step = start_step
     for epoch in range(cfg.optim.epochs):
         pbar = tqdm(
             train_loader,
