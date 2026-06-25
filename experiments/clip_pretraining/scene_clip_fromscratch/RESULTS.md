@@ -1,20 +1,21 @@
-# CLIP Pretraining — Current Results
+# scene_clip from-scratch — Current Results
 
 EEG ↔ V-JEPA-2 alignment via supervised-contrastive InfoNCE on the HBN
-*ThePresent* dataset. This document records the results of the experiment
-sweep ending 2026-06-25, and the methodology used to validate them.
+*ThePresent* dataset, trained from random initialization with the `scene_clip`
+recipe. This document records the results of the experiment sweep ending
+2026-06-25, and the methodology used to validate them.
 
-Code paths (after the 2026-06-25 reorganization):
+Code paths:
 
-- Recipe / scene_clip loss: [`eb_jepa/clip.py`](../../eb_jepa/clip.py) (`SceneCLIPPretrain`)
-- Trainer: [`eb_jepa/training/clip_pretrain.py`](../../eb_jepa/training/clip_pretrain.py)
-- Config: [`config/clip_pretrain.yaml`](../../config/clip_pretrain.yaml)
-- Recipe artifact precompute: [`embedding_feature_correlation/precompute_vjepa2_recipe.py`](embedding_feature_correlation/precompute_vjepa2_recipe.py)
-- Recipe design notes: [`embedding_feature_correlation/clip_design_observations_vjepa2.md`](embedding_feature_correlation/clip_design_observations_vjepa2.md)
-- CV probe: [`clip_probe/probe.py`](clip_probe/probe.py)
-- ImageNet-style train→test probe: [`clip_probe/probe_traintest.py`](clip_probe/probe_traintest.py)
+- Recipe / scene_clip loss: [`eb_jepa/clip.py`](../../../eb_jepa/clip.py) (`SceneCLIPPretrain`)
+- Trainer: [`eb_jepa/training/clip_pretrain.py`](../../../eb_jepa/training/clip_pretrain.py)
+- Config: [`config/clip_pretrain.yaml`](../../../config/clip_pretrain.yaml)
+- Recipe artifact precompute: [`../embedding_feature_correlation/precompute_vjepa2_recipe.py`](../embedding_feature_correlation/precompute_vjepa2_recipe.py)
+- Recipe design notes: [`../embedding_feature_correlation/clip_design_observations_vjepa2.md`](../embedding_feature_correlation/clip_design_observations_vjepa2.md)
+- CV probe: [`eb_jepa/evaluation/clip_probe/probe.py`](../../../eb_jepa/evaluation/clip_probe/probe.py)
+- ImageNet-style train→test probe: [`eb_jepa/evaluation/clip_probe/probe_traintest.py`](../../../eb_jepa/evaluation/clip_probe/probe_traintest.py)
 
-All probe JSONs are checked in under [`probe_results/`](probe_results/).
+All probe JSONs are checked in alongside this report in the same directory.
 
 ---
 
@@ -86,9 +87,9 @@ Three were run; their differences matter for interpreting the numbers below.
 
 | protocol | fit on | eval on | metric | when to trust |
 |---|---|---|---|---|
-| **clip_probe CV-on-val** ([probe.py](clip_probe/probe.py)) | 4 folds of R5 | held-out R5 fold | R² score (5-fold mean) | quick dev iteration; fits are within-release |
-| **clip_probe CV-on-test** ([probe.py](clip_probe/probe.py)) | 4 folds of R6 | held-out R6 fold | R² score (5-fold mean) | small-N: only ~86 rec per fit fold; biases pessimistically |
-| **probe_traintest** ([probe_traintest.py](clip_probe/probe_traintest.py)) | full R1-R4 train (~700 rec, ~71k windows) | full R6 test (~108 rec, ~11k windows) | **Pearson r** + R² | matches SSL literature (CLIP/SimCLR/DINOv2 linear-eval style). **Primary metric.** |
+| **clip_probe CV-on-val** ([probe.py](../../../eb_jepa/evaluation/clip_probe/probe.py)) | 4 folds of R5 | held-out R5 fold | R² score (5-fold mean) | quick dev iteration; fits are within-release |
+| **clip_probe CV-on-test** ([probe.py](../../../eb_jepa/evaluation/clip_probe/probe.py)) | 4 folds of R6 | held-out R6 fold | R² score (5-fold mean) | small-N: only ~86 rec per fit fold; biases pessimistically |
+| **probe_traintest** ([probe_traintest.py](../../../eb_jepa/evaluation/clip_probe/probe_traintest.py)) | full R1-R4 train (~700 rec, ~71k windows) | full R6 test (~108 rec, ~11k windows) | **Pearson r** + R² | matches SSL literature (CLIP/SimCLR/DINOv2 linear-eval style). **Primary metric.** |
 
 All probes: standardize embeddings on the fit-set stats, fit `RidgeCV` (13 α
 values), report per-feature score on the held-out windows. `--random-baseline`
@@ -266,10 +267,10 @@ ImageNet-style probe on the best checkpoint (Delta job 19670936):
 
 ```bash
 PYTHONPATH=. uv run --group eeg python \
-    experiments/clip_pretraining/clip_probe/probe_traintest.py \
+    eb_jepa/evaluation/clip_probe/probe_traintest.py \
     --device cuda \
     --checkpoint /path/to/fresh500/latest.pth.tar \
-    --config experiments/clip_pretraining/clip_probe/configs/recipe_depth4.yaml \
+    --config eb_jepa/evaluation/clip_probe/configs/recipe_depth4.yaml \
     --output probe_results/probe_traintest_pw_fresh500_ep499.json
 ```
 

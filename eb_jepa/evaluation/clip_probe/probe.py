@@ -1,4 +1,4 @@
-"""Per-window probe: does the EEG encoder capture the time-varying visual content?
+"""Per-window linear probe with GroupKFold-by-recording cross-validation.
 
 Each (recording, window_t) becomes one datapoint. The encoder embeds the EEG
 window; the regression target is the scalar movie feature at that window's
@@ -9,9 +9,9 @@ This corrects the per-recording-averaged probe, where averaging over random
 crops washed out the time-varying signal we actually want to detect.
 
 Usage:
-    PYTHONPATH=. .venv/bin/python experiments/clip_pretraining/clip_probe/probe.py \\
+    PYTHONPATH=. .venv/bin/python eb_jepa/evaluation/clip_probe/probe.py \\
         --checkpoint /path/to/latest.pth.tar \\
-        --config experiments/clip_pretraining/clip_probe/configs/qxhl9rfl.yaml \\
+        --config eb_jepa/evaluation/clip_probe/configs/qxhl9rfl.yaml \\
         --device cuda --output probe_results/qxhl9rfl_trained.json
 
 Use --random-baseline to skip the checkpoint load and probe a fresh-init
