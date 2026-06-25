@@ -91,6 +91,12 @@ MOVIE_METADATA = {
             PROJECT_ROOT / "movie_annotation" / "output" / "The_Present"
             / "shot_detection" / "transnetv2_boundaries.csv"
         ),
+        "scene_map": str(
+            PROJECT_ROOT / "experiments" / "clip_pretraining" / "embedding_feature_correlation" / "vjepa2_scenes_map.csv"
+        ),
+        "vjepa2_recipe": str(
+            PROJECT_ROOT / "movie_annotation" / "output" / "The_Present" / "vjepa2_recipe.npz"
+        ),
     },
     "DespicableMe": {
         "duration": 170.6,
@@ -99,8 +105,14 @@ MOVIE_METADATA = {
         "feature_parquet": str(
             PROJECT_ROOT / "movie_annotation" / "output" / "despicable_me" / "features_enriched.parquet"
         ),
-        "vjepa2_embeddings": None,
+        "vjepa2_embeddings": str(
+            PROJECT_ROOT / "movie_annotation" / "output" / "despicable_me" / "vjepa2_embeddings.npz"
+        ),
+        # Shot detection not yet run for DespicableMe; loader returns None
+        # (shot_id targets will be filled with -1 for these recordings).
         "shot_boundaries": None,
+        "scene_map": None,
+        "vjepa2_recipe": None,
     },
 }
 
@@ -581,6 +593,7 @@ def get_window_movie_metadata(
 
 _MOVIE_EMBEDDINGS_CACHE: dict[str, dict] = {}
 _SHOT_BOUNDARIES_CACHE: dict[str, np.ndarray] = {}
+_VJEPA2_RECIPE_CACHE: dict[str, dict] = {}
 
 
 def _load_movie_embeddings(movie: str) -> dict | None:
@@ -620,6 +633,36 @@ def _load_shot_boundaries(movie: str) -> np.ndarray | None:
     _SHOT_BOUNDARIES_CACHE[movie] = boundaries
     logger.info("Loaded %s shot boundaries from %s: %d shots", movie, path, len(boundaries) + 1)
     return boundaries
+
+
+def _load_vjepa2_recipe(movie: str) -> dict | None:
+    """Load and cache V-JEPA-2 recipe artifacts (global mean, shot means, scene IDs).
+
+    Built by ``experiments/clip_pretraining/embedding_feature_correlation/precompute_vjepa2_recipe.py``.
+    Returns ``{"global_mean": [D], "shot_means": [n_shots, D], "scene_id_per_shot": [n_shots]}``
+    or ``None`` if not configured for *movie*.
+    """
+    if movie in _VJEPA2_RECIPE_CACHE:
+        return _VJEPA2_RECIPE_CACHE[movie]
+    path = MOVIE_METADATA.get(movie, {}).get("vjepa2_recipe")
+    if path is None or not Path(path).exists():
+        _VJEPA2_RECIPE_CACHE[movie] = None
+        return None
+    data = np.load(path)
+    bundle = {
+        "global_mean": data["global_mean"].astype(np.float32),
+        "shot_means": data["shot_means"].astype(np.float32),
+        "scene_id_per_shot": data["scene_id_per_shot"].astype(np.int64),
+    }
+    _VJEPA2_RECIPE_CACHE[movie] = bundle
+    logger.info(
+        "Loaded %s V-JEPA-2 recipe from %s: %d shots, %d scenes, dim=%d",
+        movie, path,
+        bundle["shot_means"].shape[0],
+        len(set(bundle["scene_id_per_shot"].tolist())),
+        bundle["global_mean"].shape[0],
+    )
+    return bundle
 
 
 def get_window_frame_embedding(
@@ -738,6 +781,9 @@ class HBNMovieDataset(Dataset):
         self._crop_inds = []             # np.ndarray (n_windows, 3) per recording
         self.labels = []                 # pd.Series per recording
         self._recording_metadata = []    # dict per recording (subject-level attributes)
+        self._recording_tasks = []       # task name per recording — required by
+                                         # JEPAMovieDataset to look up the right
+                                         # V-JEPA-2 vectors / fps / shot bounds.
         total_recordings = 0
         total_rejected = 0
 
@@ -853,6 +899,7 @@ class HBNMovieDataset(Dataset):
                 self._crop_inds.append(crop_inds)
                 self.labels.append(movie_features_for_windows)
                 self._recording_metadata.append(subj_meta)
+                self._recording_tasks.append(t)
 
                 # Explicitly close Raw file handles before moving on
                 rec.raw.close()
@@ -944,6 +991,9 @@ class JEPAMovieDataset(HBNMovieDataset):
         visual_processing_delay_s: float = 0.0,
         preprocessed: bool = False,
         preprocessed_dir: Path | str | None = None,
+        recipe_mode: bool = False,
+        recipe_target_kind: str = "shot_mean",
+        recipe_mean_center: bool = True,
     ):
         super().__init__(
             split, window_size_seconds, task, cfg=cfg,
@@ -971,77 +1021,182 @@ class JEPAMovieDataset(HBNMovieDataset):
 
         required_windows = (n_windows - 1) * temporal_stride + 1
 
-        # Window-anchored prediction targets: pretrained frame embedding (V-JEPA 2 by
-        # default) and shot ID. Both are loaded lazily and shared across recordings;
-        # missing files leave the corresponding per-window tensor as zeros / -1.
-        self._frame_embeddings = _load_movie_embeddings(self.task)
-        self._shot_boundaries = _load_shot_boundaries(self.task)
-        self._frame_embedding_dim = (
-            self._frame_embeddings["dim"] if self._frame_embeddings is not None else 0
-        )
+        # Window-anchored prediction targets: pretrained frame embedding (V-JEPA 2)
+        # and shot ID. Loaded once per task — multi-movie runs need the right
+        # vision vectors / fps / shot bounds per recording.
+        self._frame_embeddings = {
+            t: _load_movie_embeddings(t) for t in self.tasks
+        }
+        self._shot_boundaries = {
+            t: _load_shot_boundaries(t) for t in self.tasks
+        }
+        missing_emb = [t for t, b in self._frame_embeddings.items() if b is None]
+        if missing_emb:
+            raise FileNotFoundError(
+                f"Frame embeddings missing for task(s) {missing_emb}. "
+                "All tasks must have pretrained vision embeddings configured."
+            )
+        empty_emb = [
+            t for t, b in self._frame_embeddings.items()
+            if b["embeddings"].size == 0 or b["dim"] == 0
+        ]
+        if empty_emb:
+            raise ValueError(
+                f"Frame embeddings are empty for task(s) {empty_emb}."
+            )
+        dims = {t: b["dim"] for t, b in self._frame_embeddings.items()}
+        unique_dims = set(dims.values())
+        if len(unique_dims) > 1:
+            raise ValueError(
+                f"Frame embedding dims differ across tasks: {dims}. "
+                "All tasks must share the same embedding dimensionality."
+            )
+        self._frame_embedding_dim = unique_dims.pop()
+        # n_shots: max across tasks (per-task shot_id labels still collide at 0;
+        # ShotIDHead is not used by the CLIP path so deferring a fix).
+        non_null_shots = [b for b in self._shot_boundaries.values() if b is not None]
         self._n_shots = (
-            len(self._shot_boundaries) + 1 if self._shot_boundaries is not None else 0
+            max(len(b) for b in non_null_shots) + 1 if non_null_shots else 0
         )
 
-        movie_fps = MOVIE_METADATA[self.task]["fps"]
-        window_n_frames = int(window_size_seconds * movie_fps)
+        # Recipe artifacts (global mean, shot means, scene IDs). Loaded per task.
+        # Required when recipe_mode=True; missing → fail loud (the trainer can
+        # only verify the recipe's sanity numbers if these stats exist).
+        self.recipe_mode = recipe_mode
+        self.recipe_target_kind = recipe_target_kind
+        self.recipe_mean_center = recipe_mean_center
+        self._vjepa2_recipes = {t: _load_vjepa2_recipe(t) for t in self.tasks}
+        if recipe_mode:
+            missing = [t for t, b in self._vjepa2_recipes.items() if b is None]
+            if missing:
+                raise FileNotFoundError(
+                    "recipe_mode=True but vjepa2_recipe missing for task(s) "
+                    f"{missing}. Run: "
+                    f"python -m experiments.clip_pretraining.embedding_feature_correlation.precompute_vjepa2_recipe "
+                    f"--task {missing[0]}"
+                )
+        # Scene-id namespacing across tasks: scene_id_global = task_idx * SCENE_NAMESPACE + scene_id
+        self._SCENE_NAMESPACE = 100_000
+        self._task_to_idx = {t: i for i, t in enumerate(self.tasks)}
 
         # Filter recordings with enough windows and pre-extract feature tensors.
-        # Parent already stored _fif_paths, _crop_inds, labels (all lightweight).
+        # Parent already stored _fif_paths, _crop_inds, labels, _recording_tasks.
         filtered_paths = []
         filtered_crops = []
         filtered_metadata = []
+        filtered_tasks = []
         self.feature_recordings = []
         self.embedding_recordings = []   # [n_win, D] per recording (float32)
         self.shot_id_recordings = []     # [n_win] per recording (int64)
+        # Recipe-mode-only side tables (empty lists when recipe_mode=False).
+        self.scene_id_recordings = []    # [n_win] per recording (int64, global namespace)
+        self.t_start_recordings = []     # [n_win] per recording (float32, seconds in movie)
         self._n_chans = None
         self._n_times = None
 
         for rec_idx in range(len(self._fif_paths)):
             crop_inds = self._crop_inds[rec_idx]
             labels = self.labels[rec_idx]
+            rec_task = self._recording_tasks[rec_idx]
             n_win = len(crop_inds)
 
             if n_win < required_windows:
                 continue
 
-            # Extract feature tensor (small: n_win x n_features floats)
+            # Per-task lookups — DespicableMe is 25 fps and uses its own V-JEPA-2.
+            movie_fps = MOVIE_METADATA[rec_task]["fps"]
+            window_n_frames = int(window_size_seconds * movie_fps)
+            frame_emb_bundle = self._frame_embeddings[rec_task]
+            shot_bnds = self._shot_boundaries[rec_task]
+            recipe = self._vjepa2_recipes[rec_task]
+
+            # Extract feature tensor (small: n_win x n_features floats).
+            # Windows whose movie span falls outside the frame-embedding
+            # timestamps (e.g. EEG runs past the end of the movie embeddings)
+            # are dropped — never zero-filled, since they would otherwise become
+            # silent zero CLIP/recipe targets.
             feats = []
             embeds = []
             shot_ids = []
+            t_starts = []
+            keep_idx = []
             for i in range(n_win):
                 d = labels.iloc[i]
-                feats.append([float(d.get(f, 0.0)) for f in self.feature_names])
                 frame_idx = int(d["frame_idx"])
-                if self._frame_embeddings is not None:
-                    e = get_window_frame_embedding(
-                        frame_idx, movie_fps, window_size_seconds,
-                        self._frame_embeddings["embeddings"],
-                        self._frame_embeddings["timestamps"],
-                    )
-                    if e is None:
-                        e = np.zeros(self._frame_embedding_dim, dtype=np.float32)
-                    embeds.append(e)
-                if self._shot_boundaries is not None:
-                    sid, _ = get_window_shot_id(frame_idx, window_n_frames, self._shot_boundaries)
+                e = get_window_frame_embedding(
+                    frame_idx, movie_fps, window_size_seconds,
+                    frame_emb_bundle["embeddings"],
+                    frame_emb_bundle["timestamps"],
+                )
+                if e is None:
+                    continue
+                feats.append([float(d.get(f, 0.0)) for f in self.feature_names])
+                t_starts.append(frame_idx / movie_fps)
+                embeds.append(e)
+                if shot_bnds is not None:
+                    sid, _ = get_window_shot_id(frame_idx, window_n_frames, shot_bnds)
                     shot_ids.append(sid)
+                keep_idx.append(i)
+
+            n_dropped = n_win - len(keep_idx)
+            if n_dropped:
+                logger.warning(
+                    "Recording %s (task=%s): dropped %d/%d windows with no frame embedding coverage",
+                    self._fif_paths[rec_idx], rec_task, n_dropped, n_win,
+                )
+                crop_inds = crop_inds[np.asarray(keep_idx, dtype=np.int64)]
+                n_win = len(crop_inds)
+                if n_win < required_windows:
+                    continue
+
             feats = torch.tensor(feats, dtype=torch.float32)
             feats = torch.nan_to_num(feats, nan=0.0)
-            if embeds:
-                embeds_t = torch.from_numpy(np.stack(embeds))
-            else:
-                embeds_t = torch.zeros(n_win, 0, dtype=torch.float32)
+            embeds_t = torch.from_numpy(np.stack(embeds))
             if shot_ids:
                 shot_ids_t = torch.tensor(shot_ids, dtype=torch.long)
             else:
                 shot_ids_t = torch.full((n_win,), -1, dtype=torch.long)
+            t_starts_t = torch.tensor(t_starts, dtype=torch.float32)
+
+            # Recipe target replacement and centering (init-time, per-clip cost is one-off).
+            scene_ids_t = torch.full((n_win,), -1, dtype=torch.long)
+            if recipe is not None:
+                task_idx = self._task_to_idx[rec_task]
+                shot_means_t = torch.from_numpy(recipe["shot_means"])
+                global_mean_t = torch.from_numpy(recipe["global_mean"])
+                scene_per_shot_t = torch.from_numpy(recipe["scene_id_per_shot"])
+                valid_shot = shot_ids_t >= 0
+                if self.recipe_mode and not valid_shot.all():
+                    raise ValueError(
+                        f"recipe_mode=True but {(~valid_shot).sum().item()}/{n_win} "
+                        f"windows in {self._fif_paths[rec_idx]} (task={rec_task}) "
+                        "have no shot id. Shot boundaries must cover every window — "
+                        "fix the boundaries or disable recipe_mode."
+                    )
+                if self.recipe_mode and self.recipe_target_kind == "shot_mean":
+                    # Replace per-window mean V-JEPA-2 with the shot-mean target.
+                    embeds_t = shot_means_t[shot_ids_t].clone()
+                if self.recipe_mode and self.recipe_mean_center:
+                    embeds_t = embeds_t - global_mean_t
+                # Always populate scene IDs when the recipe is available so
+                # downstream code can opt in without recomputing.
+                scene_ids_t = torch.full((n_win,), -1, dtype=torch.long)
+                if valid_shot.any():
+                    local_scene = scene_per_shot_t[shot_ids_t.clamp(min=0)]
+                    scene_ids_t = (
+                        local_scene + task_idx * self._SCENE_NAMESPACE
+                    )
+                    scene_ids_t[~valid_shot] = -1
 
             filtered_paths.append(self._fif_paths[rec_idx])
             filtered_crops.append(crop_inds)
             filtered_metadata.append(self._recording_metadata[rec_idx])
+            filtered_tasks.append(rec_task)
             self.feature_recordings.append(feats)
             self.embedding_recordings.append(embeds_t)
             self.shot_id_recordings.append(shot_ids_t)
+            self.scene_id_recordings.append(scene_ids_t)
+            self.t_start_recordings.append(t_starts_t)
 
             # Capture shape from first valid recording (one cheap read)
             if self._n_chans is None:
@@ -1055,6 +1210,7 @@ class JEPAMovieDataset(HBNMovieDataset):
         self._fif_paths = filtered_paths
         self._crop_inds = filtered_crops
         self._recording_metadata = filtered_metadata
+        self._recording_tasks = filtered_tasks
         del self.labels  # labels are now in feature_recordings
 
         # Derive binary probe labels from subject metadata (age / sex).
@@ -1206,6 +1362,8 @@ class JEPAMovieDataset(HBNMovieDataset):
         feats = self.feature_recordings[idx]
         embeds = self.embedding_recordings[idx]
         shot_ids = self.shot_id_recordings[idx]
+        scene_ids = self.scene_id_recordings[idx] if self.scene_id_recordings else None
+        t_starts = self.t_start_recordings[idx] if self.t_start_recordings else None
         n = len(crop_inds)
         required = (self.n_windows - 1) * self.temporal_stride + 1
         start = torch.randint(0, n - required + 1, (1,)).item()
@@ -1237,6 +1395,16 @@ class JEPAMovieDataset(HBNMovieDataset):
         # NaN means metadata was unavailable for this recording.
         probe_label = torch.tensor(self._probe_labels[idx], dtype=torch.float32)
 
+        if self.recipe_mode:
+            return (
+                eeg,
+                feats[indices],
+                embeds[indices],
+                shot_ids[indices],
+                scene_ids[indices],
+                t_starts[indices],
+                probe_label,
+            )
         return eeg, feats[indices], embeds[indices], shot_ids[indices], probe_label
 
     @staticmethod

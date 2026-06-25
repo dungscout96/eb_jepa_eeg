@@ -7,6 +7,10 @@ jepa_decoder.pth
 *.pth
 *.pyc
 
+# OS / harness junk
+.DS_Store
+.claude/scheduled_tasks*.lock
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

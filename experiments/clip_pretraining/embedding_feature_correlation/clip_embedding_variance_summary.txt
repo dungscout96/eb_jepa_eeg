@@ -1,0 +1,56 @@
+======================================================================
+OpenAI CLIP frame embedding geometry: within-shot vs between-shot
+======================================================================
+
+frames=4877  shots=54  cosine space (L2-normalized)
+
+[1] Variance decomposition (fraction of embedding variance):
+    between-shot (eta^2) = 0.710   within-shot = 0.290
+    F-statistic          = 222.5  (>>1 means shot identity strongly structures the space)
+
+[2] Pairwise cosine similarity (RAW embeddings):
+    same-shot (positives) : 0.899 +/- 0.067  (n=491,381)
+    diff-shot (negatives) : 0.736 +/- 0.092  (n=11,398,745)
+    separation: d-prime = 2.01   ROC-AUC = 0.921
+
+[2b] Pairwise cosine after MEAN-CENTERING:
+    same-shot (positives) : 0.614 +/- 0.241
+    diff-shot (negatives) : -0.024 +/- 0.265
+    separation: d-prime = 2.52   ROC-AUC = 0.949
+    -> centering shifts AUC by +0.028 (meaningful for CLIP)
+
+[3] Same- vs different-shot cosine at matched |time gap| (s):
+    gap [s)           same       (n)    diff       (n)
+    [ 0.00,  0.1)     0.937      9592  -0.096       159
+    [ 0.10,  0.5)     0.856     40491  -0.090      3339
+    [ 0.50,  1.0)     0.786     47271  -0.083     11043
+    [ 1.00,  2.0)     0.726     73518  -0.065     42678
+    [ 2.00,  4.0)     0.659     85720   0.006    144944
+    [ 4.00,  8.0)     0.596     77708   0.077    376708
+    [ 8.00, 16.0)     0.488     89553   0.053    791631
+    [16.00, 32.0)     0.313     67528   0.020   1584248
+    [32.00, 64.0)       -           0  -0.029   2861184
+    [64.00,128.0)       -           0  -0.044   3952896
+    [128.00,256.0)       -           0  -0.075   1629915
+    -> compare same vs diff WITHIN a row: shot effect above adjacency.
+
+[4] Per-shot geometry (centered, within-shot vs nearest other shot):
+    within-shot cos to own centroid : 0.865 (mean over shots)
+    cos to nearest OTHER centroid   : 0.683
+    margin (own - nearest other)    : 0.181  [min -0.166, 10 shots overlap a neighbor]
+
+[5] Nearest-neighbor shot purity (in-batch negative hardness):
+    top-1 neighbor same shot : 0.998  (raw: 0.998)
+    top-5 neighbor same shot : 0.992  (raw: 0.991)
+
+----------------------------------------------------------------------
+CLIP design implications (CLIP-encoder space):
+  * Centering helps (AUC 0.92 -> 0.95). CLIP
+    embeddings carry a non-trivial shared component, similar to V-JEPA-2.
+  * Strong shot structure (eta^2=0.71, centered AUC=0.95): same-shot
+    frames are reliably closer than cross-shot ones; shot-level positives
+    are well-posed.
+  * At 24 Hz, ADJACENT FRAMES are nearly identical even across shot cuts;
+    exclude tight-time-gap pairs from the negative pool, or sub-sample to
+    ~1-2 Hz before contrasting to avoid trivial positives.
+  * top-1 NN purity 1.00: ~0% of frames' nearest neighbor lies in another shot.

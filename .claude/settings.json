@@ -21,7 +21,11 @@
       "Bash(git push -u origin validate-annotations)",
       "Bash(git add movie_annotation/validate_annotations.py movie_annotation/validation_report.md movie_annotation/output/The_Present/validation_frames/)",
       "Bash(git push origin validate-annotations)",
-      "Bash(conda run -n eb_jepa python -c \"import pandas as pd; df = pd.read_csv\\(''movie_annotation/output/The_Present/features.csv''\\); print\\(list\\(df.columns\\)\\)\")"
+      "Bash(conda run -n eb_jepa python -c \"import pandas as pd; df = pd.read_csv\\(''movie_annotation/output/The_Present/features.csv''\\); print\\(list\\(df.columns\\)\\)\")",
+      "Bash(PYTHONPATH=. uv run --group eeg python -m eb_jepa.evaluation.variance_decomposition selftest)",
+      "Bash(PYTHONPATH=. uv run --group eeg python -m eb_jepa.evaluation.variance_decomposition --selftest)",
+      "Bash(scp /Users/dtyoung/Documents/Research/eb_jepa_eeg/scripts/paired_bootstrap_canonical.py delta:/u/dtyoung/eb_jepa_eeg/scripts/paired_bootstrap_canonical.py)",
+      "Bash(scp delta:/u/dtyoung/eb_jepa_eeg/paired_bootstrap_headline.md /Users/dtyoung/Documents/Research/eb_jepa_eeg/paper/paired_bootstrap_headline.md)"
     ],
     "additionalDirectories": [
       "/Users/kuntalkokate/neuroscience_work/eb_jepa_eeg/movie_annotation/output/The_Present/validation_frames"

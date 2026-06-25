@@ -1,0 +1,72 @@
+# Frozen snapshot of the actual config 3fj68l5d trained with (Delta job 19422419,
+# wandb run sccn/eb_jepa/3fj68l5d). Encoder architecture matches the default
+# config/clip_pretrain.yaml as of commit ba89e89 — the only difference is the
+# multi-movie data.task list, passed as a CLI override at submit time.
+#
+# Use this with experiments/clip_probe/probe.py to recover the same encoder
+# topology + dataset shape this run produced, independent of any future drift
+# in config/clip_pretrain.yaml defaults.
+#
+# Note: for probe evaluation you may want to override data.task back to a single
+# movie if you only care about evaluating against one movie's feature parquet.
+
+meta:
+  seed: 2025
+  device: auto
+  encoder_init_from: null
+
+data:
+  batch_size: 64
+  num_workers: 8
+  task: [ThePresent, DespicableMe]   # multi-movie (the CLI override 3fj68l5d ran with)
+  n_windows: 1
+  window_size_seconds: 2
+  temporal_stride: 1
+  preprocessed: true
+  preprocessed_dir: null
+  norm_mode: per_recording
+  add_envelope: false
+  corrca_filters: null
+  annotation_duration_tolerance_s: 1.0
+  max_recording_overshoot_s: 60.0
+
+model:
+  encoder_embed_dim: 1024
+  encoder_depth: 4
+  encoder_heads: 4
+  encoder_head_dim: 16
+  patch_size: 50
+  patch_overlap: 20
+  freqs: 6
+  mlp_dim_ratio: 2.66
+
+loss:
+  vision_passthrough: false
+  proj_dim: 1024
+  temperature: 0.07
+  drop_proj: 0.5
+
+optim:
+  epochs: 50
+  lr: 3.0e-4
+  lr_min: 1.0e-6
+  warmup_epochs: 5
+
+logging:
+  log_wandb: true
+  wandb_group:
+  log_every: 1
+  save_every: 10
+  tqdm_silent: false
+
+eval:
+  auto_run: false
+  n_passes: 20
+  probe_seed: 42
+  n_bootstrap: 2000
+  feature_names:
+    - contrast_rms
+    - luminance_mean
+    - position_in_movie
+    - narrative_event_score
+  visual_processing_delay_s: 0.0

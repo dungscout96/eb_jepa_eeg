@@ -1,0 +1,129 @@
+% =====================================================================
+% Cine-JEPA — Results
+% NeurIPS 2026 submission
+% Standalone .tex fragment: include via \input{results} from the main file.
+% Citation keys are placeholders; resolve them in the bibliography.
+% =====================================================================
+
+\section{Results}
+\label{sec:results}
+
+We report decoding performance under the protocol of
+\S\ref{sec:method:eval}: every method exposes a deterministic
+clip-to-feature map and is fed into the same closed-form linear
+probe on the same R6 test split. Each headline number is built in
+two stages. \emph{Within} each pretraining seed we compute a
+recording-level bootstrap mean of the test metric: the $108$ R6
+recordings are resampled with replacement $B = 2{,}000$ times,
+the metric is recomputed on each resample, and we take the
+bootstrap mean as the per-seed score. \emph{Across} pretraining
+seeds we then report the mean and one standard deviation of the
+per-seed bootstrap means over five encoder seeds (CBraMod: four,
+because of compute constraints). A row is marked
+``$\checkmark$'' when the per-seed bootstrap means beat their
+chance value at $p < 0.05$ under a one-sample two-sided $t$-test
+($r = 0$ for Pearson $r$; $0.5$ for AUC and balanced accuracy;
+$0.05/0.25$ for top-$1$/top-$5$ over $20$ bins).
+
+% =====================================================================
+\subsection{Stimulus-locked decoding}
+\label{sec:results:stim}
+
+Table~\ref{tab:stim-decoding} reports Pearson $r$ between probe
+predictions and four continuous movie-feature targets — frame
+luminance, frame contrast, normalized temporal position in the
+movie, and the narrative event score — on the held-out R6 test
+split.
+
+\input{tables/tab_stim_decoding.tex}
+
+\paragraph{Cine-JEPA tops every target.}
+Cine-JEPA reaches Pearson $r = 0.226$ on luminance, $0.223$ on
+contrast, $0.226$ on temporal position, and $0.155$ on the
+narrative event score — the highest score in every column. Its
+margin over the strongest non-Cine-JEPA method ranges from $9\%$
+relative on luminance (vs.\ supervised Deep4Net at $0.207$) to
+$26\%$ on contrast (vs.\ CorrCA-stats at $0.177$) and $23\%$ on
+temporal position (vs.\ Luna full-finetune at $0.184$); on
+narrative it is the only method to clear $r = 0.1$.
+
+\paragraph{Without a stimulus-locked spatial filter, linear features carry no signal.}
+Seven simple summary statistics (mean, std, log-power in
+$\delta\!/\!\theta\!/\!\alpha\!/\!\beta\!/\!\gamma$ bands)
+computed on the raw $129$-electrode input are statistically
+indistinguishable from chance on every target ($|r| \le 0.016$,
+all $n.s.$). The same statistics computed on the five
+CorrCA-projected channels jump to $r \approx 0.16$--$0.18$ on
+luminance, contrast, and temporal position. CorrCA is therefore
+doing most of the heavy lifting that any \emph{linear} method can
+extract from the EEG. It is, however, far from sufficient:
+Cine-JEPA improves on CorrCA-stats by $0.04$--$0.07$ on the three
+low/mid-level targets and by an absolute $+0.115$ on the
+narrative event score, so the encoder is contributing real
+nonlinear structure on top of the spatial filter.
+
+\paragraph{The standard naturalistic-EEG decoder lags every learned method.}
+Linear TRFs — the field-standard tool for naturalistic EEG
+decoding \citep{crosse2016mtrf} — top out at $r = 0.117$ on
+luminance under the CorrCA-5 input and decay to chance on
+narrative ($r = 0.038$, $n.s.$). The fully-supervised end-to-end
+Deep4Net is much stronger ($r = 0.207, 0.155, 0.146, 0.144$
+across the four targets) but still trails Cine-JEPA on every
+target by $0.011$ to $0.068$.
+
+\paragraph{Foundation-model probes plateau below Cine-JEPA.}
+Among the EEG foundation models we evaluated, Luna is the
+strongest: a frozen linear probe on Luna features reaches
+$r = 0.182, 0.158, 0.171, 0.053$, second only to Cine-JEPA on
+three of four targets. Full fine-tuning of Luna gives a small
+additional gain on contrast and temporal position but does not
+close the gap, and feeding Luna a CorrCA-5 input
+\emph{degrades} its scores rather than improves them — Luna's
+own input pipeline already extracts a richer projection than
+five linear components, so collapsing the channel dimension up
+front discards information. BIOT is intermediate, CBraMod is
+within noise of chance under our protocol, and BENDR / LaBraM
+did not produce usable scores under the protocol and are listed
+as ``---''.
+
+\paragraph{Narrative event decoding is the discriminating target.}
+All methods take their largest hit on the narrative event score:
+Cine-JEPA is the only method to clear $r = 0.1$, and the
+runner-up (Deep4Net at $0.144$) is itself supervised end-to-end
+on the same target. Because the narrative score is higher-level
+and less stimulus-locked than per-frame luminance or contrast,
+the gap on this column separates methods that have learned a
+temporally structured representation from methods that have
+mainly captured low-level visual statistics. We return to this
+in the discussion.
+
+% =====================================================================
+\subsection{Subject-trait decoding}
+\label{sec:results:traits}
+\todo{Fill in once the age-regression and sex-classification
+results are finalized. Headline framing: do the same frozen
+representations that win at stimulus-locked decoding also carry
+recoverable subject-level structure (age as continuous Pearson
+$r$; sex as ROC-AUC and balanced accuracy)? Reference
+Table~\ref{tab:trait-decoding}.}
+
+% =====================================================================
+\subsection{Movie identity}
+\label{sec:results:movie-id}
+\todo{Fill in once the $20$-bin top-$1$ / top-$5$ movie-identity
+results are finalized. Headline framing: position-in-movie can be
+decoded as a continuous target (Table~\ref{tab:stim-decoding});
+binning it into $20$ classes tests whether the representation
+encodes coarser temporal context as a categorical signal.
+Reference Table~\ref{tab:movie-id}.}
+
+% =====================================================================
+\subsection{Ablations}
+\label{sec:results:ablations}
+\todo{Fill in. Recommended ablations to present here: (i) Raw
+$C{=}129$ vs.\ CorrCA-5 input under the same Cine-JEPA pipeline;
+(ii) per-recording vs.\ global Z-score; (iii) VICReg coefficients
+$\lambda_\sigma = \lambda_c \in \{0, 0.25, 1.0\}$; (iv) predictor
+bottleneck $D' \in \{16, 24, 32, 64\}$; (v) visual-processing
+delay $\Delta$ sweep, validating the $300$\,ms choice from
+\S\ref{sec:method:data}.}

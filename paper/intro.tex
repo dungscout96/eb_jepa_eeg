@@ -1,0 +1,72 @@
+\begin{abstract}
+  Non-invasive decoding of naturalistic stimuli has advanced rapidly over the past decade, with significant breakthroughs in fMRI and MEG across language, imagery, and speech domains. EEG, however, has largely been excluded from this trajectory. Naturalistic EEG decoding remains tethered to linear Temporal Receptive Field (TRF) models, while emerging self-supervised foundation models have focused almost exclusively on short-window clinical and BCI benchmarks. We introduce Cine-JEPA, a Joint-Embedding Predictive Architecture that learns EEG representations by predicting the latents of masked spatiotemporal blocks of neural activity during naturalistic movie-watching. Pretrained on the Healthy Brain Network corpus with a multi-block masking objective, the model learns to infer the latents of held-out blocks from the surrounding visible context rather than reconstructing the raw signal. Across a hierarchy of decoding probes—spanning low-level visual features (luminance, contrast), narrative events, and temporal position in the movie—Cine-JEPA substantially outperforms TRF baselines, fully supervised end-to-end models, and both linear-probe and full-finetuning evaluations of leading EEG foundation models. The representations additionally transfer to subject trait prediction, indicating gains beyond stimulus-locked decoding. Ablations over mask-block scale (short vs. long), context geometry (number and duration of temporal windows), and regularization isolate the contribution of masked latent prediction. Our results establish hierarchical decoding from naturalistic movie EEG as a discriminating evaluation regime for EEG self-supervised learning, and masked latent-block prediction as a competitive paradigm for neural representation learning more broadly.
+
+\end{abstract}
+
+\section{Introduction}
+ 
+Naturalistic stimulus decoding---extracting semantic, perceptual, and temporal
+structure from brain responses to continuous, ecologically valid inputs like
+movies and natural speech---has rapidly transformed cognitive neuroscience over
+the past decade. In fMRI, naturalistic paradigms have become the standard for
+individual-difference and developmental studies \citep{vanderwal2019, finn2022},
+and recent work has decoded continuous narrative language \citep{tang2023} and
+natural images \citep{scotti2024} from cortical responses with striking fidelity.
+MEG has followed a parallel trajectory, with dedicated benchmarks for
+naturalistic speech \citep{gwilliams2023, ozdogan2025} and contrastive
+self-supervised methods that decode perceived speech directly from non-invasive
+recordings \citep{defossez2023}. Intracranial work has likewise been formalized
+into multitask naturalistic decoding benchmarks \citep{neuroprobe2025}. EEG, by
+contrast, has been largely left out of this trajectory---despite being the most
+accessible non-invasive modality and the only one with population-scale
+developmental movie-watching corpora \citep{alexander2017}.
+ 
+Two factors have produced this asymmetry. First, naturalistic EEG decoding has
+remained methodologically anchored to linear Temporal Receptive Field (TRF)
+models from the early 2010s \citep{lalor2010, crosse2016, diliberto2018}. TRFs
+are well-understood and interpretable but represent a fundamentally linear,
+fully supervised approach to a problem the rest of the brain-decoding field has
+moved past. Second, the self-supervised learning revolution that has produced
+large EEG foundation models---BENDR \citep{kostas2021}, BIOT \citep{yang2023},
+LaBraM \citep{jiang2024}, and the recent EEG-VJEPA \citep{hojjati2025}---has
+been channeled almost exclusively into short-window clinical and BCI benchmarks:
+sleep staging, abnormality detection, motor imagery, and seizure detection,
+a pattern that fits the broader ``static encoder'' tendency in biosignal
+foundation models recently characterized by \citet{wu2026}. The pretext tasks
+(contrastive learning over augmented windows, masked reconstruction over
+symmetric tubelets) and the evaluation regimes (categorical labels averaged
+across trials) co-evolved with this paradigm, leaving the question of how
+self-supervised learning should be designed for continuous, stimulus-driven
+EEG essentially unaddressed.
+ 
+We introduce \textbf{Cine-JEPA}, a Joint-Embedding Predictive Architecture
+\citep{lecun2022, assran2023, bardes2024} that targets naturalistic-stimulus EEG
+directly. Pretrained on the Healthy Brain Network corpus, the model uses a
+multi-block masking objective: a context encoder embeds visible spatiotemporal
+blocks of EEG, a target encoder updated by exponential moving average embeds
+held-out blocks, and a predictor maps from context embeddings to target
+embeddings. Unlike masked-reconstruction pretraining, no signal-space decoding
+is required; gradient flow is shaped by latent prediction loss alone. We
+evaluate transfer to (i)~naturalistic movie decoding, where stimulus-locked
+representations must generalize across subjects and clips, and (ii)~subject
+trait prediction, where the same representations must support
+individual-difference inference. On both, Cine-JEPA substantially outperforms
+TRF baselines, fully supervised end-to-end models, and both linear-probe and
+full-finetuning evaluations of leading EEG foundation models.
+ 
+Our contributions are as follows. \textbf{(1)}~We establish naturalistic movie
+decoding from EEG as an evaluation regime that discriminates between
+self-supervised methods in ways invisible under conventional clinical and BCI
+benchmarks. \textbf{(2)}~We propose Cine-JEPA, a multi-block masked
+latent-prediction architecture for continuous EEG, and show that its
+representations outperform TRF baselines, supervised end-to-end models, and
+linear-probe and full-finetuning evaluations of BENDR, BIOT, LaBraM, and
+EEG-VJEPA on movie decoding. \textbf{(3)}~We demonstrate that Cine-JEPA
+representations transfer beyond stimulus-locked decoding to subject trait
+prediction, indicating that masked latent prediction captures structure
+relevant to individual differences in addition to time-locked stimulus content.
+\textbf{(4)}~Through configuration sweeps over mask-block scale, context
+geometry (number and duration of visible windows), and regularization, we
+identify the design settings under which masked latent-block prediction
+succeeds on continuous EEG, and characterize how these effective configurations
+depart from the defaults inherited from image- and video-domain JEPAs.

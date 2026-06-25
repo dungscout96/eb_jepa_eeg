@@ -1,0 +1,42 @@
+# Mirrors the encoder shape of run qxhl9rfl (small encoder, ThePresent only).
+# Used by experiments/clip_probe/probe.py to instantiate the right encoder
+# topology before loading the checkpoint's encoder.* weights.
+
+meta:
+  seed: 2025
+  device: auto
+
+data:
+  batch_size: 64
+  num_workers: 4
+  task: ThePresent
+  n_windows: 1
+  window_size_seconds: 2
+  temporal_stride: 1
+  preprocessed: true
+  preprocessed_dir: null
+  norm_mode: per_recording
+  add_envelope: false
+  corrca_filters: null
+  annotation_duration_tolerance_s: 1.0
+  max_recording_overshoot_s: 60.0
+
+model:
+  encoder_embed_dim: 64
+  encoder_depth: 4
+  encoder_heads: 4
+  encoder_head_dim: 16
+  patch_size: 50
+  patch_overlap: 20
+  freqs: 4
+  mlp_dim_ratio: 2.66
+
+loss:
+  vision_passthrough: false
+  proj_dim: 256
+  temperature: 0.07
+  drop_proj: 0.5
+
+optim:
+  epochs: 50
+  lr: 3.0e-4

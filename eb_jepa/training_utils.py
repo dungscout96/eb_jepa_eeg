@@ -238,6 +238,44 @@ def load_checkpoint(
     }
 
 
+def load_encoder_weights(
+    encoder: nn.Module,
+    ckpt_path: Union[str, Path],
+    device: Optional[torch.device] = None,
+) -> Dict[str, Any]:
+    """Copy only ``encoder.*`` tensors from a checkpoint into ``encoder``.
+
+    Used by the CLIP-pretraining script to warm-start its encoder from a JEPA
+    checkpoint. Predictor / anti-collapse / optimizer state from the checkpoint
+    are silently discarded; downstream caller starts a fresh optimizer & schedule.
+
+    Returns a dict with ``missing``, ``unexpected``, ``n_loaded``, and
+    ``dropped`` (non-encoder keys filtered out of the checkpoint).
+    """
+    path = Path(ckpt_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Encoder-init checkpoint not found: {path}")
+    map_location = device if device else "cpu"
+    ckpt = torch.load(path, map_location=map_location, weights_only=False)
+    sd = ckpt.get("model_state_dict", ckpt)
+    sd = {k.replace("_orig_mod.", ""): v for k, v in sd.items()}
+    prefix = "encoder."
+    enc_sd = {k[len(prefix):]: v for k, v in sd.items() if k.startswith(prefix)}
+    dropped = [k for k in sd.keys() if not k.startswith(prefix)]
+    missing, unexpected = encoder.load_state_dict(enc_sd, strict=False)
+    logger.info(
+        "Loaded %d encoder tensors from %s (missing=%d, unexpected=%d, "
+        "dropped %d non-encoder keys)",
+        len(enc_sd), path, len(missing), len(unexpected), len(dropped),
+    )
+    return {
+        "missing": list(missing),
+        "unexpected": list(unexpected),
+        "dropped": dropped,
+        "n_loaded": len(enc_sd),
+    }
+
+
 def load_config(
     config_path: Union[str, Path],
     cli_overrides: Optional[Dict[str, Any]] = None,

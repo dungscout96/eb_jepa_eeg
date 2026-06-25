@@ -1,0 +1,96 @@
+# EEG CLIP Training Configuration
+# Train an EEG encoder via symmetric InfoNCE against V-JEPA-2 frame embeddings.
+# No masking, no predictor, no anti-collapse — the CLIP objective is the only loss.
+
+meta:
+  seed: 2025
+  device: auto  # auto, cuda, or cpu
+  # Path to a JEPA checkpoint (or any model with `encoder.*` state-dict keys).
+  # When set, only encoder weights are copied; optimizer / LR / step start fresh.
+  encoder_init_from: null
+
+data:
+  batch_size: 64
+  num_workers: 4
+  task: ThePresent
+  n_windows: 1
+  window_size_seconds: 2
+  temporal_stride: 1
+  preprocessed: true
+  preprocessed_dir: null
+  norm_mode: per_recording
+  add_envelope: false
+  corrca_filters: null
+  annotation_duration_tolerance_s: 1.0
+  max_recording_overshoot_s: 60.0
+
+model:
+  # REVE encoder — same fields as jepa_pretrain.yaml so a JEPA checkpoint loads
+  # cleanly via encoder_init_from. Predictor / masking blocks are intentionally
+  # absent since the CLIP path doesn't use them.
+  encoder_embed_dim: 1024
+  encoder_depth: 4
+  encoder_heads: 4
+  encoder_head_dim: 16
+  patch_size: 50
+  patch_overlap: 20
+  freqs: 6              # FourierEmb4D needs freqs^4 >= encoder_embed_dim/2 (512 for 1024-d)
+  mlp_dim_ratio: 2.66
+
+loss:
+  # mode=clip   : legacy symmetric InfoNCE (CLIPPretrain). Diagonal positives.
+  # mode=scene_clip: §9 bottom-line recipe. Requires vjepa2_recipe.npz built via
+  #                  experiments/clip_pretraining/embedding_feature_correlation/precompute_vjepa2_recipe.py.
+  mode: scene_clip
+  # Recipe knobs (only used when mode=scene_clip):
+  mean_center: true            # subtract V-JEPA-2 global mean at dataset init
+  target_kind: shot_mean       # {per_window, shot_mean}; per_window keeps the
+                               # mean-pooled clip vector, shot_mean replaces it
+                               # with the recipe's shot-mean lookup
+  temporal_buffer_s: 2.0       # mask cross-scene pairs with |Δt|<2s from denom
+
+  # Symmetric mode: both EEG and V-JEPA-2 project into a learned proj_dim-d
+  # space. proj_dim=1024 matches the encoder embed dim so the EEG MLP doesn't
+  # have to expand (less collapse risk than 1024->1408 of asymmetric mode).
+  # vision_proj is a learnable Linear(1408, 1024). Set vision_passthrough=true
+  # for strict NICE-style asymmetric (vision identity, proj_dim auto = 1408).
+  vision_passthrough: false
+  proj_dim: 1024       # only used when vision_passthrough=false
+  temperature: 0.07    # initial logit-scale value (learnable; clamped exp ≤ 100)
+  drop_proj: 0.5       # dropout inside the EEG-side residual block
+
+optim:
+  epochs: 50
+  lr: 3.0e-4
+  lr_min: 1.0e-6
+  warmup_epochs: 5
+
+logging:
+  log_wandb: true
+  wandb_group:
+  log_every: 1
+  save_every: 10
+  tqdm_silent: false
+
+# Post-training auto-eval (probe_eval + bootstrap). Disabled by default for CLIP
+# since the probe-eval pipeline is JEPA-shaped; flip to true if you've validated
+# that path against a CLIP checkpoint.
+eval:
+  auto_run: false
+  n_passes: 20
+  probe_seed: 42
+  n_bootstrap: 2000
+  feature_names:
+    - contrast_rms
+    - luminance_mean
+    - position_in_movie
+    - narrative_event_score
+  visual_processing_delay_s: 0.0
+
+  # In-loop recipe diagnostics (only fires when loss.mode=scene_clip).
+  # Logs val/{vision,clip}_{shot,scene}_auc, val/clip_nn_top1,
+  # val/scene_collapse_ratio. Doc §9 #8 sanity numbers: vision_scene_auc≈0.94,
+  # vision_shot_auc≈0.92; clip_* metrics rise with training.
+  val_every: 1                  # 0 disables
+  val_recording_fraction: 0.1
+  val_max_windows: 2000
