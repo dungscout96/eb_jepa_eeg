@@ -1,0 +1,84 @@
+# scene_clip CLIP training warm-started from REVE-base (brain-bzh/reve-base).
+#
+# Same scene_clip recipe as config/clip_pretrain.yaml, but with:
+#   - encoder shape matching REVE-base (depth=22, embed=512, heads=8, head_dim=64,
+#     patch_size=200, freqs=4, mlp_dim_ratio=2.66)
+#   - loss.proj_dim=512 to match the new encoder_embed_dim
+#   - meta.encoder_init_from pointing at the REVE→EET-converted checkpoint
+#     (produce via experiments/clip_pretraining/scene_clip_from_checkpoint/
+#                  prepare_reve_checkpoint.py)
+#   - lower lr (1e-5) + longer warmup (10) — standard fine-tune knobs
+#   - AdamW + wd=0.05 (already supported)
+
+meta:
+  seed: 2025
+  device: auto
+  # Path to the REVE→EET-converted .pth.tar. Override per cluster.
+  encoder_init_from: null
+
+data:
+  batch_size: 64
+  num_workers: 4
+  task: ThePresent
+  n_windows: 1
+  window_size_seconds: 2          # match scene_clip_fromscratch for apples-to-apples
+  temporal_stride: 1
+  preprocessed: true
+  preprocessed_dir: null
+  norm_mode: per_recording
+  add_envelope: false
+  corrca_filters: null
+  annotation_duration_tolerance_s: 1.0
+  max_recording_overshoot_s: 60.0
+
+model:
+  # REVE-base shape (must match exactly for state_dict load_state_dict to succeed).
+  encoder_embed_dim: 512
+  encoder_depth: 22
+  encoder_heads: 8
+  encoder_head_dim: 64
+  patch_size: 200                 # 1 s of EEG at sfreq=200Hz
+  patch_overlap: 20
+  freqs: 4                        # 4^4 = 256 ≥ embed_dim/2 = 256
+  mlp_dim_ratio: 2.66
+
+loss:
+  mode: scene_clip
+  mean_center: true
+  target_kind: shot_mean
+  temporal_buffer_s: 2.0
+
+  vision_passthrough: false
+  proj_dim: 512                   # match encoder_embed_dim
+  temperature: 0.07
+  drop_proj: 0.5
+
+optim:
+  optimizer: adamw
+  weight_decay: 0.05
+  epochs: 100
+  lr: 1.0e-5                      # 1/10 of from-scratch winner (lr=1e-4)
+  lr_min: 1.0e-7
+  warmup_epochs: 10               # longer warmup for fine-tuning
+
+logging:
+  log_wandb: true
+  wandb_group:
+  log_every: 1
+  save_every: 10
+  tqdm_silent: false
+
+eval:
+  auto_run: false
+  n_passes: 20
+  probe_seed: 42
+  n_bootstrap: 2000
+  feature_names:
+    - contrast_rms
+    - luminance_mean
+    - position_in_movie
+    - narrative_event_score
+  visual_processing_delay_s: 0.0
+  val_every: 1
+  val_recording_fraction: 0.5
+  val_max_windows: 2000
