@@ -10,9 +10,9 @@ Loads CLIP checkpoints (encoder weights only) like probe.py, so it works on
 both CLIPPretrain and SceneCLIPPretrain runs.
 
 Usage:
-    PYTHONPATH=. .venv/bin/python experiments/clip_probe/probe_traintest.py \\
+    PYTHONPATH=. .venv/bin/python experiments/clip_pretraining/clip_probe/probe_traintest.py \\
         --checkpoint /abs/path/latest.pth.tar \\
-        --config experiments/clip_probe/configs/recipe_depth4.yaml \\
+        --config experiments/clip_pretraining/clip_probe/configs/recipe_depth4.yaml \\
         --device cuda \\
         --output probe_results/probe_traintest_<name>.json
 """
@@ -27,7 +27,7 @@ from sklearn.linear_model import RidgeCV
 from sklearn.metrics import r2_score
 from sklearn.preprocessing import StandardScaler
 
-from experiments.clip_probe.probe import (
+from experiments.clip_pretraining.clip_probe.probe import (
     SCALAR_FEATURES_DEFAULT,
     build_dataset,
     embed_recording_all_windows,

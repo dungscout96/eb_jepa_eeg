@@ -92,7 +92,7 @@ MOVIE_METADATA = {
             / "shot_detection" / "transnetv2_boundaries.csv"
         ),
         "scene_map": str(
-            PROJECT_ROOT / "experiments" / "embedding_feature_correlation" / "vjepa2_scenes_map.csv"
+            PROJECT_ROOT / "experiments" / "clip_pretraining" / "embedding_feature_correlation" / "vjepa2_scenes_map.csv"
         ),
         "vjepa2_recipe": str(
             PROJECT_ROOT / "movie_annotation" / "output" / "The_Present" / "vjepa2_recipe.npz"
@@ -638,7 +638,7 @@ def _load_shot_boundaries(movie: str) -> np.ndarray | None:
 def _load_vjepa2_recipe(movie: str) -> dict | None:
     """Load and cache V-JEPA-2 recipe artifacts (global mean, shot means, scene IDs).
 
-    Built by ``experiments/embedding_feature_correlation/precompute_vjepa2_recipe.py``.
+    Built by ``experiments/clip_pretraining/embedding_feature_correlation/precompute_vjepa2_recipe.py``.
     Returns ``{"global_mean": [D], "shot_means": [n_shots, D], "scene_id_per_shot": [n_shots]}``
     or ``None`` if not configured for *movie*.
     """
@@ -1072,7 +1072,7 @@ class JEPAMovieDataset(HBNMovieDataset):
                 raise FileNotFoundError(
                     "recipe_mode=True but vjepa2_recipe missing for task(s) "
                     f"{missing}. Run: "
-                    f"python -m experiments.embedding_feature_correlation.precompute_vjepa2_recipe "
+                    f"python -m experiments.clip_pretraining.embedding_feature_correlation.precompute_vjepa2_recipe "
                     f"--task {missing[0]}"
                 )
         # Scene-id namespacing across tasks: scene_id_global = task_idx * SCENE_NAMESPACE + scene_id

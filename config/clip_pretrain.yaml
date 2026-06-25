@@ -40,7 +40,7 @@ model:
 loss:
   # mode=clip   : legacy symmetric InfoNCE (CLIPPretrain). Diagonal positives.
   # mode=scene_clip: §9 bottom-line recipe. Requires vjepa2_recipe.npz built via
-  #                  experiments/embedding_feature_correlation/precompute_vjepa2_recipe.py.
+  #                  experiments/clip_pretraining/embedding_feature_correlation/precompute_vjepa2_recipe.py.
   mode: scene_clip
   # Recipe knobs (only used when mode=scene_clip):
   mean_center: true            # subtract V-JEPA-2 global mean at dataset init
