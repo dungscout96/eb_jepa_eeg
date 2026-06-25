@@ -1,0 +1,293 @@
+% =====================================================================
+% Cine-JEPA — Methods
+% NeurIPS 2026 submission
+% Standalone .tex fragment: include via \input{methods} from the main file.
+% Citation keys are placeholders; resolve them in the bibliography.
+% =====================================================================
+
+\section{Method}
+\label{sec:method}
+
+\textbf{Cine-JEPA} is a joint-embedding predictive architecture
+\citep{lecun2022jepa,assran2023ijepa,bardes2024vjepa,assran2025vjepa2}
+that learns EEG representations by predicting the latents of masked
+spatiotemporal blocks of cortical activity recorded during
+naturalistic movie-watching, on top of a stimulus-locked
+CorrCA-projected input. The EEG-side tokenizer, $4$D positional
+embedding, and transformer trunk are taken from REVE
+\citep{elouahidi2025reve} unchanged, so any gain we report is
+attributable to the input pipeline, the self-supervised objective,
+and our masking specialization rather than to backbone differences.
+
+% =====================================================================
+\subsection{Pretraining data and preprocessing}
+\label{sec:method:data}
+
+\paragraph{Healthy Brain Network EEG corpus.}
+We pretrain on the movie-watching subset of the Healthy Brain Network
+EEG dataset \citep{alexander2017hbn} accessed via the EEGDash data
+loader \citep{tousignant2024eegdash} on OpenNeuro. Subjects are
+children and adolescents who watched short clips while EEG was
+recorded on a $129$-channel EGI GSN-HydroCel system. We use a single
+clip throughout, \textit{The Present} ($203.3$\,s, $24$\,fps), to
+guarantee that train, validation, and test recordings are time-aligned
+to the same stimulus and therefore directly comparable under shared
+movie-feature labels. HBN releases are split disjointly by subject:
+releases R1--R4 (\texttt{ds005505}--\texttt{ds005508}, ${\sim}\,700$
+subjects in total) for pretraining and probe training, release R5
+(\texttt{ds005509}, $108$ subjects) for validation and model
+selection, and release R6 (\texttt{ds005510}, $108$ subjects) as a
+held-out test set used only for final evaluation. Splitting at the
+release level guarantees subject-level disjointness by construction.
+Recordings shorter than $10$\,s, or whose movie-onset/offset
+annotations disagree with the clip duration by more than $1$\,s, are
+discarded.
+
+\paragraph{Resampling and bandpass.}
+Raw recordings are resampled to a common $f_s = 200$\,Hz, bandpass
+filtered to $[0.5, 99.5]$\,Hz, cast to \texttt{float32}, and clipped
+to $\pm 15\sigma$ after temporal normalization to limit the influence
+of movement and electrode artefacts.
+
+\paragraph{Temporal normalization.}
+Each recording $X^{(s)} \in \mathbb{R}^{C \times T_s}$ is Z-scored
+\emph{per recording}: $\tilde{X}^{(s)}_{c,t} = (X^{(s)}_{c,t} -
+\mu^{(s)}_c) / \sigma^{(s)}_c$, removing recording-level amplitude
+differences (skin conductance, electrode impedance, instrumentation
+drift) while leaving subject-trait signal recoverable by downstream
+probes. Corpus-level (global) Z-scoring (the REVE convention,
+\citep{elouahidi2025reve}) is reported as an ablation.
+
+\paragraph{Spatial filtering (CorrCA).}
+We then apply Correlated Component Analysis
+\citep{dmochowski2012corrca} as a stimulus-locked spatial filter:
+filters $W \in \mathbb{R}^{129 \times K}$ that maximize inter-subject
+correlation of $W^{\!\top} X^{(s)}$ are fit on the R1--R4 recordings
+of \textit{The Present}, the top $K = 5$ components are retained, and
+the frozen filters are applied to all downstream data. The canonical
+pipeline therefore feeds $C = 5$ CorrCA channels to the encoder;
+$C = 129$ Raw is reported as an ablation.
+
+\paragraph{Sampling and stimulus--EEG alignment.}
+For each iteration we sample a contiguous $8$\,s clip ($T = 2$
+windows of $4$\,s) uniformly over recordings and start times.
+Cortical EEG responses to visual input are delayed: the earliest
+striate response to luminance/contrast modulations sits at
+${\sim}80$--$100$\,ms ($P1$ / VESPA peak) \citep{lalor2006vespa,
+lalor2009vespa, lalor2012vespa}, mTRF analyses of natural stimuli
+use lags out to $300$--$600$\,ms \citep{crosse2016mtrf,
+diliberto2015lowfreq, lalor2010natural}, and ISC of free movie
+viewing peaks at $100$--$300$\,ms \citep{dmochowski2012corrca,
+dmochowski2014audience, cohen2017isc}. We therefore align labels
+with a fixed visual-processing delay $\Delta = 300$\,ms: the
+movie-feature label for an EEG window starting at sample $s$ is
+read from frame
+$k(s) = \lfloor (s / f_s - \Delta) \cdot \mathrm{fps} \rfloor$,
+with boundary clamping at the movie endpoints. The exact value was
+validated by a delay sweep on the training split
+(App.~\ref{app:delay-sweep}).
+
+% =====================================================================
+\subsection{Cine-JEPA architecture and pretraining objective}
+\label{sec:method:model}
+
+\paragraph{Backbone instantiation.}
+A clip is a tensor $X \in \mathbb{R}^{T \times C \times W}$ with
+$T = 2$ non-overlapping $4$\,s windows ($W = 800$ samples at
+$200$\,Hz) over $C$ channels — canonically $C = 5$ CorrCA components,
+with $C = 129$ raw electrodes as an ablation. Each window is unfolded
+into $P = 26$ overlapping temporal patches per channel (patch length
+$\ell_p = 50$, overlap $\ell_o = 20$, stride $30$) and each patch is
+linearly embedded to a $D = 64$ token, yielding $N = C \cdot T \cdot
+P = 260$ tokens per clip in the canonical configuration. The context
+and target encoders $f_\theta, f_{\bar\theta}$ share REVE's
+transformer trunk with $L = 2$ blocks, $H = 4$ heads of dimension
+$d_h = 16$, hidden width $D = 64$, and feed-forward expansion ratio
+$2.66$; we refer the reader to \citep{elouahidi2025reve} for the full
+block-level specification.
+
+\paragraph{Channel-identity handling for CorrCA components.}
+REVE's $4$D positional encoding takes a $3$D scalp coordinate
+$(x, y, z)$ for each spatial channel together with the patch's global
+time index $\tau$. For the Raw variant, $(x_c, y_c, z_c)$ is the
+canonical GSN-HydroCel-$129$ coordinate of electrode $c$. The
+canonical CorrCA components have no native position, so we anchor
+each component $k$ to its peak-weight electrode,
+\begin{equation}
+  c^\star_k = \arg\max_{c} |W_{c, k}|,
+  \qquad
+  (x_k, y_k, z_k) = (x_{c^\star_k}, y_{c^\star_k}, z_{c^\star_k}).
+\end{equation}
+The CorrCA filters are dominated by a handful of central /
+parieto-occipital electrodes, so the peak-weight anchor is a faithful
+representative of each component's spatial support; it is also
+parameter-free, montage-aware, and deterministic across runs.
+
+\paragraph{Multi-block masking.}
+We adopt V-JEPA-style multi-block masking \citep{bardes2024vjepa}
+specialized to the EEG token grid. For each batch we draw $B = 4$ mask
+blocks: $B_s = 2$ \emph{short-range} blocks and $B_\ell = 2$
+\emph{long-range} blocks, where each block is a contiguous rectangle
+on the $[C, P]$ grid. Block dimensions are sampled uniformly:
+short-range blocks span $[8\%, 15\%]$ of channels and $[30\%, 60\%]$
+of patches; long-range blocks span $[15\%, 35\%]$ of channels and
+$[50\%, 100\%]$ of patches, jointly masking on average roughly half of
+the $C \cdot P$ cells. \emph{Crucially, every $(c, p)$ cell that is
+masked is masked identically across all $T$ windows}: this prevents
+the predictor from exploiting the high temporal autocorrelation of
+EEG to trivially copy the same channel/patch from a neighbouring
+window. We reject mask draws that leave fewer than $15\%$ of tokens
+visible. The context set $\mathcal{C}$ is the union of unmasked
+positions; each of the $B$ blocks defines a separate prediction target
+$\mathcal{M}_b$, disjoint from $\mathcal{C}$.
+
+\paragraph{Predictor with mask tokens.}
+The predictor $g_\phi$ takes the context tokens
+$\{f_\theta(X)_i\}_{i \in \mathcal{C}}$, adds their position
+embeddings, appends a learned mask token $\mathbf{m} \in
+\mathbb{R}^{D'}$ summed with each target position embedding
+$\{\mathbf{p}_j\}_{j \in \mathcal{M}_b}$, runs a transformer of the
+same depth as the encoder ($L_g = L = 2$), and reads out the
+final-layer states at the mask-token slots as predictions
+$\hat{\mathbf{z}}_j \in \mathbb{R}^{D}$. Following I-JEPA / V-JEPA
+\citep{assran2023ijepa,bardes2024vjepa}, $g_\phi$ operates at a
+narrow bottleneck $D' = 24 < D = 64$ via linear input/position/output
+projections, which forces the encoder to produce richer
+representations rather than offloading work to the predictor.
+
+\paragraph{Pretraining loss.}
+For each masked block we minimize a smooth-L1 (Huber) regression to
+the \emph{stop-gradient} target representations,
+\begin{equation}
+  \mathcal{L}_{\text{pred}}(X)
+   = \frac{1}{|\mathcal{M}|}
+     \sum_{b=1}^{B} \sum_{j \in \mathcal{M}_b}
+     \mathrm{Huber}\!\Big(\hat{\mathbf{z}}_j,\;
+                          \mathrm{sg}\big[f_{\bar\theta}(X)_j\big]\Big),
+  \label{eq:pred-loss}
+\end{equation}
+with $|\mathcal{M}| = \sum_b |\mathcal{M}_b|$.
+
+\paragraph{Anti-collapse regularization.}
+A trivial constant solution drives Eq.~\eqref{eq:pred-loss} to zero,
+so two complementary mechanisms prevent representational collapse.
+\emph{(i) EMA target encoder.} The parameters of $f_{\bar\theta}$ are
+updated as $\bar\theta \leftarrow \mu_t \, \bar\theta + (1 - \mu_t)\,
+\theta$ with a cosine momentum schedule $\mu_t : 0.996 \to 1.0$ over
+the full training run, and gradients flow only through $f_\theta$ and
+$g_\phi$. \emph{(ii) VICReg regularization.} We additionally apply
+the variance and covariance terms of VICReg \citep{bardes2022vicreg}
+to the context-encoder outputs passed through a small projector
+$h_\psi$,
+\begin{equation}
+  \mathcal{L}_{\text{vc}}(\mathbf{Z})
+   = \lambda_{\sigma}\, \frac{1}{D_h}\sum_{d=1}^{D_h}
+     \max\!\big(0,\, 1 - \sigma_d(\mathbf{Z})\big)
+   + \lambda_{c}\, \frac{1}{D_h}\sum_{d \neq d'}
+     \mathrm{Cov}_{d d'}(\mathbf{Z})^2,
+   \qquad
+   \mathbf{Z} = h_\psi\!\big(f_\theta(X)_{\mathcal{C}}\big),
+\end{equation}
+where $\sigma_d$ and $\mathrm{Cov}$ are computed across the batch and
+token axes within $\mathcal{C}$ and $D_h$ is the projector output
+dimension. The invariance term of VICReg is supplied implicitly by
+the JEPA prediction loss in Eq.~\eqref{eq:pred-loss} and is therefore
+omitted. We set $\lambda_\sigma = \lambda_c = 0.25$ and minimize
+$\mathcal{L} = \mathcal{L}_{\text{pred}} + \mathcal{L}_{\text{vc}}$.
+
+\paragraph{Optimization.}
+We train for $100$ epochs with batch size $64$ on a single GPU using
+AdamW \citep{loshchilov2019adamw} with peak learning rate
+$5 \times 10^{-4}$, $5$-epoch linear warm-up, and cosine decay to
+$10^{-6}$. Gradients on $f_\theta$, $g_\phi$, and $h_\psi$ are
+clipped to global $\ell_2$ norm $1.0$; $f_{\bar\theta}$ is updated by
+EMA only. At evaluation time the predictor, target encoder, and
+VICReg projector are discarded. We train five seeds
+$\{42, 123, 456, 789, 2025\}$ and report inter-seed variability as
+our primary measure of encoder-training variance.
+
+% =====================================================================
+\subsection{Evaluation protocol}
+\label{sec:method:eval}
+
+Every method, including all baselines, is evaluated under a single
+shared protocol: a deterministic clip-to-feature map followed by
+closed-form linear probes and recording-level bootstrap CIs. Only
+the clip-to-feature map varies between methods.
+
+\paragraph{Per-clip representation.}
+Once pretraining is complete, the context encoder $f_\theta$ is
+frozen. Given an $8$\,s clip $X$ in canonical CorrCA form ($C{=}5$,
+$T{=}2$, $W{=}800$), we obtain token outputs $f_\theta(X) \in
+\mathbb{R}^{N \times D}$, reshape to the structured grid $[C, T, P,
+D]$, and form a per-clip representation by mean-pooling over the
+patch and window axes while \emph{keeping the channel axis}:
+\begin{equation}
+  \bar{\mathbf{h}}(X) = \mathrm{flatten}_c\!\Big(
+      \tfrac{1}{T \cdot P}\!\sum_{t, p} f_\theta(X)_{c, t, p, :}
+    \Big) \;\in\; \mathbb{R}^{C \cdot D}
+  \;=\; \mathbb{R}^{320}.
+\end{equation}
+Keeping the channel axis preserves the spatial structure that CorrCA
+already isolated, and makes the probe input dimension match the
+linear baselines (\S\,below) for an apples-to-apples capacity
+comparison.
+
+\paragraph{Probe targets.}
+We probe a deliberately broad hierarchy of targets, from low-level
+sensory features through narrative structure to subject-level traits,
+in order to characterise \emph{what} the representations encode rather
+than only \emph{how well} they decode any one variable.
+\begin{enumerate}
+    \item \textit{Low-level visual features.} Per video frame we
+          extract \texttt{luminance\_mean} (mean grayscale intensity)
+          and \texttt{contrast\_rms} (RMS contrast), and average them
+          within each window.
+    \item \textit{Narrative event score} \texttt{narr} — a saliency
+          score for narrative events extracted by the
+          movie-annotation pipeline (\S\ref{sec:method:data}).
+    \item \textit{Temporal position in the movie}
+          \texttt{position\_in\_movie}, the normalised time
+          $\tau / T_{\text{clip}} \in [0, 1]$, probing whether
+          representations carry coarse temporal context independent
+          of local stimulus content.
+    \item \textit{Movie identity.} A $20$-bin top-$1$ / top-$5$
+          classification over $20$ equal-width position bins, used as
+          a coarser temporal probe.
+    \item \textit{Subject traits.} \texttt{age} as a continuous
+          regression target and biological \texttt{sex} as a binary
+          classification target.
+\end{enumerate}
+For all probes, continuous targets are predicted by ridge regression
+$\mathrm{Ridge}(\alpha{=}1)$ in closed form, binary targets by
+$\ell_2$-regularized logistic regression $\mathrm{LogReg}(C{=}1)$
+fitted with L-BFGS, and the $20$-bin movie-identity task by
+multinomial $\ell_2$-regularized logistic regression. Regression
+metrics are Pearson $r$ and (where reported) $R^2$; classification
+metrics are balanced accuracy and ROC-AUC; movie-identity is reported
+as top-$1$ and top-$5$ accuracy. All standardization, label
+medians/means, PCA bases, and CorrCA filters are fit on training
+recordings only.
+
+\paragraph{Sampling and clip budget.}
+Each recording is read $n_{\text{pass}} = 20$ times with independent
+random clip starts, yielding $14{,}000$ train, $2{,}160$ val, and
+$2{,}160$ test clips per encoder; val clips are used only for
+protocol audits.
+
+\paragraph{Baselines.}
+Under the same protocol we compare to a linear TRF
+\citep{crosse2016mtrf}, fully-supervised end-to-end EEGNet
+\citep{lawhern2018eegnet}, BIOT \citep{yang2023biot}, and REVE
+\citep{elouahidi2025reve}, and linear-probe + full-finetune
+evaluations of LaBraM \citep{jiang2024labram}, NeuroLM
+\citep{jiang2024neurolm}, and EEGPT \citep{wang2024eegpt}, all under
+the same $8$\,s clip definition and R6 test split.
+
+\paragraph{Implementation details.}
+Cine-JEPA is implemented in PyTorch~$2$ \citep{paszke2019pytorch} with
+\texttt{einops} for tensor reshaping, and we train each run on a
+single NVIDIA GPU. All probes use scikit-learn
+\citep{pedregosa2011sklearn}. Code, pretrained checkpoints, and the
+movie-annotation pipeline used to compute the probe targets will be
+released upon publication.
