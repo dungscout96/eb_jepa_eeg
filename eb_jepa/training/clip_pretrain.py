@@ -15,7 +15,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from omegaconf import OmegaConf
-from torch.optim import Adam
+from torch.optim import Adam, AdamW
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
@@ -343,7 +343,29 @@ def run(
     )
 
     model.train()
-    optimizer = Adam(model.parameters(), lr=cfg.optim.lr)
+    # Optimizer: optim.optimizer in {adam, adamw}; AdamW uses decoupled weight
+    # decay, applied only to weight matrices (skip biases + 1-D norm params).
+    optim_name = str(cfg.optim.get("optimizer", "adam")).lower()
+    weight_decay = float(cfg.optim.get("weight_decay", 0.0))
+    if optim_name == "adamw":
+        decay_p, no_decay_p = [], []
+        for name, p in model.named_parameters():
+            if not p.requires_grad:
+                continue
+            if p.ndim <= 1 or name.endswith(".bias") or "norm" in name.lower():
+                no_decay_p.append(p)
+            else:
+                decay_p.append(p)
+        optimizer = AdamW([
+            {"params": decay_p, "weight_decay": weight_decay},
+            {"params": no_decay_p, "weight_decay": 0.0},
+        ], lr=cfg.optim.lr)
+        logger.info("AdamW: %d decay params, %d no-decay params, wd=%.3g",
+                    len(decay_p), len(no_decay_p), weight_decay)
+    elif optim_name == "adam":
+        optimizer = Adam(model.parameters(), lr=cfg.optim.lr)
+    else:
+        raise ValueError(f"Unknown optim.optimizer={optim_name!r}; expected adam or adamw.")
 
     lr_min = cfg.optim.get("lr_min", 0.0)
     warmup_epochs = cfg.optim.get("warmup_epochs", 0)
