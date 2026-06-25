@@ -326,6 +326,7 @@ def run(
         temperature=float(cfg.loss.temperature),
         drop_proj=float(cfg.loss.get("drop_proj", 0.5)),
         vision_passthrough=bool(cfg.loss.get("vision_passthrough", True)),
+        n_residual_blocks=int(cfg.loss.get("n_residual_blocks", 1)),
     )
     if loss_mode == "scene_clip":
         model = SceneCLIPPretrain(
@@ -333,6 +334,17 @@ def run(
         ).to(device)
     else:
         model = CLIPPretrain(encoder, clip_head).to(device)
+
+    # Optional: freeze the EEG encoder (train only clip_head). Useful for
+    # warm-start ablations where you want to measure projector-only alignment.
+    if bool(cfg.meta.get("freeze_encoder", False)):
+        for p in model.encoder.parameters():
+            p.requires_grad_(False)
+        model.encoder.eval()  # disable dropout/etc in frozen encoder
+        n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        n_total = sum(p.numel() for p in model.parameters())
+        logger.info("encoder frozen: %d / %d params trainable (%.1f%%)",
+                    n_trainable, n_total, 100 * n_trainable / n_total)
 
     log_model_info(
         model,
@@ -363,7 +375,9 @@ def run(
         logger.info("AdamW: %d decay params, %d no-decay params, wd=%.3g",
                     len(decay_p), len(no_decay_p), weight_decay)
     elif optim_name == "adam":
-        optimizer = Adam(model.parameters(), lr=cfg.optim.lr)
+        # Filter to requires_grad params so frozen encoders don't get optimizer state.
+        trainable = [p for p in model.parameters() if p.requires_grad]
+        optimizer = Adam(trainable, lr=cfg.optim.lr)
     else:
         raise ValueError(f"Unknown optim.optimizer={optim_name!r}; expected adam or adamw.")
 

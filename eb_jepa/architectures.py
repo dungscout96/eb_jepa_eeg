@@ -628,22 +628,27 @@ class MovieCLIPHead(nn.Module):
         temperature: float = 0.07,
         drop_proj: float = 0.5,
         vision_passthrough: bool = True,
+        n_residual_blocks: int = 1,
     ):
         super().__init__()
         self.vision_passthrough = vision_passthrough
+        self.n_residual_blocks = n_residual_blocks
         out_dim = vision_in_dim if vision_passthrough else proj_dim
         self.proj_dim = out_dim
 
-        # EEG side: NICE-style residual MLP head.
-        self.eeg_proj = nn.Sequential(
-            nn.Linear(eeg_in_dim, out_dim),
-            _ResidualAdd(nn.Sequential(
+        # EEG side: stacked NICE-style residual MLP head.
+        # n_residual_blocks=1 (default) reproduces the original 1-block head.
+        # Bumping >1 gives the projector more capacity (useful when the encoder
+        # is frozen so the head has to do all the alignment work itself).
+        layers: list[nn.Module] = [nn.Linear(eeg_in_dim, out_dim)]
+        for _ in range(n_residual_blocks):
+            layers.append(_ResidualAdd(nn.Sequential(
                 nn.GELU(),
                 nn.Linear(out_dim, out_dim),
                 nn.Dropout(drop_proj),
-            )),
-            nn.LayerNorm(out_dim),
-        )
+            )))
+        layers.append(nn.LayerNorm(out_dim))
+        self.eeg_proj = nn.Sequential(*layers)
 
         # Vision side: identity (asymmetric/NICE) or learnable Linear (symmetric).
         if vision_passthrough:
