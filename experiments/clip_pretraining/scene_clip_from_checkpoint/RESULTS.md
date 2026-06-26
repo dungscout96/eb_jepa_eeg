@@ -116,16 +116,26 @@ The original recipe used `lr=1e-5` based on the standard fine-tuning prior
 ("use 1/10 of from-scratch LR when starting from a pretrained checkpoint").
 A late-sweep LR ablation showed that prior was wrong here:
 
-| LR | mean r | Δr vs random | bootstrap CI |
-|---|---|---|---|
-| 1e-5 (original "winner") | +0.172 | +0.131 | [+0.139, +0.202] |
-| 3e-5 | +0.206 | +0.166 | [+0.172, +0.238] |
-| **1e-4** ⭐ | **+0.238** | **+0.198** | [+0.199, +0.276] |
+| LR | Δr on **val** [CI] | Δr on **test** [CI] |
+|---|---|---|
+| 1e-5 (original "winner") | +0.116 [+0.099, +0.133] | +0.131 [+0.099, +0.162] |
+| 3e-5 | +0.155 [+0.137, +0.171] | +0.166 [+0.131, +0.197] |
+| **1e-4** ⭐ | **+0.198 [+0.178, +0.217]** | **+0.198 [+0.158, +0.235]** |
 
-The lr=1e-4 CI is **strictly above** the lr=1e-5 CI. Going from lr=1e-5 to
-lr=1e-4 (10×) buys +0.067 absolute mean r, +51 % relative Δr improvement.
-Higher LRs (3e-4, 5e-4) and longer training at lr=1e-4 (1000 epochs) are
-queued; both will be added to the leaderboard when they finish.
+The lr=1e-4 CI is **strictly above** the lr=1e-5 CI on both val and test.
+Going from lr=1e-5 to lr=1e-4 buys +51 % relative Δr improvement. Higher
+LRs (3e-4, 5e-4) and longer training at lr=1e-4 (1000 epochs) are queued.
+
+**The val column was added retrospectively to validate that the lr=1e-4
+"winner" was not a test-set overfitting artifact.** The original sweep
+probed only on test (every checkpoint, every hyperparameter), which is the
+textbook definition of test-set overfitting via selection. After noticing
+this, we re-probed each LR variant on val (R5) with the same B=2000
+bootstrap protocol. Both val and test rank lr=1e-4 > lr=3e-5 > lr=1e-5,
+and the lr=1e-4 Δr value matches to 3 decimals across splits (+0.198 on
+both). The recipe selection was robust; we got lucky on the protocol
+violation. Methodology going forward: hyperparameter selection probes val
+only; test is touched once per final-reported configuration.
 
 **Per-feature: the high-level visuals explode.** REVE's pre-existing
 strengths (luminance, contrast, position) improve modestly (~+20-30 % r);
