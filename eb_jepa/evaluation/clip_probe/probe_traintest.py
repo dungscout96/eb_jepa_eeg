@@ -52,8 +52,12 @@ def parse_args():
     ap.add_argument("--seed", type=int, default=42,
                     help="RNG seed for bootstrap resampling")
     ap.add_argument("--bootstrap", type=int, default=0,
-                    help="If >0, do this many bootstrap resamples of test recordings "
+                    help="If >0, do this many bootstrap resamples of evaluation recordings "
                          "(with replacement) to get per-feature 95%% CIs on Pearson r")
+    ap.add_argument("--eval-split", default="test", choices=["val", "test"],
+                    help="Which split to evaluate on after fitting on train. Default "
+                         "test (final report); use val for hyperparameter selection to "
+                         "avoid test-set overfitting.")
     return ap.parse_args()
 
 
@@ -118,8 +122,8 @@ def main():
     train_set = build_dataset(cfg, "train", SCALAR_FEATURES_DEFAULT)
     print(f"  n_recordings={len(train_set)}, n_chans={train_set.n_chans}")
 
-    print(f"Building TEST split ...")
-    test_set = build_dataset(cfg, "test", SCALAR_FEATURES_DEFAULT)
+    print(f"Building {args.eval_split.upper()} split ...")
+    test_set = build_dataset(cfg, args.eval_split, SCALAR_FEATURES_DEFAULT)
     print(f"  n_recordings={len(test_set)}")
 
     encoder = build_encoder(
@@ -138,9 +142,9 @@ def main():
     X_tr, Y_tr, _ = embed_split(encoder, train_set, device, args.encode_batch, args.max_train_recordings)
     print(f"  TRAIN  X={X_tr.shape}  Y={Y_tr.shape}")
 
-    print(f"\nEmbedding TEST recordings ({len(test_set)}) ...")
+    print(f"\nEmbedding {args.eval_split.upper()} recordings ({len(test_set)}) ...")
     X_te, Y_te, rec_ids_te = embed_split(encoder, test_set, device, args.encode_batch)
-    print(f"  TEST   X={X_te.shape}  Y={Y_te.shape}  n_unique_recordings={len(np.unique(rec_ids_te))}")
+    print(f"  {args.eval_split.upper()}   X={X_te.shape}  Y={Y_te.shape}  n_unique_recordings={len(np.unique(rec_ids_te))}")
 
     # Standardize features using train stats only (no test leakage).
     scaler = StandardScaler().fit(X_tr)
@@ -149,6 +153,7 @@ def main():
 
     results = {
         "random_baseline": args.random_baseline,
+        "eval_split": args.eval_split,
         "n_train_recordings": int(len(train_set) if not args.max_train_recordings else args.max_train_recordings),
         "n_test_recordings": int(len(test_set)),
         "n_train_windows": int(X_tr.shape[0]),
