@@ -108,11 +108,17 @@ MOVIE_METADATA = {
         "vjepa2_embeddings": str(
             PROJECT_ROOT / "movie_annotation" / "output" / "despicable_me" / "vjepa2_embeddings.npz"
         ),
-        # Shot detection not yet run for DespicableMe; loader returns None
-        # (shot_id targets will be filled with -1 for these recordings).
-        "shot_boundaries": None,
-        "scene_map": None,
-        "vjepa2_recipe": None,
+        "shot_boundaries": str(
+            PROJECT_ROOT / "movie_annotation" / "output" / "despicable_me"
+            / "shot_detection" / "transnetv2_boundaries.csv"
+        ),
+        "scene_map": str(
+            PROJECT_ROOT / "experiments" / "clip_pretraining" / "embedding_feature_correlation"
+            / "DespicableMe" / "vjepa2_scenes_map.csv"
+        ),
+        "vjepa2_recipe": str(
+            PROJECT_ROOT / "movie_annotation" / "output" / "despicable_me" / "vjepa2_recipe.npz"
+        ),
     },
 }
 
