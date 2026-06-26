@@ -1,0 +1,65 @@
+======================================================================
+V-JEPA-2 clip embedding geometry: within-shot vs between-shot
+======================================================================
+
+clips=341  shots=35  cosine space (L2-normalized)
+
+[1] Variance decomposition (fraction of embedding variance):
+    between-shot (eta^2) = 0.795   within-shot = 0.205
+    F-statistic          = 35.0  (>>1 means shot identity strongly structures the space)
+
+[2] Pairwise cosine similarity (RAW embeddings — anisotropic):
+    same-shot (positives) : 0.999 +/- 0.001  (n=2,902)
+    diff-shot (negatives) : 0.997 +/- 0.003  (n=55,068)
+    separation: d-prime = 1.14   ROC-AUC = 0.898
+    -> all cosines crammed near 1.0: a dominant shared component dominates raw cosine.
+
+[2b] Pairwise cosine after MEAN-CENTERING (recommended CLIP space):
+    same-shot (positives) : 0.784 +/- 0.396
+    diff-shot (negatives) : -0.035 +/- 0.527
+    separation: d-prime = 1.76   ROC-AUC = 0.913
+    (AUC = P[a same-shot pair is more similar than a different-shot pair])
+    -> centering opens up the dynamic range; same/diff become far more separable.
+
+[3] Same- vs different-shot cosine at matched |time gap| (s):
+    gap [s)         same      (n)    diff      (n)
+    [  0,   1)      0.965      306   0.959       34
+    [  1,   2)      0.892      508   0.775      169
+    [  2,   4)      0.780      695   0.497      647
+    [  4,   8)      0.719      757   0.263     1879
+    [  8,  16)      0.705      555   0.133     4525
+    [ 16,  32)      0.595       81   0.088     9311
+    [ 32,  64)        -          0  -0.083    15712
+    [ 64, 128)        -          0  -0.125    19136
+    [128, 256)        -          0  -0.181     3655
+    -> compare same vs diff WITHIN a row: gap above the shot effect alone.
+
+[4] Per-shot geometry (within-shot compactness vs nearest other shot):
+    within-shot cos to own centroid : 0.904 (mean over shots)
+    cos to nearest OTHER centroid   : 0.823
+    margin (own - nearest other)    : 0.081  [min -0.156, 5 shots overlap a neighbor]
+
+[4,5 computed in mean-centered space.]
+
+[5] Nearest-neighbor shot purity (in-batch negative hardness):
+    top-1 neighbor same shot : 0.912  (raw: 0.894)
+    top-5 neighbor same shot : 0.771  (raw: 0.752)
+
+----------------------------------------------------------------------
+CLIP design implications:
+  * CENTER/WHITEN BEFORE CONTRASTING. Raw cosine AUC=0.90 with everything
+    near 1.0; after mean-centering AUC=0.91. The discriminative
+    signal lives in a small off-mean component, so either subtract the
+    global mean / batch-norm the targets, or rely on a learnable
+    temperature small enough to expand that range.
+  * Strong shot structure (eta^2=0.80, centered AUC=0.91): same-shot
+    clips are reliably closer than cross-shot ones. Shot-level positives
+    (clip<->shot-mean, or two clips from one shot) are well-posed and
+    cross-shot pairs are mostly clean negatives.
+  * Temporally adjacent clips (gap<~2s) are very similar even ACROSS shot
+    boundaries (see [3]) -> exclude near-in-time clips from the negative
+    pool (false negatives), and beware that 'same-shot positive' is partly
+    just 'nearby in time'.
+  * top-1 NN purity 0.91: ~9% of clips' nearest neighbor is in ANOTHER shot
+    -> in-batch negatives include genuinely hard (near-duplicate) cases;
+    a moderate temperature + many negatives will help more than mining.
