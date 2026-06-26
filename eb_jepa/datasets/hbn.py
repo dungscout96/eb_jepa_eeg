@@ -92,7 +92,7 @@ MOVIE_METADATA = {
             / "shot_detection" / "transnetv2_boundaries.csv"
         ),
         "scene_map": str(
-            PROJECT_ROOT / "experiments" / "clip_pretraining" / "embedding_feature_correlation" / "vjepa2_scenes_map.csv"
+            PROJECT_ROOT / "experiments" / "clip_pretraining" / "embedding_feature_correlation" / "ThePresent" / "vjepa2_scenes_map.csv"
         ),
         "vjepa2_recipe": str(
             PROJECT_ROOT / "movie_annotation" / "output" / "The_Present" / "vjepa2_recipe.npz"
