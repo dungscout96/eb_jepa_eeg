@@ -21,31 +21,43 @@ All probe JSONs are checked in under [`probe_results/`](probe_results/).
 
 ## TL;DR
 
-**Best checkpoint (as of 2026-06-26 second sweep): `warmstart_lr1e4_ep299`** —
-REVE-base warm-start + per_window targets + `proj_dim=512` + **`lr=1e-4`** +
+**Locked-in winner (post-2026-06-26 LR sweep): `warmstart_lr3e4_ep299`** —
+REVE-base warm-start + per_window targets + `proj_dim=512` + **`lr=3e-4`** +
 warmup=10 + AdamW + wd=0.05 + 300 epochs.
 
-Bootstrap-CI'd train→test (R1-R4 fit → R6 eval, B=2000 over R6 recordings):
+Bootstrap-CI'd train→eval (R1-R4 fit; B=2000 by eval-recording):
 
-| run | mean r | mean Δr vs random | mean CI |
-|---|---|---|---|
-| random_REVE_shape | +0.040 | — | [+0.005, +0.077] |
-| warmstart_v2_ep299 (lr=1e-5, previous "winner") | +0.172 | +0.131 | [+0.139, +0.202] |
-| warmstart_lr3e5_ep299 | +0.206 | +0.166 (+27 %) | [+0.172, +0.238] |
-| **warmstart_lr1e4_ep299** | **+0.238** | **+0.198 (+51 %)** | [+0.199, +0.276] |
-| ⟵ fresh500_ep499 (from-scratch baseline) | +0.133 | +0.080 | [+0.096, +0.169] |
+| run | val Δr [CI] | test Δr [CI] |
+|---|---|---|
+| random_REVE_shape | — | — |
+| lr=1e-5 (initial recipe "winner") | +0.116 [+0.099, +0.133] | +0.131 [+0.099, +0.162] |
+| lr=3e-5 | +0.155 [+0.137, +0.171] | +0.166 [+0.131, +0.197] |
+| lr=1e-4 | +0.198 [+0.178, +0.217] | +0.198 [+0.158, +0.235] |
+| **lr=3e-4** ⭐ | **+0.218 [+0.197, +0.238]** | **+0.197 [+0.155, +0.234]** |
+| lr=5e-4 | +0.195 [+0.175, +0.216] | — |
+| ⟵ fresh500_ep499 (from-scratch baseline) | — | +0.080 [+0.005, +0.144] |
 
-**+148 % over the from-scratch winner.** The lr=1e-4 CI is strictly above the
-lr=1e-5 CI — statistically significant improvement at 95 %. All 12 features
-significantly above the matched random baseline.
+**+146 % over the from-scratch winner on test.** Every per-feature CI on test
+is strictly above the matched random baseline (12 / 12 features).
 
-The big methodological correction is in §3.1 below. Briefly: my initial
+**Honest note on the lr=1e-4 → lr=3e-4 comparison**: lr=3e-4 wins on val by
++0.020 Δr but **ties with lr=1e-4 on test** (+0.197 vs +0.198). The val
+advantage didn't transfer. Two reads: (a) we slightly val-overfit by
+selecting from a 5-LR sweep on val; (b) test (n=108 rec, ~3× wider CIs than
+val n=293) doesn't have the resolution to detect a +0.02 Δr improvement.
+Either way, the recipe is **robust to LR ∈ [1e-4, 3e-4]** — pick 3e-4 if
+you trust the val selection, 1e-4 if you prefer the original CLIP-from-
+scratch winner. Both clearly beat lr=1e-5.
+
+The big methodological correction is in §3.1 below. Briefly: the initial
 hypothesis ("REVE-base is pretrained, so fine-tune at 1/10 from-scratch LR")
 was the standard fine-tuning prior but **wrong for this setup**. The REVE
-encoder needs the same `lr=1e-4` that won the from-scratch sweep — possibly
-*more*. Several earlier "findings" in this doc (e.g., "bigger projector
-hurts") were entangled with the under-tuned LR and need re-testing at
-lr=1e-4; flagged in §3.5 and §5.
+encoder needs at least the same `lr=1e-4` that won the from-scratch sweep.
+
+§3.2 covers a second surprise: **longer training at lr=1e-4 hurts**. The
+1000-epoch run lands at val Δr ≈ +0.11 across ep500–999 — *worse than the
+lr=1e-4 ep299 sibling at +0.198*. Schedule length matters as much as peak
+LR. Don't extend the schedule.
 
 ---
 
@@ -90,52 +102,118 @@ median + 2.5 / 97.5 percentiles. The 95 % CI is the headline.
 All probed against the matched random-REVE-shape baseline
 (encoder-architecture-controlled). Sorted by Δr.
 
-| name | knobs | epochs | mean r | Δr vs random | wandb |
-|---|---|---|---|---|---|
-| **REVE_alone** | encoder init only, no CLIP training | 0 | +0.094 | +0.042 | — |
-| frozen_simple | freeze encoder, train clip_head (1 res block) | 100 | +0.094 | +0.042 | [qxe6g9gv](https://wandb.ai/sccn/eb_jepa/runs/qxe6g9gv) |
-| frozen_complex | freeze encoder, train clip_head (3 res blocks) | 100 | +0.094 | +0.042 | [de5vxx5x](https://wandb.ai/sccn/eb_jepa/runs/de5vxx5x) |
-| warmstart_v1 | unfrozen, **shot_mean** targets, lr=1e-5 | 100 | +0.137 | +0.086 | [xio8z1zm](https://wandb.ai/sccn/eb_jepa/runs/xio8z1zm) |
-| v3a (proj=1408, vfreeze, lr=1e-5) | per_window, vision_passthrough | 300 | +0.132 | +0.092 | [w2tw9k0r](https://wandb.ai/sccn/eb_jepa/runs/w2tw9k0r) |
-| v3b (proj=1024, sym, lr=1e-5) | per_window, sym | 300 | +0.138 | +0.098 | [kng2cyl5](https://wandb.ai/sccn/eb_jepa/runs/kng2cyl5) |
-| warmstart_v2_300 (lr=1e-5) | per_window, proj=512 | 300 | +0.172 | +0.131 | [8f4kly1d](https://wandb.ai/sccn/eb_jepa/runs/8f4kly1d) |
-| warmstart_v2_500 (lr=1e-5) | same as v2_300, longer | 500 | +0.170 | +0.130 | [zk60hpt5](https://wandb.ai/sccn/eb_jepa/runs/zk60hpt5) |
-| **lr=3e-5** | per_window, proj=512, lr=3e-5 | 300 | +0.206 | +0.166 | [jo34f2xl](https://wandb.ai/sccn/eb_jepa/runs/jo34f2xl) |
-| **lr=1e-4** ⭐ | per_window, proj=512, **lr=1e-4** | 300 | **+0.238** | **+0.198** | [zd928rf0](https://wandb.ai/sccn/eb_jepa/runs/zd928rf0) |
+All test Δr's are paired against `probe_tt_random_reve_shape_boot` (mean r
+=+0.040). Sorted by val Δr where available, falling back to test Δr.
 
-(lr=3e-4, lr=5e-4, and lr=1e-4 @ 1000 epochs are queued — pending results
-will update this table.)
+| name | knobs | epochs | val Δr | test Δr | wandb |
+|---|---|---|---|---|---|
+| REVE_alone | encoder init only, no CLIP training | 0 | — | +0.042 | — |
+| frozen_simple | freeze encoder, train clip_head (1 res block) | 100 | — | +0.042 | [qxe6g9gv](https://wandb.ai/sccn/eb_jepa/runs/qxe6g9gv) |
+| frozen_complex | freeze encoder, train clip_head (3 res blocks) | 100 | — | +0.042 | [de5vxx5x](https://wandb.ai/sccn/eb_jepa/runs/de5vxx5x) |
+| warmstart_v1 | unfrozen, **shot_mean** targets, lr=1e-5 | 100 | — | +0.086 | [xio8z1zm](https://wandb.ai/sccn/eb_jepa/runs/xio8z1zm) |
+| v3a (proj=1408, vfreeze) | per_window, vision_passthrough, lr=1e-5 | 300 | — | +0.092 | [w2tw9k0r](https://wandb.ai/sccn/eb_jepa/runs/w2tw9k0r) |
+| v3b (proj=1024, sym) | per_window, sym, lr=1e-5 | 300 | — | +0.098 | [kng2cyl5](https://wandb.ai/sccn/eb_jepa/runs/kng2cyl5) |
+| warmstart_v2_300 | per_window, proj=512, lr=1e-5 | 300 | +0.116 | +0.131 | [8f4kly1d](https://wandb.ai/sccn/eb_jepa/runs/8f4kly1d) |
+| warmstart_v2_500 | same as v2_300, longer | 500 | — | +0.130 | [zk60hpt5](https://wandb.ai/sccn/eb_jepa/runs/zk60hpt5) |
+| lr=3e-5 | per_window, proj=512, lr=3e-5 | 300 | +0.155 | +0.166 | [jo34f2xl](https://wandb.ai/sccn/eb_jepa/runs/jo34f2xl) |
+| lr=1e-4 @ 1000 ep (ep500–999) | per_window, proj=512, **stretched schedule** | 1000 | +0.110–0.120 | — | [f5tmobz1](https://wandb.ai/sccn/eb_jepa/runs/f5tmobz1) |
+| **lr=1e-4 @ 300 ep** | per_window, proj=512, lr=1e-4 | 300 | +0.198 | +0.198 | [zd928rf0](https://wandb.ai/sccn/eb_jepa/runs/zd928rf0) |
+| lr=5e-4 | per_window, proj=512, lr=5e-4 | 300 | +0.195 | — | [q3frbndw](https://wandb.ai/sccn/eb_jepa/runs/q3frbndw) |
+| **lr=3e-4** ⭐ | per_window, proj=512, lr=3e-4 | 300 | **+0.218** | **+0.197** | [i4nu07v9](https://wandb.ai/sccn/eb_jepa/runs/i4nu07v9) |
 
 ---
 
 ## §3. Key findings
 
-### 3.1 Learning rate was the most undertuned knob — lr=1e-4 is the new winner
+### 3.1 Learning rate was the most undertuned knob — lr=3e-4 is the locked-in winner
 
 The original recipe used `lr=1e-5` based on the standard fine-tuning prior
 ("use 1/10 of from-scratch LR when starting from a pretrained checkpoint").
 A late-sweep LR ablation showed that prior was wrong here:
 
-| LR | Δr on **val** [CI] | Δr on **test** [CI] |
+| LR | val Δr [CI] | test Δr [CI] |
 |---|---|---|
 | 1e-5 (original "winner") | +0.116 [+0.099, +0.133] | +0.131 [+0.099, +0.162] |
 | 3e-5 | +0.155 [+0.137, +0.171] | +0.166 [+0.131, +0.197] |
-| **1e-4** ⭐ | **+0.198 [+0.178, +0.217]** | **+0.198 [+0.158, +0.235]** |
+| 1e-4 | +0.198 [+0.178, +0.217] | +0.198 [+0.158, +0.235] |
+| **3e-4** ⭐ | **+0.218 [+0.197, +0.238]** | **+0.197 [+0.155, +0.234]** |
+| 5e-4 | +0.195 [+0.175, +0.216] | — |
 
-The lr=1e-4 CI is **strictly above** the lr=1e-5 CI on both val and test.
-Going from lr=1e-5 to lr=1e-4 buys +51 % relative Δr improvement. Higher
-LRs (3e-4, 5e-4) and longer training at lr=1e-4 (1000 epochs) are queued.
+**The val curve has a clear peak at lr=3e-4** (inverted-U: 1e-5 → 3e-5 →
+1e-4 → 3e-4 → 5e-4 climbs then descends). On **test**, however, lr=3e-4
+and lr=1e-4 land within 0.001 of each other (+0.197 vs +0.198) — the val
+advantage of lr=3e-4 did not transfer at the resolution of the n=108
+test set. Either (a) we slightly val-overfit by selecting from 5 LRs on
+val, or (b) test CIs (~3× wider than val due to smaller n) miss a
+genuine +0.02 difference. Treat **lr ∈ [1e-4, 3e-4]** as the recipe's
+LR sweet spot.
 
-**The val column was added retrospectively to validate that the lr=1e-4
-"winner" was not a test-set overfitting artifact.** The original sweep
+Going from lr=1e-5 → lr=3e-4 buys +0.102 absolute val Δr (+88 % relative)
+or +0.066 test Δr (+50 %). The "1/10 from-scratch LR" prior cost roughly
+half of the available gain.
+
+**The val column was added retrospectively to validate that the new
+"winner" wasn't a test-set overfitting artifact.** The original sweep
 probed only on test (every checkpoint, every hyperparameter), which is the
 textbook definition of test-set overfitting via selection. After noticing
-this, we re-probed each LR variant on val (R5) with the same B=2000
-bootstrap protocol. Both val and test rank lr=1e-4 > lr=3e-5 > lr=1e-5,
-and the lr=1e-4 Δr value matches to 3 decimals across splits (+0.198 on
-both). The recipe selection was robust; we got lucky on the protocol
-violation. Methodology going forward: hyperparameter selection probes val
-only; test is touched once per final-reported configuration.
+this, every LR variant was re-probed on val (R5) with the same B=2000
+bootstrap protocol. Both val and test ranked the four LRs identically
+(1e-5 < 3e-5 < 1e-4 ≤ 3e-4); the only place val and test diverged was the
+size of the lr=3e-4 vs lr=1e-4 gap. Methodology going forward:
+hyperparameter selection probes val only; test is touched once per
+final-reported configuration.
+
+**Per-feature gains from the original lr=1e-5 → lr=3e-4 winner** (val
+column, where the largest improvements are):
+
+| feature | lr=1e-5 r | lr=3e-4 r | gain |
+|---|---|---|---|
+| motion_energy | +0.213 | +0.406 | +91 % |
+| narrative_event_score | +0.180 | +0.281 | +56 % |
+| scene_natural_score | +0.213 | +0.335 | +57 % |
+| n_faces | +0.207 | +0.296 | +43 % |
+| depth_mean | +0.213 | +0.309 | +45 % |
+
+The features REVE was *weakest* on (motion, faces, depth, narrative) gain
+the most. Higher LR lets the encoder actually move toward V-JEPA-2's
+geometry rather than staying near REVE-init.
+
+### 3.2 The LR–schedule-length interaction: longer training HURTS at the same peak LR
+
+A 1000-epoch run at lr=1e-4 (cosine to lr_min=1e-7, save_every=50) was run
+to test the "more training helps" hypothesis. It does not — in fact it's
+substantially **worse** than the 300-epoch sibling:
+
+| run | val Δr (B=2000) |
+|---|---|
+| lr=1e-4 @ 300 ep, ep299 | +0.198 |
+| lr=1e-4 @ 1000 ep, ep500 | +0.120 |
+| lr=1e-4 @ 1000 ep, ep700 | +0.115 |
+| lr=1e-4 @ 1000 ep, ep999 | +0.110 |
+
+The 1000-ep run hovers at the lr=1e-5 baseline level (+0.116) across the
+entire ep500–999 range. **Same peak LR, very different cosine schedule:**
+
+- 300-ep cosine: lr decays from 1e-4 to lr_min=1e-7 by ep299 — encoder
+  effectively frozen by the end, baked-in early-stopping.
+- 1000-ep cosine: lr decays from 1e-4 over 1000 epochs — at ep500 the
+  encoder is still training at lr≈5e-5, well into a "contrastively-
+  overfit" regime.
+
+Train-side diagnostics confirm overfit: train top1_e2v rises from 0.21
+(ep300) → 0.41 (ep700) → 0.49 (ep990) while val AUC peaks at ep700
+(0.86) then degrades to 0.78 by ep999. Train loss drops from 1.6 → 0.13
+while val R² drops in parallel. **The contrastive objective continues
+to overfit the train distribution but the encoder's transferable
+structure degrades** — the AUC ≠ R² decoupling at its sharpest, now
+visible as a train/val decoupling.
+
+**Implication**: schedule length matters as much as peak LR. With
+lr=1e-4 the 300-epoch cosine schedule is essentially providing implicit
+early-stopping via fast LR decay; extending to 1000 ep removes that
+regularization. The lr=3e-4 + 300 ep operating point pushes the same
+total "LR×epochs" budget into a shorter window at higher peak — and
+wins. Do not extend the schedule under this recipe.
 
 **Per-feature: the high-level visuals explode.** REVE's pre-existing
 strengths (luminance, contrast, position) improve modestly (~+20-30 % r);
