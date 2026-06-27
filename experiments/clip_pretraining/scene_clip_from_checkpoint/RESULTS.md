@@ -215,31 +215,7 @@ regularization. The lr=3e-4 + 300 ep operating point pushes the same
 total "LR×epochs" budget into a shorter window at higher peak — and
 wins. Do not extend the schedule under this recipe.
 
-**Per-feature: the high-level visuals explode.** REVE's pre-existing
-strengths (luminance, contrast, position) improve modestly (~+20-30 % r);
-the features REVE was *weak* on (motion, faces, depth, scene_natural,
-narrative) gain **+45 to +71 % r**:
-
-| feature | lr=1e-5 r | lr=1e-4 r | gain |
-|---|---|---|---|
-| motion_energy | +0.188 | **+0.286** | +52 % |
-| scene_natural_score | +0.130 | **+0.222** | +71 % |
-| narrative_event_score | +0.118 | **+0.201** | +70 % |
-| edge_density | +0.131 | **+0.214** | +63 % |
-| depth_mean | +0.139 | **+0.205** | +47 % |
-| n_faces | +0.144 | **+0.209** | +45 % |
-| face_area_frac | +0.129 | +0.176 | +37 % |
-| entropy | +0.203 | +0.278 | +37 % |
-| saturation_mean | +0.198 | +0.264 | +33 % |
-| contrast_rms | +0.211 | +0.262 | +24 % |
-| luminance_mean | +0.227 | +0.279 | +23 % |
-| position_in_movie | +0.241 | +0.264 | +10 % |
-
-The higher LR lets the encoder actually move toward V-JEPA-2's geometry
-rather than staying near REVE-init. This corrects (or at least
-re-interprets) several other findings in this doc; see §3.5 and §5.
-
-### 3.2 Interaction with REVE's depth: same LR as from-scratch, despite 5× more layers
+### 3.3 Interaction with REVE's depth: deeper encoder, same-or-higher LR than from-scratch
 
 Standard fine-tuning wisdom says deeper networks need *lower* LR (more layers
 compound gradient updates, more pretrained knowledge to potentially destroy).
@@ -247,12 +223,14 @@ REVE-base has **depth=22, embed=512** (~50 M params). The from-scratch
 winning encoder (fresh500) was **depth=4, embed=1024** (~35 M params). One
 might expect REVE to need 1/3-1/10 the LR.
 
-Instead, **both win at lr=1e-4**. Same LR for both architectures despite
-the 5× depth ratio and 1.4× param-count ratio. Three plausible reasons:
+Instead, **REVE wants the same-or-higher LR than from-scratch**: fresh500
+won at lr=1e-4, REVE wins at lr=3e-4 (val) or lr=1e-4–3e-4 (test). The 5×
+depth ratio and 1.4× param-count ratio give zero "deeper = lower LR"
+discount. Three plausible reasons:
 
 1. **REVE's pretraining basin is broad and stable.** It saw orders of
    magnitude more EEG than HBN provides, so its weights are well-conditioned
-   — lr=1e-4 doesn't easily push them out of the useful regime.
+   — lr=3e-4 doesn't easily push them out of the useful regime.
 2. **The contrastive loss has a depth-independent "effective LR" target.**
    With L2-normalized projector outputs and a learnable temperature, the
    per-sample loss magnitude is bounded by `O(log K)` in K = batch size,
@@ -265,22 +243,27 @@ the 5× depth ratio and 1.4× param-count ratio. Three plausible reasons:
 
 Practical implication: when extending the recipe to other pretrained EEG
 encoders, **don't reflexively shrink LR for deeper models**. Start at the
-from-scratch winning LR; only shrink if you observe instability.
+from-scratch winning LR (or higher); only shrink if you observe instability.
 
-### 3.3 Warm-start beats from-scratch by a wide margin
+### 3.4 Warm-start beats from-scratch by a wide margin
 
-At the now-corrected LR:
+At the now-corrected LR (test split, B=2000):
 
 | | mean r | mean Δr | epochs | wall (Delta A40) |
 |---|---|---|---|---|
-| fresh500_ep499 (from scratch) | +0.133 | +0.080 | 499 | 3 h 22 min |
-| **warmstart_lr1e4_ep299** | **+0.238** | **+0.198** | **299** | **1 h 09 min** |
+| fresh500_ep499 (from scratch, lr=1e-4) | +0.133 | +0.080 | 499 | 3 h 22 min |
+| warmstart_lr1e4_ep299 | +0.238 | +0.198 | 299 | 1 h 09 min |
+| **warmstart_lr3e4_ep299** ⭐ | **+0.237** | **+0.197** | **299** | **1 h 09 min** |
 
-Mean r improves by **+0.105 absolute (+79 % relative)**, mean Δr improves by
-**+148 %**. In ~1/3 the wall time. REVE's broad EEG pretraining is the
+Mean r improves by **+0.104 absolute (+78 % relative)**, mean Δr improves by
+**+146 %**. In ~1/3 the wall time. REVE's broad EEG pretraining is the
 right starting point even though it never saw movie-watching data.
 
-### 3.4 Statistical significance (per-feature, bootstrap B=2000)
+On val (n=293 recordings, higher resolution): lr=3e-4 = +0.218 Δr vs
+lr=1e-4 = +0.198 Δr — the +0.020 gap doesn't transfer to test (see TL;DR
+honesty note). Either LR is fine in practice.
+
+### 3.5 Statistical significance (per-feature, bootstrap B=2000)
 
 **12 / 12 features have CI lo > matched random point estimate** — every
 feature's Pearson r is significantly above random at the 95 % level. No
@@ -301,7 +284,7 @@ feature inversions:
 | scene_natural_score | +0.130 [+0.099, +0.161] | +0.035 [+0.004, +0.068] |
 | narrative_event_score | +0.118 [+0.093, +0.140] | +0.050 [+0.031, +0.068] |
 
-### 3.5 REVE's strength/weakness profile + how CLIP fills the gap
+### 3.6 REVE's strength/weakness profile + how CLIP fills the gap
 
 REVE-alone (no CLIP) per-feature Δr vs random:
 
@@ -329,47 +312,44 @@ Meanwhile, the low-level features REVE was already strong on stay strong
 warm-start preserves REVE's pre-existing strengths *and* adds the V-JEPA-2-
 specific high-level signal CLIP can teach.
 
-### 3.6 At lr=1e-5, training saturates at ~300 epochs — but this may be LR-specific
+### 3.7 Training saturates at ~300 epochs across the LR sweep — extending the schedule hurts
 
-**Caveat**: this finding was established at the now-superseded lr=1e-5. At
-the new lr=1e-4 the val AUC was still climbing sharply at ep299 (0.76 →
-0.83 over the last 100 epochs), so the saturation point likely moves with
-LR. The lr=1e-4 @ 1000-epoch run currently in flight (job 19713613) will
-tell us the actual saturation epoch at the new LR.
+Saturation was first established at lr=1e-5 (the 500-ep run was within
+bootstrap noise of the 300-ep run, all three CIs overlap). The 1000-ep
+lr=1e-4 run (§3.2) confirmed that extending the schedule at the new LR
+*hurts* rather than helps — val Δr drops from +0.198 (300-ep) to +0.110
+(1000-ep) on the same peak LR. **300 epochs is the right stopping point
+under the current cosine schedule.**
 
-Below is the lr=1e-5 saturation evidence for reference:
+Reference numbers from the original lr=1e-5 saturation evidence:
 
-500-ep run (ep400 = AUC peak, ep499 = latest) was indistinguishable from the
-300-ep run on probe R²:
-
-| checkpoint | mean r | mean Δr | mean CI |
+| checkpoint | mean r (test) | mean Δr | mean CI |
 |---|---|---|---|
-| warmstart_v2_300_ep299 | +0.1715 | +0.131 | [+0.139, +0.202] |
-| warmstart_v2_500_ep400 | +0.1714 | +0.131 | [+0.138, +0.203] |
-| warmstart_v2_500_ep499 | +0.1700 | +0.130 | [+0.137, +0.201] |
+| warmstart_v2_300_ep299 (lr=1e-5) | +0.1715 | +0.131 | [+0.139, +0.202] |
+| warmstart_v2_500_ep400 (lr=1e-5) | +0.1714 | +0.131 | [+0.138, +0.203] |
+| warmstart_v2_500_ep499 (lr=1e-5) | +0.1700 | +0.130 | [+0.137, +0.201] |
 
-All three CIs overlap nearly completely. Per-feature differences are within
-bootstrap noise (±0.005 r). **The recipe saturates at ~300 epochs.** Extended
-training is wasted compute. (Train top1_e2v peaks at ep450 per W&B, but this
-within-distribution train metric decouples from downstream R²;
-intermediate-epoch checkpoints were not preserved.)
+A few train-side signals to watch for divergence between contrastive
+training and probe transferability: train top1_e2v continues to rise
+through ep400+ on every run (in-distribution overfit signal), while val
+R² plateaus at ~300 epochs. Treat train top1 as a "still learning the
+batch geometry" metric, not a stopping criterion.
 
-### 3.7 At lr=1e-5, bigger projector hurts — but this is now entangled with LR and needs re-test
+### 3.8 At lr=1e-5, bigger projector hurts — re-test at lr=3e-4 still pending
 
-**Caveat**: same as above. The proj_dim ablation was run at lr=1e-5, where
-the encoder barely moves. The original hypothesis was "a small projector
-bottlenecks gradient flow through the encoder, forcing the encoder to
-fine-tune". Under that hypothesis, with the higher lr=1e-4 the encoder
-moves regardless of projector size, and bigger projectors might no longer
-hurt — they might even help by giving the contrastive loss a larger target
-space. **Re-running the proj_dim sweep at lr=1e-4 is the obvious next
-experiment.**
+**Caveat**: the proj_dim ablation was run at lr=1e-5, where the encoder
+barely moves. The original hypothesis was "a small projector bottlenecks
+gradient flow through the encoder, forcing the encoder to fine-tune".
+Under that hypothesis, at the new lr=3e-4 the encoder moves freely regardless
+of projector size, and bigger projectors might no longer hurt — they might
+even help by giving the contrastive loss a larger target space.
+**Re-running the proj_dim sweep at lr=3e-4 is the obvious next experiment.**
 
 Below is the lr=1e-5 evidence for reference (winning combo at the time):
 
-| run | proj_dim | vision_passthrough | mean Δr |
+| run | proj_dim | vision_passthrough | mean Δr (test) |
 |---|---|---|---|
-| **warmstart_v2_300** | **512** | **false (sym)** | **+0.131** |
+| **warmstart_v2_300** (proj=512) | **512** | **false (sym)** | **+0.131** |
 | v3b | 1024 | false (sym) | +0.098 |
 | v3a | 1408 | true (vfreeze) | +0.092 |
 | ⟵ fresh500_ep499 (proj=1024) | 1024 | false (sym) | +0.093 |
@@ -386,11 +366,11 @@ outputs, not projected outputs**, so encoder fine-tuning is exactly what
 matters.
 
 Consistent with v3b (proj=1024) landing at +0.098 — essentially identical to
-fresh500_ep499 (also proj=1024, +0.093). **The REVE warm-start advantage only
-manifests at proj=512.** With proj=1024 there's no measurable benefit from
-the better init.
+fresh500_ep499 (also proj=1024, +0.093). At lr=1e-5 **the REVE warm-start
+advantage only manifests at proj=512.** Whether the proj=1024/1408 deficit
+persists at lr=3e-4 is the next experiment.
 
-### 3.8 Frozen-encoder ablation confirms encoder fine-tuning matters
+### 3.9 Frozen-encoder ablation confirms encoder fine-tuning matters
 
 Probing **encoder** outputs of frozen runs gives bit-identical numbers to
 REVE-alone (encoder weights unchanged):
@@ -406,9 +386,9 @@ blind to anything happening in `clip_head`. AUCs differ across these runs
 (simple=0.68, complex=0.60 final shot-AUC), but that gain lives in the
 projector and is invisible to a linear probe on encoder outputs.
 
-**Practical implication**: the +0.131 (at lr=1e-5) or +0.198 (at lr=1e-4)
-Δr lift from REVE-alone is *all* encoder fine-tuning. Freezing the encoder
-defeats the purpose of the recipe.
+**Practical implication**: the +0.131 (at lr=1e-5), +0.198 (at lr=1e-4), or
+**+0.197 (test) / +0.218 (val) at lr=3e-4** Δr lift from REVE-alone is *all*
+encoder fine-tuning. Freezing the encoder defeats the purpose of the recipe.
 
 ---
 
@@ -429,41 +409,59 @@ The "small projector wins" finding *at lr=1e-5* sharpens this view: the
 encoder is the storage location that matters for downstream transfer (the
 probe reads encoder outputs). A small projector forces the contrastive loss
 to flow gradient *through* the encoder rather than absorbing it in a large
-projection head. But the LR ablation reframes this: with lr=1e-4 the
+projection head. But the LR ablation reframes this: with lr=3e-4 the
 encoder moves regardless of projector size, so the small-projector
 "gradient-bottleneck" benefit may disappear at the new LR. The right way
 to think about both findings together is **"the encoder needs to actually
 move to learn V-JEPA-2 alignment, and both LR and projector size affect
 how much it moves"** — lr=1e-5 with a small projector is one operating
-point that gets useful movement; lr=1e-4 with any projector likely gets
+point that gets useful movement; lr=3e-4 with any projector likely gets
 more movement, but we haven't checked the proj_dim sweep at the new LR yet.
+
+The schedule-length finding (§3.2) adds a third axis: **how long the
+encoder keeps moving at high LR is itself a regularizer.** A 300-epoch
+cosine at lr=1e-4 reaches lr_min by ep299 — implicit early-stopping. A
+1000-epoch cosine at the same peak LR keeps the encoder training at
+lr≈5e-5 for hundreds more epochs — past the point where it's still
+finding the right subspace, into a regime where the contrastive top1 keeps
+rising but the encoder's transferable structure degrades. Operating
+point: lr=3e-4, 300 epochs, proj=512.
 
 ---
 
 ## §5. Open questions / next experiments
 
-1. **Higher LR — how far can we push?** lr=1e-4 beat lr=1e-5 by +51 % Δr.
-   lr=3e-4 and lr=5e-4 at 300 epochs are queued (jobs 19713611, 19713612).
-   When does going higher stop helping?
-2. **Longer at lr=1e-4** — val AUC was still rising at ep299 (0.76 → 0.83
-   over the last 100 epochs at lr=1e-4). A 1000-epoch run with
-   `save_every=50` is queued (job 19713613); we'll probe ep400, ep500,
-   ep1000 (or whichever epoch range plateaus) afterward.
-3. **Re-run proj_dim sweep at lr=1e-4** — the "proj=512 wins" finding was
+Resolved by this sweep:
+
+- ✅ **How far can we push the LR?** lr=3e-4 is the val peak (inverted-U
+  curve climbing 1e-5 → 3e-5 → 1e-4 → 3e-4, descending at 5e-4). Test
+  saturates at lr=1e-4 (lr=1e-4 and lr=3e-4 tie within 0.001 Δr). §3.1.
+- ✅ **Does longer training at the new LR help?** No — 1000-ep cosine at
+  lr=1e-4 drops val Δr to +0.110, well below the 300-ep +0.198 sibling.
+  §3.2.
+
+Still open:
+
+1. **Re-run proj_dim sweep at lr=3e-4** — the "proj=512 wins" finding was
    established at lr=1e-5 where gradient flow through the encoder was the
-   bottleneck. At lr=1e-4 the encoder moves freely; bigger projectors may
-   no longer hurt and might help (more contrastive-target room).
-4. **Same recipe on DespicableMe** alone (single-task) — does the warm-start
+   bottleneck. At lr=3e-4 the encoder moves freely; bigger projectors may
+   no longer hurt and might help (more contrastive-target room). §3.8.
+2. **Same recipe on DespicableMe** alone (single-task) — does the warm-start
    advantage generalize to a second movie? Prereqs done: scene map at
    `experiments/clip_pretraining/embedding_feature_correlation/DespicableMe/vjepa2_scenes_map.csv`,
    recipe artifact at `movie_annotation/output/despicable_me/vjepa2_recipe.npz`.
-5. **Multi-movie training** (`data.task=[ThePresent, DespicableMe]`) — does
-   two movies improve generalization, or do they interfere? Run in progress
-   (job 19712508) once the windowing-skip bug fix landed.
-6. **Stronger memory bank / MoCo queue** — the multi-view-redundancy bound
+3. **Multi-movie training** (`data.task=[ThePresent, DespicableMe]`) at the
+   new lr=3e-4 — v2 was run at the old lr=1e-5; needs re-running at the
+   corrected LR before comparing to single-movie. See
+   [`../scene_clip_multimovie/NOTES.md`](../scene_clip_multimovie/NOTES.md).
+4. **Shorter cosine schedule at lr=3e-4 / lr=5e-4** — §3.2 shows that
+   schedule length matters. If we drop the schedule to 200 ep with
+   lr=5e-4 (or push lr higher with shorter schedule), do we beat the
+   current operating point? Same total LR×epochs budget, different shape.
+5. **Stronger memory bank / MoCo queue** — the multi-view-redundancy bound
    only tightens with more diverse negatives. Adding ~16k queued V-JEPA-2
    negatives is the next-most-principled upgrade.
-7. **Cross-modal latent prediction (EEG-JEPA-against-V-JEPA-2 latents)** —
+6. **Cross-modal latent prediction (EEG-JEPA-against-V-JEPA-2 latents)** —
    replaces contrastive with direct regression of V-JEPA-2 latents from
    masked EEG. Avoids the log-K-bits ceiling of pure InfoNCE.
 
@@ -477,34 +475,39 @@ PYTHONPATH=. uv run --group eeg python \
     experiments/clip_pretraining/scene_clip_from_checkpoint/prepare_reve_checkpoint.py \
     --output reve_base_eet_init.pth.tar
 
-# 2. Train the new winning recipe (lr=1e-4 at 300 epochs).
-#    Delta job 19712256, wandb zd928rf0.
+# 2. Train the locked-in recipe (lr=3e-4 at 300 epochs).
+#    Delta job 19713611, wandb i4nu07v9.
 PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.clip_pretrain \
     --fname=config/clip_pretrain_from_reve.yaml \
     --meta.encoder_init_from=/path/to/reve_base_eet_init.pth.tar \
     --loss.target_kind=per_window \
-    --optim.lr=1e-4 \
+    --optim.lr=3e-4 \
     --optim.epochs=300 \
-    --logging.wandb_group=clip_reve_warmstart_lr1e4_pw300
+    --logging.wandb_group=clip_reve_warmstart_lr3e4_pw300
 # config supplies: loss.proj_dim=512, vision_passthrough=false,
 #                  optim.optimizer=adamw, weight_decay=0.05,
 #                  warmup_epochs=10, lr_min=1e-7
 # (The config still has optim.lr=1e-5 baked in for backward compat with the
-#  earlier "winner"; the CLI override --optim.lr=1e-4 is what makes the new
-#  recipe.)
+#  initial "winner"; the CLI override --optim.lr=3e-4 is what makes the
+#  locked-in recipe. lr=1e-4 is an acceptable alternative — see §3.4.)
 
-# 3. Bootstrap-CI'd probe (the headline number).
+# 3. Bootstrap-CI'd probe (val for hyperparameter selection, test once for
+#    the final report). Use --eval-split val while iterating; only touch
+#    --eval-split test for the final number on a configuration you're done
+#    selecting.
 PYTHONPATH=. uv run --group eeg python \
     eb_jepa/evaluation/clip_probe/probe_traintest.py --device cuda \
-    --checkpoint /path/to/lr1e4_ep299/latest.pth.tar \
+    --checkpoint /path/to/lr3e4_ep299/latest.pth.tar \
     --config config/clip_pretrain_from_reve.yaml \
+    --eval-split test \
     --bootstrap 2000 --seed 42 \
-    --output probe_results/probe_tt_warmstart_lr1e4_ep299_boot.json
+    --output probe_results/probe_tt_warmstart_lr3e4_ep299_boot.json
 
 # Random baseline (substitute --random-baseline for --checkpoint).
 ```
 
-Acceptance gate: mean Pearson r ≈ +0.238, mean Δr vs random ≈ +0.198,
-all 12 per-feature CIs strictly above matched random. Any meaningfully
+Acceptance gate (test split, B=2000): mean Pearson r ≈ +0.237, mean Δr vs
+random ≈ +0.197, all 12 per-feature CIs strictly above matched random.
+On val (n=293): mean r ≈ +0.340, mean Δr ≈ +0.218. Any meaningfully
 lower value indicates a recipe-config bug (e.g., wrong proj_dim, wrong
-target_kind, wrong LR, encoder accidentally frozen).
+target_kind, wrong LR, wrong schedule length, encoder accidentally frozen).
