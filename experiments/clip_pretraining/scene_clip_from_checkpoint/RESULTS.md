@@ -293,31 +293,46 @@ the largest absolute gains — the same "REVE-was-weak-here" features that
 
 ### 3.6 REVE's strength/weakness profile + how CLIP fills the gap
 
-REVE-alone (no CLIP) per-feature Δr vs random:
+REVE-alone (no CLIP) per-feature r vs random (test, B=2000):
 
-- **Strong (matched or exceeded fresh500)**: luminance, contrast, saturation,
-  entropy, position_in_movie. These are *low-level perceptual* features REVE
-  picked up from broad EEG pretraining.
-- **Weak or below random**: n_faces (−0.010), scene_natural (−0.011), depth
-  (+0.004), motion (+0.004). REVE never saw movie-watching data, so its
-  features have no representation of these *high-level visual* signals.
+- **Strong**: luminance (+0.151), contrast (+0.136), saturation (+0.136),
+  entropy (+0.168), position_in_movie (+0.151). These are *low-level
+  perceptual* features REVE picked up from broad EEG pretraining.
+- **Weak**: n_faces (+0.048), scene_natural (+0.048), narrative_event
+  (+0.049), face_area_frac (+0.052), edge_density (+0.059), depth (+0.059),
+  motion (+0.068). REVE never saw movie-watching data, so its features have
+  no representation of these *high-level visual* signals.
 
 The CLIP warm-start fills exactly the high-level gap. Per-feature gain from
-REVE-alone → warmstart_v2_300:
+REVE-alone → `warmstart_lr3e4_ep299` (test, sorted by gain):
 
-| feature | REVE-alone | warmstart_v2_300 | gain |
+| feature | REVE-alone | lr=3e-4 ep299 | gain |
 |---|---|---|---|
-| motion_energy | +0.068 | +0.188 | **+0.120** |
-| n_faces | +0.048 | +0.144 | +0.096 |
-| depth_mean | +0.059 | +0.139 | +0.080 |
-| face_area_frac | +0.052 | +0.129 | +0.077 |
-| scene_natural_score | +0.048 | +0.130 | +0.082 |
-| narrative_event_score | +0.049 | +0.118 | +0.069 |
+| **motion_energy** | +0.068 | **+0.300** | **+0.232** |
+| **scene_natural_score** | +0.048 | **+0.247** | **+0.199** |
+| n_faces | +0.048 | +0.215 | +0.167 |
+| depth_mean | +0.059 | +0.221 | +0.162 |
+| narrative_event_score | +0.049 | +0.207 | +0.157 |
+| edge_density | +0.059 | +0.216 | +0.157 |
+| face_area_frac | +0.052 | +0.188 | +0.135 |
+| luminance_mean | +0.151 | +0.274 | +0.123 |
+| position_in_movie | +0.151 | +0.261 | +0.110 |
+| saturation_mean | +0.136 | +0.245 | +0.109 |
+| contrast_rms | +0.136 | +0.238 | +0.102 |
+| entropy | +0.168 | +0.240 | +0.073 |
 
-Meanwhile, the low-level features REVE was already strong on stay strong
-(REVE-alone luminance +0.151 → warmstart +0.227 = small improvement). The
-warm-start preserves REVE's pre-existing strengths *and* adds the V-JEPA-2-
-specific high-level signal CLIP can teach.
+The gain ordering tracks REVE's pre-existing weakness — the seven
+high-level features REVE was weakest on (motion, scene_natural, n_faces,
+depth, narrative, edge_density, face_area_frac) gain +0.13 to +0.23 r,
+while the low-level features REVE was already strong on still improve
+but by less (+0.07 to +0.12 r). The warm-start preserves REVE's
+pre-existing strengths *and* adds the V-JEPA-2-specific high-level
+signal CLIP can teach.
+
+vs. the original lr=1e-5 winner (warmstart_v2_300), the high-level gains
+roughly **double** — e.g., motion's gap-fill went from +0.120 to +0.232,
+scene_natural from +0.082 to +0.199. The lr=1e-5 recipe was leaving
+most of the high-level signal on the table.
 
 ### 3.7 Training saturates at ~300 epochs across the LR sweep — extending the schedule hurts
 
