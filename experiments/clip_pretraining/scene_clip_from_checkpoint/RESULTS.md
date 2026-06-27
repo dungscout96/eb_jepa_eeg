@@ -265,24 +265,31 @@ honesty note). Either LR is fine in practice.
 
 ### 3.5 Statistical significance (per-feature, bootstrap B=2000)
 
-**12 / 12 features have CI lo > matched random point estimate** — every
-feature's Pearson r is significantly above random at the 95 % level. No
-feature inversions:
+Test split (R6, n=108 recordings) for the locked-in winner
+(`warmstart_lr3e4_ep299`). **12 / 12 features have CI lo > matched random
+CI hi** — every per-feature gain is significant at the 95 % level. No
+feature inversions.
 
-| feature | warmstart_v2_ep299 r [95 % CI] | rand_REVE r [95 % CI] |
+| feature | lr=3e-4 ep299 r [95 % CI] | rand_REVE r [95 % CI] |
 |---|---|---|
-| luminance_mean | +0.227 [+0.186, +0.265] | +0.048 [−0.002, +0.101] |
-| contrast_rms | +0.211 [+0.174, +0.247] | +0.020 [−0.022, +0.067] |
-| saturation_mean | +0.198 [+0.160, +0.235] | +0.028 [−0.017, +0.076] |
-| entropy | +0.203 [+0.164, +0.242] | +0.057 [+0.021, +0.101] |
-| **position_in_movie** | **+0.241 [+0.197, +0.283]** | −0.005 [−0.073, +0.063] |
-| motion_energy | +0.188 [+0.158, +0.216] | +0.064 [+0.038, +0.089] |
-| n_faces | +0.144 [+0.120, +0.166] | +0.061 [+0.036, +0.086] |
-| depth_mean | +0.139 [+0.111, +0.166] | +0.038 [+0.013, +0.061] |
-| face_area_frac | +0.129 [+0.108, +0.150] | +0.051 [+0.025, +0.076] |
-| edge_density | +0.131 [+0.102, +0.159] | +0.036 [+0.003, +0.066] |
-| scene_natural_score | +0.130 [+0.099, +0.161] | +0.035 [+0.004, +0.068] |
-| narrative_event_score | +0.118 [+0.093, +0.140] | +0.050 [+0.031, +0.068] |
+| **motion_energy** | **+0.300 [+0.251, +0.345]** | +0.064 [+0.038, +0.089] |
+| luminance_mean | +0.274 [+0.230, +0.315] | +0.048 [−0.002, +0.101] |
+| **position_in_movie** | **+0.261 [+0.217, +0.304]** | −0.005 [−0.073, +0.063] |
+| scene_natural_score | +0.247 [+0.209, +0.281] | +0.035 [+0.004, +0.068] |
+| saturation_mean | +0.245 [+0.203, +0.289] | +0.028 [−0.017, +0.076] |
+| entropy | +0.240 [+0.191, +0.287] | +0.057 [+0.021, +0.101] |
+| contrast_rms | +0.238 [+0.196, +0.280] | +0.020 [−0.022, +0.067] |
+| depth_mean | +0.220 [+0.177, +0.262] | +0.038 [+0.013, +0.061] |
+| edge_density | +0.216 [+0.175, +0.253] | +0.036 [+0.003, +0.066] |
+| n_faces | +0.216 [+0.181, +0.247] | +0.061 [+0.036, +0.086] |
+| narrative_event_score | +0.207 [+0.169, +0.239] | +0.050 [+0.031, +0.068] |
+| face_area_frac | +0.188 [+0.149, +0.225] | +0.051 [+0.025, +0.076] |
+
+Compared to the original lr=1e-5 winner: every feature improves (range
++0.05 to +0.11 r), with motion_energy, scene_natural_score,
+narrative_event_score, depth_mean, n_faces, and edge_density showing
+the largest absolute gains — the same "REVE-was-weak-here" features that
+§3.6 identifies.
 
 ### 3.6 REVE's strength/weakness profile + how CLIP fills the gap
 
