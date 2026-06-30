@@ -62,7 +62,7 @@ all controlled by `cfg.loss.*`:
 2. **Embedding target**: `shot_mean` (default) or `per_window` — per_window
    wins downstream as of this sweep.
 3. **Contrastive label**: scene IDs from
-   [`embedding_feature_correlation/vjepa2_scenes_map.csv`](embedding_feature_correlation/vjepa2_scenes_map.csv)
+   [`embedding_feature_correlation/ThePresent/vjepa2_scenes_map.csv`](../embedding_feature_correlation/ThePresent/vjepa2_scenes_map.csv)
    (36 scenes from 54 shots, agglomerative threshold = 0.90).
 4. **Loss**: supervised-contrastive InfoNCE — multi-positive numerator on
    same-scene mask, denominator excludes cross-scene pairs with |Δt| < 2 s.

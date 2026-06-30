@@ -92,7 +92,7 @@ MOVIE_METADATA = {
             / "shot_detection" / "transnetv2_boundaries.csv"
         ),
         "scene_map": str(
-            PROJECT_ROOT / "experiments" / "clip_pretraining" / "embedding_feature_correlation" / "vjepa2_scenes_map.csv"
+            PROJECT_ROOT / "experiments" / "clip_pretraining" / "embedding_feature_correlation" / "ThePresent" / "vjepa2_scenes_map.csv"
         ),
         "vjepa2_recipe": str(
             PROJECT_ROOT / "movie_annotation" / "output" / "The_Present" / "vjepa2_recipe.npz"
@@ -108,11 +108,17 @@ MOVIE_METADATA = {
         "vjepa2_embeddings": str(
             PROJECT_ROOT / "movie_annotation" / "output" / "despicable_me" / "vjepa2_embeddings.npz"
         ),
-        # Shot detection not yet run for DespicableMe; loader returns None
-        # (shot_id targets will be filled with -1 for these recordings).
-        "shot_boundaries": None,
-        "scene_map": None,
-        "vjepa2_recipe": None,
+        "shot_boundaries": str(
+            PROJECT_ROOT / "movie_annotation" / "output" / "despicable_me"
+            / "shot_detection" / "transnetv2_boundaries.csv"
+        ),
+        "scene_map": str(
+            PROJECT_ROOT / "experiments" / "clip_pretraining" / "embedding_feature_correlation"
+            / "DespicableMe" / "vjepa2_scenes_map.csv"
+        ),
+        "vjepa2_recipe": str(
+            PROJECT_ROOT / "movie_annotation" / "output" / "despicable_me" / "vjepa2_recipe.npz"
+        ),
     },
 }
 
@@ -844,6 +850,7 @@ class HBNMovieDataset(Dataset):
 
             # Temporarily set self.task for _get_movie_features_for_window
             self.task = t
+            n_windowing_failures = 0
             for rec in selected_recordings:
                 fif_path = str(rec.raw.filenames[0])
 
@@ -856,16 +863,30 @@ class HBNMovieDataset(Dataset):
                 # windows (label is None) are filtered below, so the EEG
                 # window at time t aligns with the movie frame at time
                 # t - visual_processing_delay_s.
-                window_ds = create_windows_from_events(
-                    BaseConcatDataset([rec]),
-                    mapping={"video_start": 0},
-                    trial_start_offset_samples=0,
-                    trial_stop_offset_samples=0,
-                    window_size_samples=window_size_samples,
-                    window_stride_samples=window_size_samples,
-                    drop_last_window=True,
-                    preload=False,
-                )
+                #
+                # Wrap in try/except: a small fraction of HBN recordings have
+                # malformed annotations (e.g. video_stop event past the actual
+                # EEG end, from interrupted/restarted playback) that pass the
+                # reject_recording duration check but blow up inside braindecode.
+                # Skip those rather than crash the whole job.
+                try:
+                    window_ds = create_windows_from_events(
+                        BaseConcatDataset([rec]),
+                        mapping={"video_start": 0},
+                        trial_start_offset_samples=0,
+                        trial_stop_offset_samples=0,
+                        window_size_samples=window_size_samples,
+                        window_stride_samples=window_size_samples,
+                        drop_last_window=True,
+                        preload=False,
+                    )
+                except (ValueError, RuntimeError) as e:
+                    n_windowing_failures += 1
+                    logger.warning(
+                        "Skipping %s (task=%s): windowing failed (%s: %s)",
+                        fif_path, t, type(e).__name__, str(e).split(chr(10))[0][:200],
+                    )
+                    continue
 
                 # Extract lightweight metadata and discard braindecode objects
                 wds = window_ds.datasets[0]
@@ -904,6 +925,13 @@ class HBNMovieDataset(Dataset):
                 # Explicitly close Raw file handles before moving on
                 rec.raw.close()
                 del window_ds, wds
+
+            if n_windowing_failures:
+                logger.info(
+                    "Task %s: skipped %d/%d recordings during windowing "
+                    "(malformed annotations)",
+                    t, n_windowing_failures, len(selected_recordings),
+                )
 
             # Close any remaining Raw handles from rejected recordings
             for ds in data.datasets:

@@ -1,0 +1,30 @@
+======================================================================
+V-JEPA-2 shot -> scene merge analysis
+======================================================================
+
+Merge threshold (centered cosine): 0.9
+Shots: 35  ->  Scenes: 29  (6 shot merges)
+
+Multi-shot scenes:
+  scene  1: shots [1, 2]
+  scene  2: shots [3, 4]
+  scene  8: shots [10, 13, 34]
+  scene 16: shots [19, 23]
+  scene 21: shots [25, 28]
+
+[Variance decomposition, centered]
+  shot : eta^2 0.798  F 35.6  K 35
+  scene: eta^2 0.783  F 40.3  K 29
+
+[Pairwise cosine, centered]
+  shot : pos 0.784  neg -0.035  d' 1.76  AUC 0.913
+  scene: pos 0.751  neg -0.055  d' 1.70  AUC 0.906
+
+[Per-group margin and NN purity]
+  shot : margin +0.081  negative 5/35  top-1 0.912
+  scene: margin +0.119  negative 4/29  top-1 0.915
+
+[Feature R^2 mean over 16 targets]
+  per-clip            : 0.782
+  broadcast shot-mean : 0.768  (loss -0.014)
+  broadcast scene-mean: 0.695  (loss -0.087)

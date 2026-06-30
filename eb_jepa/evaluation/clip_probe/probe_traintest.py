@@ -49,22 +49,67 @@ def parse_args():
                     help="Cap n train recordings for smoke runs")
     ap.add_argument("--output", default="probe_traintest.json")
     ap.add_argument("--random-baseline", action="store_true")
+    ap.add_argument("--seed", type=int, default=42,
+                    help="RNG seed for bootstrap resampling")
+    ap.add_argument("--bootstrap", type=int, default=0,
+                    help="If >0, do this many bootstrap resamples of evaluation recordings "
+                         "(with replacement) to get per-feature 95%% CIs on Pearson r")
+    ap.add_argument("--eval-split", default="test", choices=["val", "test"],
+                    help="Which split to evaluate on after fitting on train. Default "
+                         "test (final report); use val for hyperparameter selection to "
+                         "avoid test-set overfitting.")
     return ap.parse_args()
 
 
 def embed_split(encoder, dataset, device, batch_size, max_recordings=None):
-    """Embed every window of every recording in a dataset."""
+    """Embed every window of every recording in a dataset. Returns X, Y, rec_ids."""
     n_rec = len(dataset) if max_recordings is None else min(max_recordings, len(dataset))
-    Xs, Ys = [], []
+    Xs, Ys, rec_ids = [], [], []
     for rec_idx in range(n_rec):
         X_rec, Y_rec = embed_recording_all_windows(
             encoder, dataset, rec_idx, device, batch_size,
         )
         Xs.append(X_rec)
         Ys.append(Y_rec)
+        rec_ids.append(np.full(len(X_rec), rec_idx, dtype=np.int64))
         if (rec_idx + 1) % 50 == 0:
             print(f"  {rec_idx+1}/{n_rec} done  (windows so far: {sum(len(x) for x in Xs)})")
-    return np.concatenate(Xs, axis=0), np.concatenate(Ys, axis=0)
+    return (np.concatenate(Xs, axis=0),
+            np.concatenate(Ys, axis=0),
+            np.concatenate(rec_ids, axis=0))
+
+
+def bootstrap_pearson_by_recording(pred, y, rec_ids, n_iters, seed):
+    """Bootstrap CI on Pearson r by resampling recordings (clusters of windows).
+
+    For each iteration: sample n_unique_recordings recordings WITH replacement,
+    concatenate their windows, compute Pearson r between pred[mask] and y[mask].
+
+    Returns (median_r, ci_lo_2.5, ci_hi_97.5) over the bootstrap distribution.
+    """
+    rng = np.random.default_rng(seed)
+    uniq_recs = np.unique(rec_ids)
+    # Pre-index: for each rec, the indices into pred/y where rec_ids == rec.
+    rec_to_idx = {r: np.where(rec_ids == r)[0] for r in uniq_recs}
+    n_recs = len(uniq_recs)
+    rs = np.empty(n_iters, dtype=np.float64)
+    for b in range(n_iters):
+        sampled = rng.choice(uniq_recs, size=n_recs, replace=True)
+        # Stack the per-recording index lists from the sampled recordings
+        idx_lists = [rec_to_idx[r] for r in sampled]
+        idx = np.concatenate(idx_lists)
+        p = pred[idx]
+        t = y[idx]
+        if p.std() < 1e-12 or t.std() < 1e-12:
+            rs[b] = np.nan
+        else:
+            rs[b] = float(pearsonr(p, t).statistic)
+    rs = rs[~np.isnan(rs)]
+    if len(rs) == 0:
+        return float("nan"), float("nan"), float("nan")
+    return (float(np.median(rs)),
+            float(np.percentile(rs, 2.5)),
+            float(np.percentile(rs, 97.5)))
 
 
 def main():
@@ -77,8 +122,8 @@ def main():
     train_set = build_dataset(cfg, "train", SCALAR_FEATURES_DEFAULT)
     print(f"  n_recordings={len(train_set)}, n_chans={train_set.n_chans}")
 
-    print(f"Building TEST split ...")
-    test_set = build_dataset(cfg, "test", SCALAR_FEATURES_DEFAULT)
+    print(f"Building {args.eval_split.upper()} split ...")
+    test_set = build_dataset(cfg, args.eval_split, SCALAR_FEATURES_DEFAULT)
     print(f"  n_recordings={len(test_set)}")
 
     encoder = build_encoder(
@@ -94,12 +139,12 @@ def main():
     encoder = encoder.to(device).eval()
 
     print(f"\nEmbedding TRAIN recordings ({len(train_set) if not args.max_train_recordings else args.max_train_recordings}) ...")
-    X_tr, Y_tr = embed_split(encoder, train_set, device, args.encode_batch, args.max_train_recordings)
+    X_tr, Y_tr, _ = embed_split(encoder, train_set, device, args.encode_batch, args.max_train_recordings)
     print(f"  TRAIN  X={X_tr.shape}  Y={Y_tr.shape}")
 
-    print(f"\nEmbedding TEST recordings ({len(test_set)}) ...")
-    X_te, Y_te = embed_split(encoder, test_set, device, args.encode_batch)
-    print(f"  TEST   X={X_te.shape}  Y={Y_te.shape}")
+    print(f"\nEmbedding {args.eval_split.upper()} recordings ({len(test_set)}) ...")
+    X_te, Y_te, rec_ids_te = embed_split(encoder, test_set, device, args.encode_batch)
+    print(f"  {args.eval_split.upper()}   X={X_te.shape}  Y={Y_te.shape}  n_unique_recordings={len(np.unique(rec_ids_te))}")
 
     # Standardize features using train stats only (no test leakage).
     scaler = StandardScaler().fit(X_tr)
@@ -108,6 +153,7 @@ def main():
 
     results = {
         "random_baseline": args.random_baseline,
+        "eval_split": args.eval_split,
         "n_train_recordings": int(len(train_set) if not args.max_train_recordings else args.max_train_recordings),
         "n_test_recordings": int(len(test_set)),
         "n_train_windows": int(X_tr.shape[0]),
@@ -140,11 +186,27 @@ def main():
             r = float(pearsonr(pred_te, y_te[valid_te]).statistic)
         except Exception:
             r = float("nan")
-        print(f"{feat:<26}  {r2:+10.4f}  {r:+10.4f}  {float(reg.alpha_):>10.3g}")
-        results["features"][feat] = {
+        feat_out = {
             "r2": r2, "pearson_r": r, "alpha": float(reg.alpha_),
             "n_train": int(valid_tr.sum()), "n_test": int(valid_te.sum()),
         }
+        # Bootstrap CI on Pearson r by resampling test recordings.
+        if args.bootstrap > 0:
+            r_med, r_lo, r_hi = bootstrap_pearson_by_recording(
+                pred_te, y_te[valid_te], rec_ids_te[valid_te],
+                n_iters=args.bootstrap, seed=args.seed + i,  # vary per feature
+            )
+            feat_out["pearson_r_boot_median"] = r_med
+            feat_out["pearson_r_boot_ci_lo"] = r_lo
+            feat_out["pearson_r_boot_ci_hi"] = r_hi
+            print(f"{feat:<26}  {r2:+10.4f}  {r:+10.4f}  α={float(reg.alpha_):.3g}  "
+                  f"boot [{r_lo:+.3f}, {r_hi:+.3f}]")
+        else:
+            print(f"{feat:<26}  {r2:+10.4f}  {r:+10.4f}  {float(reg.alpha_):>10.3g}")
+        results["features"][feat] = feat_out
+
+    results["seed"] = args.seed
+    results["bootstrap_iters"] = args.bootstrap
 
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     with open(args.output, "w") as f:
