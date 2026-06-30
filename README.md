@@ -67,7 +67,6 @@ experiments/                   # one folder per study; library is unaware of the
     scene_clip_from_checkpoint/    # REVE warm-start (current best); RESULTS.md
     scene_clip_fromscratch/        # from-scratch CLIP baseline; RESULTS.md
     embedding_feature_correlation/ # V-JEPA-2 analysis + recipe artifact precompute
-  eeg_jepa/                    # FROZEN legacy snapshot of the original entry point
   canonical_replication/       # spec-faithful 5-seed JEPA headline run
   temporal_sweep/              # n_windows x window_size grid
   regularizer_study/           # VICReg vs SIGReg, projector on/off, ± CorrCA
@@ -98,9 +97,8 @@ tests/                         # pytest
 docs/, notebooks/, diagnostics/, outputs/   # supporting material
 ```
 
-`experiments/eeg_jepa/` is a frozen reproducibility snapshot of the
-pre-refactor entry point — do not patch it. New work goes through
-`eb_jepa.training.jepa_pretrain` or `eb_jepa.training.clip_pretrain`. See
+New work goes through `eb_jepa.training.jepa_pretrain` or
+`eb_jepa.training.clip_pretrain`. See
 [`experiments/README.md`](experiments/README.md) for the per-study
 index.
 

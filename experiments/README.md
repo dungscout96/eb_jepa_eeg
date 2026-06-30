@@ -13,10 +13,11 @@ The reusable training and eval pipeline lives in [`eb_jepa/`](../eb_jepa/):
 | Library entry | What it does |
 |---|---|
 | `python -m eb_jepa.training.jepa_pretrain` | Masked-prediction JEPA pretraining (the foundation of every JEPA study below) |
-| `python -m eb_jepa.evaluation.probe_eval` | Adam-trained linear probe eval (legacy default) |
-| `python -m eb_jepa.evaluation.probe_eval_canonical` | sklearn Ridge/LogReg probe eval (spec-faithful) |
-| `python -m eb_jepa.evaluation.bootstrap_predictions` | Recording-level bootstrap on probe_eval predictions (legacy) |
-| `python -m eb_jepa.evaluation.bootstrap_canonical` | Recording-level bootstrap on canonical predictions (spec-faithful, L1+L2 JSON) |
+| `python -m eb_jepa.training.clip_pretrain` | EEG↔V-JEPA-2 CLIP / scene_clip pretraining |
+| `python -m eb_jepa.evaluation.probe_eval` | Adam-trained linear probe eval for JEPA checkpoints |
+| `python -m eb_jepa.evaluation.bootstrap` | Recording-level bootstrap on probe_eval predictions |
+| `python eb_jepa/evaluation/clip_probe/probe.py` | CV-by-recording linear probe on CLIP encoder embeddings |
+| `python eb_jepa/evaluation/clip_probe/probe_traintest.py` | ImageNet-style fit-on-train / eval-on-{val,test} probe with bootstrap CI |
 
 Canonical pretrain → probe → bootstrap sbatches:
 [`eb_jepa/training/sbatch/canonical_*.sbatch`](../eb_jepa/training/sbatch/).
@@ -25,7 +26,8 @@ Canonical pretrain → probe → bootstrap sbatches:
 
 | Study | What it tests |
 |---|---|
-| [`canonical_replication/`](canonical_replication/) | Spec-faithful 5-seed replication. The headline JEPA result. |
+| [`clip_pretraining/`](clip_pretraining/) | EEG↔V-JEPA-2 CLIP / scene_clip studies (from-scratch + REVE warm-start). |
+| [`canonical_replication/`](canonical_replication/) | Spec-faithful 5-seed JEPA replication. The headline JEPA result. |
 | [`temporal_sweep/`](temporal_sweep/) | n_windows × window_size grid (Phase 1). |
 | [`regularizer_study/`](regularizer_study/) | VICReg vs SIGReg ablations, projector on/off, ± CorrCA. |
 | [`retrain_best/`](retrain_best/) | Retrain documented best configs with global vs per-recording norm. |
@@ -35,7 +37,6 @@ Canonical pretrain → probe → bootstrap sbatches:
 | [`benchmark/`](benchmark/) | Supervised EEGNet / REVE / BIOT / classical ML baselines. |
 | [`position_leakage/`](position_leakage/) | Diagnostic: does the encoder leak time-in-movie? |
 | [`variance_analysis/`](variance_analysis/) | Per-checkpoint variance decomposition + predictability. |
-| [`eeg_jepa/`](eeg_jepa/) | **LEGACY**, frozen pre-refactor snapshot. Preserved for reproducibility of pre-2026-05-16 runs. Do not extend; create a new study folder instead. |
 
 ## Conventions
 
@@ -62,12 +63,11 @@ and update study launchers to call the library entry.
 ## Post-training validation
 
 `eb_jepa.training.jepa_pretrain` auto-invokes
-`eb_jepa.evaluation.run_probe_eval` and
-`eb_jepa.evaluation.bootstrap_predictions` at end of training when
-`cfg.eval.auto_run=true` (default). Disable for fast smoke runs:
-`--eval.auto_run=false`. For spec-faithful evaluation, disable auto-eval
-and run the canonical probe + bootstrap explicitly (see the
-canonical_replication study).
+`eb_jepa.evaluation.probe_eval` and `eb_jepa.evaluation.bootstrap` at
+end of training when `cfg.eval.auto_run=true` (default). Disable for
+fast smoke runs: `--eval.auto_run=false`. For spec-faithful evaluation,
+disable auto-eval and run the canonical probe + bootstrap explicitly
+(see the canonical_replication study).
 
 ## Cluster wrappers
 
