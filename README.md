@@ -1,11 +1,19 @@
 # EEG JEPA
 
-Self-supervised V-JEPA-style masked prediction for EEG, applied to the
-Healthy Brain Network (HBN) movie-watching task. The library trains a
-masked Joint-Embedding Predictive Architecture on raw EEG, and the
-post-training pipeline measures what the encoder actually learned via
-linear probes (movie features + subject traits) with bootstrap CIs over
-recordings.
+Self-supervised representation learning for EEG during the Healthy Brain
+Network (HBN) movie-watching task. The library supports two pretraining
+paths against a shared REVE-style EEG transformer encoder:
+
+1. **JEPA** — masked Joint-Embedding Predictive Architecture on raw EEG
+   (V-JEPA style, with DINO / VICReg / SIGReg / no anti-collapse).
+2. **CLIP** — symmetric InfoNCE alignment between EEG window embeddings
+   and frozen V-JEPA-2 vision features extracted from the same movie
+   (vanilla CLIP, or the `scene_clip` recipe with supervised-contrastive
+   multi-positive masks).
+
+The post-training pipeline measures what the encoder actually learned via
+linear probes — movie features + subject traits — with recording-level
+bootstrap CIs.
 
 This repo started as a fork of [Meta's eb_jepa](https://github.com/facebookresearch/eb_jepa)
 (originally a CV / planning library) and has been adapted for EEG. The
@@ -18,49 +26,81 @@ for the full transition.
 ```
 eb_jepa/                       # the library
   anti_collapse.py             # AntiCollapse: DINO / VICReg / SIGReg strategies
-  architectures.py             # REVE backbone, EEGEncoderTokens, MaskedPredictor, heads
+  architectures.py             # REVE backbone, EEGEncoderTokens, MaskedPredictor,
+                               #   MovieFeatureHead, MovieCLIPHead, predictors
   jepa.py                      # MaskedJEPA, MaskedJEPAProbe, JEPA
+  clip.py                      # CLIPPretrain, SceneCLIPPretrain (sup-contrastive)
   losses.py                    # VCLoss, SIGRegLoss, ClassificationLoss, RegressionLoss
   masking.py                   # MultiBlockMaskCollator (V-JEPA style 2D channel x patch masks)
   sanity_checks.py             # SanityCheckHook (collapse + linear-probe diagnostics)
+  schedulers.py                # cosine LR + EMA momentum schedules
   paths.py                     # cluster-aware preprocessed-dir resolver
-  datasets/hbn.py              # JEPAMovieDataset, HBNMovieDataset, HBNDataset
+  training_utils.py            # config loading, checkpoint I/O, wandb setup
+  logging.py                   # console + wandb formatting helpers
+  nn_utils.py                  # small nn helpers (Projector, TemporalBatchMixin)
+  eeg_decoder.py               # supervised EEG classifier baseline (experiments/benchmark)
+  datasets/hbn.py              # HBNDataset, HBNMovieDataset, JEPAMovieDataset,
+                               #   HBNMovieProbeDataset + MOVIE_METADATA registry
   preprocessing/corrca.py      # CorrCA spatial filter computation
   training/
-    jepa_pretrain.py           # canonical pretraining entry point (Fire CLI)
-    builder.py                 # shared MaskedJEPA builder
+    jepa_pretrain.py           # JEPA pretraining entry point (Fire CLI)
+    clip_pretrain.py           # CLIP pretraining entry point (Fire CLI)
+    builder.py                 # shared encoder/predictor/head builders
+    sbatch/                    # SLURM templates for canonical reproducible runs
   evaluation/                  # post-training pipeline
-    probe_eval.py              # frozen-encoder probes (movie features + subject traits)
-    probe_eval_canonical.py    # spec-faithful sklearn-probe variant
+    probe_eval.py              # frozen-encoder JEPA probes (movie + subject traits)
     bootstrap.py               # recording-level bootstrap CIs over saved predictions
-    validation_loop.py         # in-loop val metrics during training
     variance_decomposition.py  # subject / stimulus / residual decomposition
+    clip_probe/
+      probe.py                 # CV-by-recording probe on a single split
+      probe_traintest.py       # ImageNet-style fit-on-train / eval-on-{val,test}
+                               #   with bootstrap CIs by eval recording
 
-config/                        # OmegaConf / Hydra configs
+config/                        # OmegaConf configs
   jepa_pretrain.yaml           # JEPA pretraining defaults
+  clip_pretrain.yaml           # CLIP / scene_clip pretraining defaults
   preprocess_hbn.yaml          # HBN preprocessing defaults
-  benchmark.yaml               # benchmark experiment defaults
+  benchmark.yaml               # supervised benchmark defaults
 
-experiments/                   # one folder per study
+experiments/                   # one folder per study; library is unaware of these
+  clip_pretraining/            # CLIP / scene_clip studies
+    scene_clip_from_checkpoint/    # REVE warm-start (current best); RESULTS.md
+    scene_clip_fromscratch/        # from-scratch CLIP baseline; RESULTS.md
+    embedding_feature_correlation/ # V-JEPA-2 analysis + recipe artifact precompute
   eeg_jepa/                    # FROZEN legacy snapshot of the original entry point
-  trf_baseline/                # supervised TRF baseline
-  benchmark/                   # EEGNet / REVE / BIOT / classical ML baselines
-  position_leakage/            # diagnostic: does the encoder leak time-in-movie?
+  canonical_replication/       # spec-faithful 5-seed JEPA headline run
+  temporal_sweep/              # n_windows x window_size grid
+  regularizer_study/           # VICReg vs SIGReg, projector on/off, ± CorrCA
+  retrain_best/                # retrain documented best configs
+  benchmark/                   # supervised EEGNet / REVE / BIOT / classical baselines
+  trf_baseline/                # supervised TRF / Ridge baseline
+  trivial_baselines/           # raw + CorrCA EEG with no learned encoder
+  corrca_study/                # probes on CorrCA-preprocessed checkpoints
+  position_leakage/            # diagnostic: does encoder leak time-in-movie?
   variance_analysis/           # per-checkpoint variance & predictability decomposition
-  regularizer_study/, retrain_best/, temporal_sweep/   # ablation sweeps
+
+movie_annotation/              # per-movie feature extraction pipeline
+  movies/                      # source mp4s (gitignored)
+  output/<movie>/              # extracted features, shot boundaries,
+                               #   V-JEPA-2 embeddings, recipe artifacts
+  annotate.py, shot_detection.py, add_shot_id.py
 
 scripts/                       # cluster + data utilities (not study-specific)
   preprocess_hbn.py / .sbatch  # raw HBN -> .fif preprocessing (run once)
   compute_corrca.py / .sbatch  # thin CLI over eb_jepa.preprocessing.compute_corrca
   submit_job_{delta,expanse,jamming}.py
-  pull_wandb.py, extract_*_results.py
+  pull_wandb.py
+  extract_probe_results.py, extract_subject_results.py
+  aggregate_and_print.py, paired_bootstrap_canonical.py
 
+paper/                         # LaTeX draft (intro / methods / results / tables)
 tests/                         # pytest
+docs/, notebooks/, diagnostics/, outputs/   # supporting material
 ```
 
 `experiments/eeg_jepa/` is a frozen reproducibility snapshot of the
 pre-refactor entry point — do not patch it. New work goes through
-`eb_jepa.training.jepa_pretrain`. See
+`eb_jepa.training.jepa_pretrain` or `eb_jepa.training.clip_pretrain`. See
 [`experiments/README.md`](experiments/README.md) for the per-study
 index.
 
@@ -105,24 +145,36 @@ CLI overrides use OmegaConf dot syntax (`--optim.lr=5e-4`,
 ## Data: HBN Movie-Watching EEG
 
 HBN contains EEG recordings of children watching short movies, hosted on
-OpenNeuro:
+OpenNeuro. The standard subject-disjoint split uses six releases:
 
-| Release | OpenNeuro ID | Split  |
-|---------|--------------|--------|
-| R1      | ds005505     | train / val |
-| R6      | ds005510     | test   |
+| Release | OpenNeuro ID | Split  | n subjects |
+|---------|--------------|--------|------------|
+| R1      | ds005505     | train  | 136 |
+| R2      | ds005506     | train  | 152 |
+| R3      | ds005507     | train  | 184 |
+| R4      | ds005508     | train  | 324 |
+| R5      | ds005509     | val    | 136 |
+| R6      | ds005510     | test   | 134 |
 
-> R2–R4 are available but currently disabled in `SPLIT_RELEASES`.
+A smoke-test mode (`smoke=True` in `SPLIT_RELEASES`) uses only R1 for all
+three splits via EEGDash subject filtering — useful for quick local runs.
 
 - **EEG system**: EGI GSN-HydroCel-129 (129 channels)
 - **Sampling rate**: 100 Hz raw, resampled to 200 Hz during preprocessing
-- **Default movie task**: `ThePresent` (3m 23s, 24 fps, 4878 frames)
-- **Movie features**: `contrast_rms`, `luminance_mean`, `position_in_movie`,
-  `narrative_event_score`
+- **Movies supported** (registered in [`MOVIE_METADATA`](eb_jepa/datasets/hbn.py)):
+  `ThePresent` (3m 23s, 24 fps), `DespicableMe` (10m 13s, 24 fps). Each
+  movie has its own feature CSV, shot-boundary CSV, optional V-JEPA-2
+  embedding cache, and (for the scene_clip recipe) `vjepa2_recipe.npz`.
+- **Scalar movie features** (12, used by `clip_probe`):
+  `luminance_mean, contrast_rms, edge_density, saturation_mean, entropy,
+  motion_energy, n_faces, face_area_frac, depth_mean, scene_natural_score,
+  position_in_movie, narrative_event_score`. The first ten are extracted
+  per-frame in [`movie_annotation/`](movie_annotation/); the last two are
+  derived from the time axis and a scene-similarity score.
 
-Train and val both use R1 recordings but load disjoint subsets via
-EEGDash; test uses R6. Each recording is paired with frame-level movie
-features via timestamp alignment.
+Each recording is paired with frame-level features via timestamp
+alignment. For CLIP training, the same windows are also paired with
+V-JEPA-2 vision embeddings cached as `.npz` next to the feature CSVs.
 
 ## Preprocessing
 
@@ -171,15 +223,17 @@ memory; EEG data is read from FIF on demand.
 - **`HBNMovieDataset`** — supervised, pairs each window with movie
   features. Filters recordings on annotation quality.
 - **`JEPAMovieDataset`** — extends `HBNMovieDataset` with temporal
-  striding, per-channel EEG z-normalization, and frame-feature tensors.
-  Provides `get_eeg_norm_stats()` (used for val/test), `get_chs_info()`
-  (REVE channel positions), and `compute_feature_stats()` /
-  `compute_feature_median()` for probe loss normalization.
+  striding, per-channel EEG z-normalization, frame-feature tensors, and
+  (in `recipe_mode`) V-JEPA-2 embedding/shot-mean/scene-id tensors used
+  by `SceneCLIPPretrain`. Provides `get_eeg_norm_stats()` (used for
+  val/test), `get_chs_info()` (REVE channel positions), and
+  `compute_feature_stats()` / `compute_feature_median()` for probe loss
+  normalization.
 - **`HBNMovieProbeDataset`** — flat-indexed `HBNMovieDataset` for
   per-window evaluation; each `__getitem__` returns a single
   `(window, features)` pair.
 
-## Model
+## Model (JEPA path)
 
 The masked path composes three pluggable parts:
 
@@ -265,13 +319,62 @@ Checkpoints save every `logging.save_every` epochs (default 10), and
 ### Post-training auto-eval
 
 When `cfg.eval.auto_run=true` (default), training finishes by invoking
-`probe_eval` + `bootstrap_predictions` on the saved checkpoint so each
-run produces a self-contained metrics set. Disable for fast smoke runs:
+`probe_eval` + `bootstrap` on the saved checkpoint so each run produces
+a self-contained metrics set. Disable for fast smoke runs:
 
 ```bash
 PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.jepa_pretrain \
     --eval.auto_run=false
 ```
+
+## CLIP pretraining (EEG ↔ V-JEPA-2)
+
+The CLIP path aligns the same REVE-style encoder against frozen
+V-JEPA-2 vision embeddings of the same movie. Two losses are supported
+via `cfg.loss.mode`:
+
+- `mode=clip` — vanilla symmetric InfoNCE with diagonal positives
+  ([`CLIPPretrain`](eb_jepa/clip.py)).
+- `mode=scene_clip` (default) — supervised-contrastive InfoNCE with
+  same-scene positives + temporal-buffer negative exclusion + optional
+  mean-centering + shot-mean targets ([`SceneCLIPPretrain`](eb_jepa/clip.py)).
+  Implements the §9 bottom-line recipe from
+  [`clip_design_observations_vjepa2.md`](experiments/clip_pretraining/embedding_feature_correlation/clip_design_observations_vjepa2.md).
+
+Entry point: [`eb_jepa.training.clip_pretrain`](eb_jepa/training/clip_pretrain.py)
++ [`config/clip_pretrain.yaml`](config/clip_pretrain.yaml). Warm-start
+from a JEPA (or REVE) checkpoint via `meta.encoder_init_from`.
+
+```bash
+# Train scene_clip from scratch with the default config.
+PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.clip_pretrain
+
+# Train from a REVE warm-start (current best per
+# experiments/clip_pretraining/scene_clip_from_checkpoint/RESULTS.md).
+PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.clip_pretrain \
+    --fname=config/clip_pretrain_from_reve.yaml \
+    --meta.encoder_init_from=/path/to/reve_base_eet_init.pth.tar \
+    --loss.target_kind=per_window --optim.lr=3e-4 --optim.epochs=300
+```
+
+CLIP probing uses a separate ImageNet-style protocol distinct from the
+JEPA `probe_eval` flow:
+
+```bash
+# Fit a per-feature RidgeCV linear probe on R1-R4 encoder embeddings,
+# eval on R6 with B=2000 bootstrap CI by recording.
+PYTHONPATH=. uv run --group eeg python \
+    eb_jepa/evaluation/clip_probe/probe_traintest.py \
+    --checkpoint /path/to/latest.pth.tar \
+    --config config/clip_pretrain.yaml \
+    --eval-split test --bootstrap 2000 \
+    --output probe_traintest.json
+```
+
+Use `--eval-split val` for hyperparameter selection; reserve
+`--eval-split test` for final-reported numbers (see
+[scene_clip_from_checkpoint/RESULTS.md §3.1](experiments/clip_pretraining/scene_clip_from_checkpoint/RESULTS.md)
+for why this matters).
 
 ## Other experiments
 
