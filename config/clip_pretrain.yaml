@@ -44,9 +44,10 @@ loss:
   mode: scene_clip
   # Recipe knobs (only used when mode=scene_clip):
   mean_center: true            # subtract V-JEPA-2 global mean at dataset init
-  target_kind: shot_mean       # {per_window, shot_mean}; per_window keeps the
+  target_kind: per_window      # {per_window, shot_mean}; per_window keeps the
                                # mean-pooled clip vector, shot_mean replaces it
-                               # with the recipe's shot-mean lookup
+                               # with the recipe's shot-mean lookup. per_window
+                               # wins downstream on the val probe (fresh500 sweep).
   temporal_buffer_s: 2.0       # mask cross-scene pairs with |Δt|<2s from denom
 
   # Symmetric mode: both EEG and V-JEPA-2 project into a learned proj_dim-d
