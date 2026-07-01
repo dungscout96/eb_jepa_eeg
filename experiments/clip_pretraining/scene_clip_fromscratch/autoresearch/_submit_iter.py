@@ -12,12 +12,9 @@ from neurolab.jobs import Job
 REPO = "/u/dtyoung/eb_jepa_eeg"
 AUTORESEARCH_DIR = "experiments/clip_pretraining/scene_clip_fromscratch/autoresearch"
 
-# iter3: depth=8 + embed=512 + heads=8 + head_dim=64 (REVE cross-section,
-# shallower) + proj=512. FFN work: 8 * 512 * 1362 vs iter1's 4 * 1024 * 2725
-# = about half. Attention now full-width (inner=512 = embed_dim) so slightly
-# heavier per block but not dominant. Net per-epoch estimate: similar to
-# iter1 (~20-22 s/ep). 100 ep ≈ iter1 training compute.
-EPOCHS = 100
+# iter4+: REVE-shape encoder measured at ~27 s/ep on A40 (empirical from iter3).
+# 80 ep ≈ 36 min train + 5 min probe = 41 min, fits 45-min wall with margin.
+EPOCHS = 80
 
 
 def build_job(iter_num: int) -> Job:
