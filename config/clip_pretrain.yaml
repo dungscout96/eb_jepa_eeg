@@ -62,7 +62,7 @@ loss:
 
 optim:
   epochs: 50
-  lr: 3.0e-4
+  lr: 1.0e-4  # per_window winner in fresh500 sweep (RESULTS §2 note 5). lr=3e-4 gave iter0 val Δr²=+0.00319 which underperforms fresh500 trajectory.
   lr_min: 1.0e-6
   warmup_epochs: 5
 
