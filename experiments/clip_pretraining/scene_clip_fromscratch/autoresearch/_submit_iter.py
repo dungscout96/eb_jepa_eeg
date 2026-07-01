@@ -12,10 +12,11 @@ from neurolab.jobs import Job
 REPO = "/u/dtyoung/eb_jepa_eeg"
 AUTORESEARCH_DIR = "experiments/clip_pretraining/scene_clip_fromscratch/autoresearch"
 
-# iter2 changes encoder_depth 4 to 8, which roughly doubles per-epoch cost
-# (linear in depth). Estimated ~33 s/epoch → 50 ep ≈ 28 min train + probe
-# fits inside 45-min wall with comfortable margin. Revisit per iteration.
-EPOCHS = 50
+# iter2 changes encoder_depth 4 to 8. Transformer cost is ~linear in depth;
+# other overhead is fixed. Empirically iter1 ran ~22 s/ep at depth=4; expect
+# ~37 s/ep at depth=8 (1.7x factor). 60 ep ≈ 37 min train, matching iter1's
+# ~37 min of training compute (wall-clock-matched per program §Experimentation).
+EPOCHS = 60
 
 
 def build_job(iter_num: int) -> Job:
