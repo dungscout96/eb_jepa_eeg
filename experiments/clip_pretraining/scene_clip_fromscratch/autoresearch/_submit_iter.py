@@ -12,10 +12,10 @@ from neurolab.jobs import Job
 REPO = "/u/dtyoung/eb_jepa_eeg"
 AUTORESEARCH_DIR = "experiments/clip_pretraining/scene_clip_fromscratch/autoresearch"
 
-# ~19 s/epoch observed on A40 with per_window. 100 ep ≈ 32 min train +
-# 5 min probe + 8 min slack = 45 min wall. Keep this as the standard
-# budget for iters unless a change alters per-epoch cost.
-EPOCHS = 100
+# iter2 changes encoder_depth 4 to 8, which roughly doubles per-epoch cost
+# (linear in depth). Estimated ~33 s/epoch → 50 ep ≈ 28 min train + probe
+# fits inside 45-min wall with comfortable margin. Revisit per iteration.
+EPOCHS = 50
 
 
 def build_job(iter_num: int) -> Job:

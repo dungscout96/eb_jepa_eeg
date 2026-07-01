@@ -29,7 +29,7 @@ model:
   # cleanly via encoder_init_from. Predictor / masking blocks are intentionally
   # absent since the CLIP path doesn't use them.
   encoder_embed_dim: 1024
-  encoder_depth: 4
+  encoder_depth: 8  # iter2: 4 to 8. Tests program idea #1 (from-scratch capacity). Keep everything else fixed for clean attribution.
   encoder_heads: 4
   encoder_head_dim: 16
   patch_size: 50
