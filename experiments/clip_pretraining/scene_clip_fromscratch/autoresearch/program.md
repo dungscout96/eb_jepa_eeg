@@ -7,13 +7,16 @@ Have the LLM autonomously improve EEG↔V-JEPA-2 alignment starting from a
 > REVE-warmstart operating point, which brings ~50 M params of pretrained
 > broad-EEG knowledge to the table?
 
-**Baseline to match**: `warmstart_lr3e4_ep299` — REVE-base warm-start,
-`per_window` targets, `proj_dim=512`, `lr=3e-4`, 300 epochs. Val Δr =
-**+0.218** (probe_traintest on R5, B=2000 by recording).
+**Aspirational target**: `warmstart_lr3e4_ep299` — REVE-base warm-start,
+`per_window` targets, `proj_dim=512`, `lr=3e-4`, 300 epochs.
+probe_traintest val Δr = **+0.218** (Pearson r, B=2000). Note: not
+directly comparable to the in-loop CV-on-val R² we use here; the two
+protocols move together but the numbers live on different scales.
 
-**Existing from-scratch reference**: `fresh500_ep499` — random init,
-`per_window`, `lr=1e-4`, 499 epochs. Val Δr ≈ **+0.027** (CV-on-val R²
-scale) / test Δr = **+0.080**. That's the number to *beat*.
+**Existing from-scratch reference (the number to beat)**: `fresh500_ep499`
+— random init, `per_window`, `lr=1e-4`, 499 epochs. **CV-on-val
+mean R² = +0.0462, Δ vs random = +0.0272**. Test Pearson Δr =
++0.080 (context only; test is off-limits in the loop).
 
 ## Setup
 
@@ -61,26 +64,39 @@ Once confirmed, kick off the experimentation loop.
 
 Each experiment runs one training + one probe eval on a single GPU.
 
-**Fixed budget: ~75 min training + ~10 min probe eval per iteration**
-(see §"Budget rationale" below for why not 5 min like Karpathy). Aim
-for **~10 iterations/day** per GPU.
+**Fixed budget: ~30 min training + ~5 min probe eval per iteration**
+(~130 epochs at 14 s/epoch on Delta A40). Aim for **~20
+iterations/day** per GPU.
+
+Why not 5 min like Karpathy's nanoGPT autoresearch? Karpathy's setup
+is from-scratch LM on data-rich text where train loss IS the eval
+metric — 5 min is enough to see the trajectory shape. Ours is
+contrastive alignment on a small dataset with a *separate* downstream
+probe. Learning curves are much flatter and at ~20 epochs we're
+still in warmup + noise-dominated territory. 30 min (~130 epochs) is
+the empirical floor where LR / architecture effects start to
+resolve; beyond that, the schedule-length pathology (see below) sets
+in past ~300 epochs.
 
 Launch template (Delta A40, single job):
 
 ```bash
-# 1. Train (should complete in <75 min at 14 s/epoch × 300 epochs).
+# 1. Train (should complete in ~30 min at ~14 s/epoch × ~130 epochs).
+#    Adjust --optim.epochs if per-epoch cost changes (bigger model /
+#    batch). The wall-clock is the budget, not the epoch count.
 PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.clip_pretrain \
     --fname=config/clip_pretrain.yaml \
-    --optim.epochs=300 \
+    --optim.epochs=130 \
     --logging.wandb_group=auto_<tag>_<iter>_<hash>
 
-# 2. Probe val Δr (the metric — always on val, never touch test).
+# 2. Probe val R² (the metric — always on val, never touch test).
+#    CV-by-recording, 5-fold GroupKFold, no bootstrap.
 PYTHONPATH=. uv run --group eeg python \
-    eb_jepa/evaluation/clip_probe/probe_traintest.py \
+    eb_jepa/evaluation/clip_probe/probe.py \
     --checkpoint /path/to/latest.pth.tar \
     --config config/clip_pretrain.yaml \
-    --eval-split val \
-    --bootstrap 0 \
+    --split val \
+    --cv-splits 5 \
     --output probe_val.json
 ```
 
@@ -122,20 +138,24 @@ explain-through to related runs.
 **First run**: baseline. Do not modify anything. Just run the config
 as-is on `main`, so the first row of `results.tsv` is your reference.
 
-## The primary metric: probe val Δr
+## The primary metric: probe val ΔR²
 
-- **Metric**: mean Pearson r on R5 (val) minus the matched
+- **Metric**: mean 5-fold CV R² on R5 (val) minus the matched
   random-init baseline of the same encoder architecture. Averaged over
   the 12 scalar features in
   [`SCALAR_FEATURES_DEFAULT`](../../../../eb_jepa/evaluation/clip_probe/probe.py).
-- **Protocol**: `probe_traintest.py --eval-split val --bootstrap 0`
-  — fits Ridge on R1–R4 embeddings, evaluates on R5 embeddings. No
-  bootstrap during the loop (saves time; use `--bootstrap 2000` only
-  when writing up a final result). Deterministic.
+- **Protocol**: `probe.py --split val --cv-splits 5` — 5-fold
+  GroupKFold-by-recording on R5 (no cross-split leakage), RidgeCV
+  per feature. No bootstrap. Deterministic. Fast (~5 min for a 50 M-
+  param encoder — dominated by encoding all val windows).
+- **Why not probe_traintest?** In-loop budget is tight and the extra
+  train-set embedding pass adds ~5 min without changing the *ranking*
+  signal at iteration scale. Save probe_traintest + bootstrap for the
+  final write-up of any promising configuration.
 - **Random baseline**: run the probe once with `--random-baseline` on
-  the initial (untrained) encoder architecture. Cache this number as
-  `rand_r`; every iteration reports `mean_r - rand_r`.
-- **Selection rule**: higher is better. Iterations with val Δr strictly
+  the initial (untrained) encoder architecture. Cache the number as
+  `rand_r2`; every iteration reports `mean_r2 - rand_r2`.
+- **Selection rule**: higher is better. Iterations with ΔR² strictly
   above the current best are kept; ties or worse are discarded and the
   branch is reset.
 
@@ -157,17 +177,17 @@ as-is on `main`, so the first row of `results.tsv` is your reference.
 ## Output format
 
 The training script logs to W&B (`train/*` and `val/*` metrics) and
-saves checkpoints per `save_every`. The probe writes a JSON with the
-per-feature Pearson r's, R², and (if bootstrap>0) 95 % CIs.
+saves checkpoints per `save_every`. `probe.py` writes a JSON keyed by
+feature with `r2_mean` (5-fold CV mean) + `r2_std` per feature.
 
-You extract the metric like:
+Extract the metric like:
 
 ```bash
 uv run python -c "
 import json, statistics as st
 with open('probe_val.json') as f: d = json.load(f)
-mean_r = st.mean(v['pearson_r'] for v in d['features'].values())
-print(f'val_mean_r: {mean_r:.6f}')
+mean_r2 = st.mean(v['r2_mean'] for v in d['features'].values())
+print(f'val_mean_r2: {mean_r2:.6f}')
 "
 ```
 
@@ -179,12 +199,12 @@ Also log peak VRAM from the training log (grep `peak_vram_mb` or
 Append to `results.tsv` (tab-separated, headers on the first line):
 
 ```
-commit	val_delta_r	val_mean_r	memory_gb	epochs	status	description
+commit	val_delta_r2	val_mean_r2	memory_gb	epochs	status	description
 ```
 
 - `commit`: 7-char short hash of the iteration's git commit
-- `val_delta_r`: `mean_r - rand_r`; e.g. `+0.02720`. Use `0.000000` for crashes.
-- `val_mean_r`: raw mean Pearson r on val (before subtracting rand). Useful for provenance.
+- `val_delta_r2`: `mean_r2 - rand_r2`; e.g. `+0.02720`. Use `0.000000` for crashes.
+- `val_mean_r2`: raw mean 5-fold-CV R² on val (before subtracting rand). Useful for provenance.
 - `memory_gb`: peak GPU memory rounded to .1f. Use `0.0` for crashes.
 - `epochs`: actual epochs completed (may be < config target if run OOM'd or was cut).
 - `status`: `keep`, `discard`, or `crash`.
@@ -193,10 +213,10 @@ commit	val_delta_r	val_mean_r	memory_gb	epochs	status	description
 Example:
 
 ```
-commit	val_delta_r	val_mean_r	memory_gb	epochs	status	description
-a1b2c3d	+0.02720	+0.0462	14.2	499	keep	baseline: fresh500_ep499 config
-b2c3d4e	+0.04100	+0.0602	14.8	300	keep	depth 4 -> 8 encoder
-c3d4e5f	+0.03800	+0.0572	14.2	300	discard	AdamW -> Lion
+commit	val_delta_r2	val_mean_r2	memory_gb	epochs	status	description
+a1b2c3d	+0.02720	+0.0462	14.2	130	keep	baseline: fresh500-style config at 130 ep
+b2c3d4e	+0.04100	+0.0602	14.8	130	keep	depth 4 -> 8 encoder
+c3d4e5f	+0.03800	+0.0572	14.2	130	discard	AdamW -> Lion
 d4e5f6g	+0.00000	0.0	0.0	0	crash	encoder width 2048 (OOM)
 ```
 
@@ -206,25 +226,25 @@ Do not commit `results.tsv`. It's a per-branch scratchpad.
 
 LOOP FOREVER:
 
-1. Read git state: current branch/commit, current best val Δr.
+1. Read git state: current branch/commit, current best val ΔR².
 2. Pick an experimental change; hack it into the editable files
    directly.
 3. `git add -A && git commit -m "iter <N>: <short description>"`.
 4. Submit / run the training job. Redirect all output to `run.log` —
    do NOT tee, do NOT let training output flood your context.
 5. When training completes, run the probe:
-   `PYTHONPATH=. uv run --group eeg python eb_jepa/evaluation/clip_probe/probe_traintest.py ... --eval-split val --bootstrap 0 --output probe_val.json`
-6. Extract `val_mean_r` from the JSON; compute `val_delta_r =
-   val_mean_r - rand_r`.
+   `PYTHONPATH=. uv run --group eeg python eb_jepa/evaluation/clip_probe/probe.py --split val --cv-splits 5 --output probe_val.json --checkpoint /path/to/latest.pth.tar --config config/clip_pretrain.yaml`
+6. Extract `val_mean_r2` from the JSON; compute `val_delta_r2 =
+   val_mean_r2 - rand_r2`.
 7. Append the row to `results.tsv`.
-8. If `val_delta_r` strictly improved: keep the commit, advance the
+8. If `val_delta_r2` strictly improved: keep the commit, advance the
    branch.
 9. If equal or worse: `git reset --hard HEAD^` to revert to the
    pre-iteration commit.
 10. Go to 1.
 
-**Timeout**: each iteration ≤ 100 min wall (75 min train + 10 min
-probe + 15 min slack). If it exceeds 100 min, kill it, log `crash`,
+**Timeout**: each iteration ≤ 45 min wall (30 min train + 5 min
+probe + 10 min slack). If it exceeds 45 min, kill it, log `crash`,
 revert.
 
 **Crashes**: if OOM, missing import, typo — fix it and re-run only if
@@ -245,52 +265,31 @@ in-scope docs, look at what worked in the REVE-warmstart runs and ask
 previous near-misses, try more radical architectural swaps. The loop
 runs until the human interrupts you.
 
-## Budget rationale
-
-Why not 5 min like Karpathy's nanoGPT autoresearch? Because our
-learning dynamics are qualitatively different:
-
-- nanoGPT is **from-scratch language modeling on data-rich text**
-  (millions of new tokens per iteration; steep clean loss curves;
-  train loss IS the eval metric). 5 min is enough to see the
-  trajectory shape.
-- Ours is **contrastive alignment on a small dataset** with a
-  **downstream probe metric** requiring separate embedding + Ridge
-  fit. Learning curves are much flatter, small differences matter,
-  and we've directly observed that:
-  - At ~50 epochs the fresh500 recipe is at val R² ≈ +0.026 — barely
-    above chance. Signal is dominated by noise.
-  - ~130 epochs (~30 min) is the empirical floor where LR effects
-    start resolving.
-  - ~300 epochs (~75 min) is where the recipe reaches its plateau.
-  - Longer than that *hurts* (see §3.2 in the from-checkpoint doc).
-- **Probe eval isn't cheap**: embedding R1–R4 + R5 takes ~10 min for
-  a 50 M-param encoder.
-
-If you want faster iterations, drop budget to ~30 min (≈130 epochs) as
-a *screening* pass — you'll catch large-effect changes (bigger LR,
-different loss, encoder swap) but miss ±0.02 Δr differences. If
-you're in "confirm a promising direction" mode, use the full 75 min.
-
 ## Known baselines (as of 2026-07-01)
 
-| operating point | val Δr | notes |
-|---|---|---|
-| random-init encoder (matched arch, no training) | ~0.00 | anchor; the "rand_r" you subtract |
-| `fresh500_ep499` (from-scratch, lr=1e-4, 499 ep) | ~+0.03 CV, +0.08 test | the number to beat |
-| `warmstart_lr3e4_ep299` (REVE warm-start, lr=3e-4, 300 ep) | **+0.218** | the aspirational target |
+| operating point | val CV mean R² | val ΔR² | notes |
+|---|---|---|---|
+| random-init encoder (matched arch, no training) | +0.019 | 0.000 | anchor; the `rand_r2` you subtract |
+| `fresh500_ep499` (from-scratch, lr=1e-4, 499 ep) | +0.046 | **+0.027** | the number to beat |
+| `warmstart_lr3e4_ep299` (REVE warm-start, lr=3e-4, 300 ep) | — | — | measured only on probe_traintest (Pearson r Δr = +0.218). Aspirational only; not directly comparable to CV R². |
 
-To beat REVE-warmstart from scratch you need to close a ≈+0.19 val Δr
-gap — 7× the current from-scratch result. That's very hard; a "moral
-win" here is closing 50 % of the gap (val Δr ≈ +0.12).
+Under the 30-min budget the baseline gets fewer epochs than fresh500
+(~130 vs 499), so the first-iteration ΔR² will start lower than
++0.027 — expect ~+0.015 to +0.020 for a straight 130-ep run of the
+current config. Beating +0.027 is the near-term goal; **closing 50 %
+of the gap to REVE-warmstart** is the moral-win threshold.
 
 ## Known dead ends (do not re-run without a new theory)
 
 From [scene_clip_from_checkpoint/RESULTS.md](../../scene_clip_from_checkpoint/RESULTS.md)
 and [scene_clip_fromscratch/RESULTS.md](../RESULTS.md):
 
-- **Extending schedule beyond 300 epochs at lr=1e-4** — 1000 ep is
-  materially worse than 300 ep. Same effect probably applies to lr=3e-4.
+- **Extending schedule past the cosine floor** — 1000 ep at lr=1e-4
+  landed at val Δr +0.11 vs the 300-ep sibling's +0.198. Same effect
+  probably applies to lr=3e-4. Under the 30-min budget this mostly
+  isn't reachable anyway, but if you're tempted to trade batch size /
+  model width for more epochs, remember that "more epochs" past the
+  cosine minimum hurts, not helps.
 - **`lr=1e-5`** — under-tunes the encoder. The old "1/10 from-scratch
   LR" prior does not apply here.
 - **`proj_dim=1024` or `1408` at lr=1e-5** — the ablation showed
