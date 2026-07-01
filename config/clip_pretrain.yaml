@@ -28,13 +28,13 @@ model:
   # REVE encoder — same fields as jepa_pretrain.yaml so a JEPA checkpoint loads
   # cleanly via encoder_init_from. Predictor / masking blocks are intentionally
   # absent since the CLIP path doesn't use them.
-  encoder_embed_dim: 1024
-  encoder_depth: 8  # iter2: 4 to 8. Tests program idea #1 (from-scratch capacity). Keep everything else fixed for clean attribution.
-  encoder_heads: 4
-  encoder_head_dim: 16
+  encoder_embed_dim: 512   # iter3: 1024 to 512 to fit A40 at depth=8 (iter2 OOM'd)
+  encoder_depth: 8         # iter2/3: 4 to 8 per program.md idea #1 (from-scratch capacity)
+  encoder_heads: 8         # iter3: 4 to 8 for full-width attention (heads*head_dim = embed_dim = 512, REVE-style)
+  encoder_head_dim: 64     # iter3: 16 to 64 (removes attention bottleneck; heads*head_dim now matches embed_dim)
   patch_size: 50
   patch_overlap: 20
-  freqs: 6              # FourierEmb4D needs freqs^4 >= encoder_embed_dim/2 (512 for 1024-d)
+  freqs: 4                 # iter3: 6 to 4; FourierEmb4D needs freqs^4 >= embed_dim/2 = 256, so freqs=4 (256) is the min
   mlp_dim_ratio: 2.66
 
 loss:
@@ -56,7 +56,7 @@ loss:
   # vision_proj is a learnable Linear(1408, 1024). Set vision_passthrough=true
   # for strict NICE-style asymmetric (vision identity, proj_dim auto = 1408).
   vision_passthrough: false
-  proj_dim: 1024       # only used when vision_passthrough=false
+  proj_dim: 512        # iter3: 1024 to 512; matched to encoder embed_dim so EEG MLP doesn't need to expand (also program.md idea #1 explicit "proj=512")
   temperature: 0.07    # initial logit-scale value (learnable; clamped exp ≤ 100)
   drop_proj: 0.5       # dropout inside the EEG-side residual block
 
