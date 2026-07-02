@@ -58,7 +58,7 @@ loss:
   # for strict NICE-style asymmetric (vision identity, proj_dim auto = 1408).
   vision_passthrough: false
   proj_dim: 512        # iter3: 1024 to 512; matched to encoder embed_dim so EEG MLP doesn't need to expand (also program.md idea #1 explicit "proj=512")
-  n_residual_blocks: 3 # iter16: 1 to 3. Program from_checkpoint's "complex" head at lr=1e-5 didn't help (encoder barely moving), but at our lr=1e-4 with active encoder the projection may now benefit from more capacity
+  n_residual_blocks: 1 # iter17: revert iter16 (n_res=3 hurt); back to iter12 default
   temperature: 0.07    # initial logit-scale value (learnable; clamped exp ≤ 100)
   drop_proj: 0.5       # dropout inside the EEG-side residual block
 
@@ -67,6 +67,8 @@ optim:
   lr: 1.0e-4  # from-scratch prefers lr=1e-4 across shapes (iter4 lr=3e-4 hurt).
   lr_min: 1.0e-6
   warmup_epochs: 5  # iter9: revert iter7 (10 hurt). Back to fresh500 default.
+  optimizer: adamw     # iter17: adam to adamw. Rank-preserving optimization choice; warmstart section 3 used adamw + wd=0.05 successfully.
+  weight_decay: 0.05   # iter17: AdamW decoupled weight decay only applies to params in the "decay" group (skips norms/biases)
 
 logging:
   log_wandb: true
