@@ -29,14 +29,14 @@ model:
   # REVE encoder — same fields as jepa_pretrain.yaml so a JEPA checkpoint loads
   # cleanly via encoder_init_from. Predictor / masking blocks are intentionally
   # absent since the CLIP path doesn't use them.
-  encoder_embed_dim: 512   # iter14: revert iter13 width (768 tied with iter12; simplicity favors 512)
-  encoder_depth: 22        # iter14: 12 to 22 (REVE-full). Program idea #1 suggests depth 8/12/22 progression; iter12 depth=12 won, complete the sequence.
-  encoder_heads: 8         # revert to 8 (matches embed=512 at head_dim=64)
+  encoder_embed_dim: 512
+  encoder_depth: 12        # iter15: revert iter14 depth=22 (tied with iter12; discard)
+  encoder_heads: 8
   encoder_head_dim: 64
   patch_size: 400
   patch_overlap: 0
-  freqs: 4                 # revert to 4 (min for embed=512)
-  mlp_dim_ratio: 2.66
+  freqs: 4
+  mlp_dim_ratio: 4.0       # iter15: 2.66 (REVE) to 4.0 (standard transformer). FFN mlp_dim goes 512*2.66=1362 to 512*4=2048; ~1.5x FFN cost, more per-token compute at cheap axis
 
 loss:
   # mode=clip   : legacy symmetric InfoNCE (CLIPPretrain). Diagonal positives.

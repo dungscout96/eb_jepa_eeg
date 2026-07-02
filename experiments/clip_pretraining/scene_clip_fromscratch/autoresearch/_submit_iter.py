@@ -16,8 +16,8 @@ AUTORESEARCH_DIR = "experiments/clip_pretraining/scene_clip_fromscratch/autorese
 # shutdown" RPC errors during iter 0/3/4 write windows).
 CKPT_ROOT = "/work/hdd/bbnv/dtyoung/eb_jepa/autoresearch/jul1"
 
-# iter14: depth 12 to 22 at patch=400 embed=512. Linear scaling in depth means
-# ~6.6 s/ep vs iter12 3.6 s/ep. 300 ep = 33 min + 8 min probe = 41 min. Fits.
+# iter15: mlp_dim_ratio 2.66 to 4 at iter12 baseline. FFN dominant so ~1.5x
+# per-epoch cost -> ~5.4 s/ep. 300 ep = 27 min + 8 min probe = 35 min. Fits.
 EPOCHS = 300
 
 
