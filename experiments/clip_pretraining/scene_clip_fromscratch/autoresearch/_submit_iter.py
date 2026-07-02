@@ -16,11 +16,13 @@ AUTORESEARCH_DIR = "experiments/clip_pretraining/scene_clip_fromscratch/autorese
 # shutdown" RPC errors during iter 0/3/4 write windows).
 CKPT_ROOT = "/work/hdd/bbnv/dtyoung/eb_jepa/autoresearch/jul1"
 
-# iter9 actual: patch=100 ran at ~13 s/ep (better than 15-18 estimate).
-# 120 ep + probe = 29 min wall - way under budget. Iter10 uses patch=200
-# (2 tokens/window) which should be even cheaper: expect ~8-10 s/ep.
-# 180 ep at 10 s/ep = 30 min train + 9 min probe = 39 min, fits.
-EPOCHS = 180
+# iter10 actual: patch=200 ran way faster than expected - 180 ep + probe
+# in only 18 min wall (~4 s/ep). Iter11 uses patch=400 (1 token/window,
+# 129 tokens total). Should be even cheaper. Bump epochs to fill more of
+# the wall: 300 ep at ~4 s/ep = 20 min + 8 min probe = 28 min, plenty of
+# margin. Cheaper per-epoch means more chances for the config to reveal
+# whether it can converge past iter10's +0.02353.
+EPOCHS = 300
 
 
 def build_job(iter_num: int) -> Job:
