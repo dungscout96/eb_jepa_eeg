@@ -16,9 +16,12 @@ AUTORESEARCH_DIR = "experiments/clip_pretraining/scene_clip_fromscratch/autorese
 # shutdown" RPC errors during iter 0/3/4 write windows).
 CKPT_ROOT = "/work/hdd/bbnv/dtyoung/eb_jepa/autoresearch/jul1"
 
-# iter4 wall-timed-out at 80 ep + probe (probe took 8 min not 5). Iter5 targets
-# 70 ep at ~27 s/ep = 31 min train + 9 min probe = 40 min, generous margin.
-EPOCHS = 70
+# iter9+: patch_size 50 to 100 halves tokens per window from 12 to 6.
+# Attention cost is O(N^2), so ~4x cheaper on attention; FFN cost O(N) so ~2x.
+# Expect ~15-18 s/ep vs iter3's 27 s/ep. Bump to 130 ep to actually fill the
+# 45-min wall: 130 * 18 = 39 min train + 9 min probe = 48 min tight. Use 120
+# for safety: 120 * 18 = 36 min + 9 = 45 min. If per-epoch beats 18 s, bump up.
+EPOCHS = 120
 
 
 def build_job(iter_num: int) -> Job:
