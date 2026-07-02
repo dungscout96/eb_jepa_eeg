@@ -11,6 +11,10 @@ from neurolab.jobs import Job
 
 REPO = "/u/dtyoung/eb_jepa_eeg"
 AUTORESEARCH_DIR = "experiments/clip_pretraining/scene_clip_fromscratch/autoresearch"
+# Write checkpoints to /work/hdd (HDD-backed Lustre, team quota 2 TB soft, more
+# reliable than /u/dtyoung which has hit "Cannot send after transport endpoint
+# shutdown" RPC errors during iter 0/3/4 write windows).
+CKPT_ROOT = "/work/hdd/bbnv/dtyoung/eb_jepa/autoresearch/jul1"
 
 # iter4 wall-timed-out at 80 ep + probe (probe took 8 min not 5). Iter5 targets
 # 70 ep at ~27 s/ep = 31 min train + 9 min probe = 40 min, generous margin.
@@ -18,7 +22,7 @@ EPOCHS = 70
 
 
 def build_job(iter_num: int) -> Job:
-    exp_dir = f"{REPO}/checkpoints/autoresearch/jul1/iter{iter_num}"
+    exp_dir = f"{CKPT_ROOT}/iter{iter_num}"
     output_json = f"{AUTORESEARCH_DIR}/probe_val_iter{iter_num}.json"
     return Job(
         name=f"auto_jul1_iter{iter_num}",
