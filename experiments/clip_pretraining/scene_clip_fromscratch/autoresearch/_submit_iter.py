@@ -12,9 +12,9 @@ from neurolab.jobs import Job
 REPO = "/u/dtyoung/eb_jepa_eeg"
 AUTORESEARCH_DIR = "experiments/clip_pretraining/scene_clip_fromscratch/autoresearch"
 
-# iter4+: REVE-shape encoder measured at ~27 s/ep on A40 (empirical from iter3).
-# 80 ep ≈ 36 min train + 5 min probe = 41 min, fits 45-min wall with margin.
-EPOCHS = 80
+# iter4 wall-timed-out at 80 ep + probe (probe took 8 min not 5). Iter5 targets
+# 70 ep at ~27 s/ep = 31 min train + 9 min probe = 40 min, generous margin.
+EPOCHS = 70
 
 
 def build_job(iter_num: int) -> Job:

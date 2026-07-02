@@ -414,6 +414,7 @@ def run(
     # Training loop
     # ------------------------------------------------------------------
     logger.info("Starting CLIP pretraining for %d epochs...", cfg.optim.epochs)
+    channel_dropout_p = float(cfg.data.get("channel_dropout_p", 0.0))
     global_step = start_step
     for epoch in range(cfg.optim.epochs):
         pbar = tqdm(
@@ -433,6 +434,14 @@ def run(
                 eeg, _features, embeds, _shot_ids, _probe_labels = batch
                 eeg = eeg.to(device, non_blocking=True)
                 embeds = embeds.to(device, non_blocking=True)
+
+            if channel_dropout_p > 0.0:
+                # eeg: [B, T, C, W]. Zero entire (window, channel) tiles.
+                mask = (
+                    torch.rand(eeg.shape[0], eeg.shape[1], eeg.shape[2], 1,
+                               device=eeg.device) > channel_dropout_p
+                )
+                eeg = eeg * mask
 
             optimizer.zero_grad()
             if recipe_mode:

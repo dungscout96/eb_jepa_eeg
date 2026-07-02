@@ -23,6 +23,7 @@ data:
   corrca_filters: null
   annotation_duration_tolerance_s: 1.0
   max_recording_overshoot_s: 60.0
+  channel_dropout_p: 0.1  # iter5: prob of zeroing an entire channel during training (program idea #3). Applied per (window, channel) in the training loop only.
 
 model:
   # REVE encoder — same fields as jepa_pretrain.yaml so a JEPA checkpoint loads
@@ -62,7 +63,7 @@ loss:
 
 optim:
   epochs: 50
-  lr: 3.0e-4  # iter4: 1e-4 to 3e-4 at REVE-shape encoder. Program section 3.3 argues deeper networks want same-or-higher LR; REVE-warmstart winner was lr=3e-4 at depth=22.
+  lr: 1.0e-4  # iter5: revert iter4 (lr=3e-4 discarded, val delta_r2=+0.005 vs iter3 +0.011). from-scratch prefers lr=1e-4 across shapes.
   lr_min: 1.0e-6
   warmup_epochs: 5
 
