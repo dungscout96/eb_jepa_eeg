@@ -10,7 +10,7 @@ meta:
   encoder_init_from: null
 
 data:
-  batch_size: 64
+  batch_size: 128       # iter18: 64 to 128. Larger effective batch reduces InfoNCE gradient noise; compute-bound regime should benefit. VRAM has headroom at iter12 shape.
   num_workers: 4
   task: ThePresent
   n_windows: 1
@@ -67,8 +67,7 @@ optim:
   lr: 1.0e-4  # from-scratch prefers lr=1e-4 across shapes (iter4 lr=3e-4 hurt).
   lr_min: 1.0e-6
   warmup_epochs: 5  # iter9: revert iter7 (10 hurt). Back to fresh500 default.
-  optimizer: adamw     # iter17: adam to adamw. Rank-preserving optimization choice; warmstart section 3 used adamw + wd=0.05 successfully.
-  weight_decay: 0.05   # iter17: AdamW decoupled weight decay only applies to params in the "decay" group (skips norms/biases)
+  optimizer: adam      # iter18: revert iter17 (adamw wd=0.05 identical to adam at 300 ep)
 
 logging:
   log_wandb: true
