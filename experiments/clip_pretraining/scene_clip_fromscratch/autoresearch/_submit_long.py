@@ -32,7 +32,11 @@ from neurolab.jobs import Job
 
 REPO = "/u/dtyoung/eb_jepa_eeg"
 AUTORESEARCH_DIR = "experiments/clip_pretraining/scene_clip_fromscratch/autoresearch"
-CKPT_ROOT = "/work/hdd/bbnv/dtyoung/eb_jepa/autoresearch/jul1"
+# Long-training runs are checkpoint-heavy (469 MB per save); /work/hdd/bbnv
+# has repeatedly hit torch.save "zipfile pos mismatch" on this branch. Route
+# scale-up runs to /u/dtyoung (home; stabilized) with save_every=50 to reduce
+# write frequency.
+CKPT_ROOT = "/u/dtyoung/eb_jepa_eeg/checkpoints/autoresearch/jul1"
 
 
 def build_job(epochs: int, tag: str) -> Job:
@@ -51,6 +55,7 @@ def build_job(epochs: int, tag: str) -> Job:
             f" --fname={exp_dir}/config.yaml"
             f" --optim.epochs={epochs}"
             f" --folder={exp_dir}"
+            " --logging.save_every=50"
             f" --logging.wandb_group=auto_jul1_iter12_long_{tag}"
             " && "
             "PYTHONPATH=. uv run --group eeg python"
