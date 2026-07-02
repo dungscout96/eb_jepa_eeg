@@ -30,7 +30,7 @@ model:
   # cleanly via encoder_init_from. Predictor / masking blocks are intentionally
   # absent since the CLIP path doesn't use them.
   encoder_embed_dim: 512   # iter3: 1024 to 512 to fit A40 at depth=8 (iter2 OOM'd)
-  encoder_depth: 8         # iter2/3: 4 to 8 per program.md idea #1 (from-scratch capacity)
+  encoder_depth: 12        # iter12: 8 to 12. With patch=400 tokens/window=1 the transformer processes only 129 tokens; deeper is very cheap and should build stronger window-level abstractions.
   encoder_heads: 8         # iter3: 4 to 8 for full-width attention (heads*head_dim = embed_dim = 512, REVE-style)
   encoder_head_dim: 64     # iter3: 16 to 64 (removes attention bottleneck; heads*head_dim now matches embed_dim)
   patch_size: 400          # iter11: 200 to 400. n_times=400 too so exactly 1 patch/window; each 2s EEG window collapses to 1 token per channel. Matches CLIP's window-level alignment granularity.
