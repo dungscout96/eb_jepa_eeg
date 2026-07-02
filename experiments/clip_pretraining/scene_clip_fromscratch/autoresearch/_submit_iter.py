@@ -16,11 +16,11 @@ AUTORESEARCH_DIR = "experiments/clip_pretraining/scene_clip_fromscratch/autorese
 # shutdown" RPC errors during iter 0/3/4 write windows).
 CKPT_ROOT = "/work/hdd/bbnv/dtyoung/eb_jepa/autoresearch/jul1"
 
-# iter11 actual: patch=400 at depth=8 ran ~4.8 s/ep. Iter12 depth 8 to 12
-# adds ~50% transformer cost so expect ~7 s/ep. 300 ep at 7 s = 35 min
-# train + ~7 min probe (probe scales with depth too) = 42 min. Fits with
-# 3-min margin in the 45-min wall.
-EPOCHS = 300
+# iter12 actual: depth=12 at patch=400 ran ~3.6 s/ep (faster than 7s estimate).
+# Iter13 widens embed 512 to 768 (FFN cost scales as D^2, ~2.25x). Expect
+# ~8 s/ep. 250 ep at 8 s = 33 min train + ~10 min probe (probe also scales
+# with width) = 43 min. Fits with 2-min margin.
+EPOCHS = 250
 
 
 def build_job(iter_num: int) -> Job:
