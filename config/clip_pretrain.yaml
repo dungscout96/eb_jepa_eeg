@@ -23,7 +23,7 @@ data:
   corrca_filters: null
   annotation_duration_tolerance_s: 1.0
   max_recording_overshoot_s: 60.0
-  channel_dropout_p: 0.1  # iter5: prob of zeroing an entire channel during training (program idea #3). Applied per (window, channel) in the training loop only.
+  channel_dropout_p: 0.0  # iter5 (p=0.1) hurt; revert. Kept as knob for future exploration at smaller p.
 
 model:
   # REVE encoder — same fields as jepa_pretrain.yaml so a JEPA checkpoint loads
@@ -60,6 +60,13 @@ loss:
   proj_dim: 512        # iter3: 1024 to 512; matched to encoder embed_dim so EEG MLP doesn't need to expand (also program.md idea #1 explicit "proj=512")
   temperature: 0.07    # initial logit-scale value (learnable; clamped exp ≤ 100)
   drop_proj: 0.5       # dropout inside the EEG-side residual block
+  # iter6: auxiliary VICReg-style regularizer on encoder token outputs.
+  # Encourages std >= 1 per dim (anti-collapse) and decorrelated dims. Both
+  # coeffs = 0 disables it. std_loss is a hinge (zero when std >= 1) so
+  # only fires under collapse; cov_loss is always active. Fresh500 JEPA
+  # used (0.25, 0.25); start conservative here.
+  vc_std_coeff: 0.1
+  vc_cov_coeff: 0.1
 
 optim:
   epochs: 50
