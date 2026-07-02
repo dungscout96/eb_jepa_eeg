@@ -16,12 +16,11 @@ AUTORESEARCH_DIR = "experiments/clip_pretraining/scene_clip_fromscratch/autorese
 # shutdown" RPC errors during iter 0/3/4 write windows).
 CKPT_ROOT = "/work/hdd/bbnv/dtyoung/eb_jepa/autoresearch/jul1"
 
-# iter9+: patch_size 50 to 100 halves tokens per window from 12 to 6.
-# Attention cost is O(N^2), so ~4x cheaper on attention; FFN cost O(N) so ~2x.
-# Expect ~15-18 s/ep vs iter3's 27 s/ep. Bump to 130 ep to actually fill the
-# 45-min wall: 130 * 18 = 39 min train + 9 min probe = 48 min tight. Use 120
-# for safety: 120 * 18 = 36 min + 9 = 45 min. If per-epoch beats 18 s, bump up.
-EPOCHS = 120
+# iter9 actual: patch=100 ran at ~13 s/ep (better than 15-18 estimate).
+# 120 ep + probe = 29 min wall - way under budget. Iter10 uses patch=200
+# (2 tokens/window) which should be even cheaper: expect ~8-10 s/ep.
+# 180 ep at 10 s/ep = 30 min train + 9 min probe = 39 min, fits.
+EPOCHS = 180
 
 
 def build_job(iter_num: int) -> Job:
@@ -35,8 +34,12 @@ def build_job(iter_num: int) -> Job:
         time_limit="00:45:00",
         command=(
             f"mkdir -p {exp_dir} && "
+            # Snapshot the config at job start so a mid-flight sync of
+            # config/clip_pretrain.yaml can't break the probe step (iter8
+            # got hit by exactly this problem).
+            f"cp config/clip_pretrain.yaml {exp_dir}/config.yaml && "
             "PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.clip_pretrain"
-            " --fname=config/clip_pretrain.yaml"
+            f" --fname={exp_dir}/config.yaml"
             f" --optim.epochs={EPOCHS}"
             f" --folder={exp_dir}"
             f" --logging.wandb_group=auto_jul1_iter{iter_num}"
@@ -44,7 +47,7 @@ def build_job(iter_num: int) -> Job:
             "PYTHONPATH=. uv run --group eeg python"
             " eb_jepa/evaluation/clip_probe/probe.py"
             f" --checkpoint {exp_dir}/latest.pth.tar"
-            " --config config/clip_pretrain.yaml"
+            f" --config {exp_dir}/config.yaml"
             " --split val --cv-splits 5"
             f" --output {output_json}"
         ),
