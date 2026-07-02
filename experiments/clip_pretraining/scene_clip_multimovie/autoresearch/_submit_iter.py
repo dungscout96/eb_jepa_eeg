@@ -25,11 +25,11 @@ AUTORESEARCH_DIR = "experiments/clip_pretraining/scene_clip_multimovie/autoresea
 # /u/dtyoung home Lustre: has room; /work/hdd/bbnv is currently over team soft quota
 CKPT_ROOT = "/u/dtyoung/eb_jepa_eeg/checkpoints/autoresearch/multimovie_jul2"
 
-# Multi-movie has ~2x recordings per epoch vs single-movie ThePresent-only.
-# jul1 iter 12 at patch=400 depth=12 ran ~5 s/ep single-movie. Expect ~10 s/ep
-# multi-movie. 250 ep at 10 s/ep = 42 min train + 5 min probe TP + 5 min
-# probe DM + 5 min setup = 57 min. Use 75-min wall for margin.
-EPOCHS = 250
+# iter1: 400 ep to test whether multi-movie has more training headroom than
+# single-movie (jul1 iter12 saturated at ep500 on ~700 recordings; multi-movie
+# has ~2x data so may keep gaining). iter0 measured 11.3 s/ep so 400 ep = 75
+# min train + 10 min probes = 85 min. 105-min wall (01:45:00) has margin.
+EPOCHS = 400
 
 
 def build_job(iter_num: int) -> Job:
@@ -41,7 +41,7 @@ def build_job(iter_num: int) -> Job:
         cluster="delta",
         repo_path=REPO,
         partition="gpuA40x4",
-        time_limit="01:15:00",
+        time_limit="01:45:00",
         command=(
             f"mkdir -p {exp_dir} && "
             # Snapshot multi-movie config (used for training)
