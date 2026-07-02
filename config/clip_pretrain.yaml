@@ -29,13 +29,13 @@ model:
   # REVE encoder — same fields as jepa_pretrain.yaml so a JEPA checkpoint loads
   # cleanly via encoder_init_from. Predictor / masking blocks are intentionally
   # absent since the CLIP path doesn't use them.
-  encoder_embed_dim: 768   # iter13: 512 to 768. With 129 tokens the transformer is cheap; wider embed gives more capacity per token to encode the 2s window info.
-  encoder_depth: 12        # iter12: 8 to 12.
-  encoder_heads: 12        # iter13: 8 to 12 (heads*head_dim = 12*64 = 768 = embed_dim, full-width attention preserved)
+  encoder_embed_dim: 512   # iter14: revert iter13 width (768 tied with iter12; simplicity favors 512)
+  encoder_depth: 22        # iter14: 12 to 22 (REVE-full). Program idea #1 suggests depth 8/12/22 progression; iter12 depth=12 won, complete the sequence.
+  encoder_heads: 8         # revert to 8 (matches embed=512 at head_dim=64)
   encoder_head_dim: 64
   patch_size: 400
   patch_overlap: 0
-  freqs: 5                 # iter13: 4 to 5; FourierEmb4D needs freqs^4 >= embed_dim/2 = 384, so freqs=5 (625) satisfies
+  freqs: 4                 # revert to 4 (min for embed=512)
   mlp_dim_ratio: 2.66
 
 loss:
