@@ -21,7 +21,6 @@ from tqdm import tqdm
 
 from eb_jepa.architectures import MovieCLIPHead
 from eb_jepa.clip import CLIPPretrain, SceneCLIPPretrain
-from eb_jepa.losses import CovarianceLoss, HingeStdLoss
 from eb_jepa.datasets.hbn import JEPAMovieDataset
 from eb_jepa.logging import get_logger
 from eb_jepa.paths import resolve_preprocessed_dir
@@ -417,27 +416,6 @@ def run(
     logger.info("Starting CLIP pretraining for %d epochs...", cfg.optim.epochs)
     channel_dropout_p = float(cfg.data.get("channel_dropout_p", 0.0))
 
-    # iter6: auxiliary VC regularizer on encoder token outputs. Hooks the
-    # transformer backbone so we grab the [B, N, D] token tensor without
-    # editing clip.py (which is read-only per program spec).
-    vc_std_coeff = float(cfg.loss.get("vc_std_coeff", 0.0))
-    vc_cov_coeff = float(cfg.loss.get("vc_cov_coeff", 0.0))
-    vc_active = vc_std_coeff > 0.0 or vc_cov_coeff > 0.0
-    _hook_state = {"tokens": None}
-    hook_handle = None
-    if vc_active:
-        hinge_std = HingeStdLoss(std_margin=1.0).to(device)
-        cov_loss_fn = CovarianceLoss().to(device)
-
-        def _capture(_mod, _inp, out):
-            _hook_state["tokens"] = out
-
-        hook_handle = model.encoder.transformer.register_forward_hook(_capture)
-        logger.info(
-            "VC aux loss active: std_coeff=%.4f cov_coeff=%.4f",
-            vc_std_coeff, vc_cov_coeff,
-        )
-
     global_step = start_step
     for epoch in range(cfg.optim.epochs):
         pbar = tqdm(
@@ -467,24 +445,10 @@ def run(
                 eeg = eeg * mask
 
             optimizer.zero_grad()
-            if vc_active:
-                _hook_state["tokens"] = None
             if recipe_mode:
                 loss, loss_dict = model(eeg, embeds, scene_ids, t_starts)
             else:
                 loss, loss_dict = model(eeg, embeds)
-            if vc_active and _hook_state["tokens"] is not None:
-                toks = _hook_state["tokens"]                 # [B, N, D]
-                toks_flat = toks.reshape(-1, toks.shape[-1])  # [B*N, D]
-                std_l = hinge_std(toks_flat)
-                cov_l = cov_loss_fn(toks_flat)
-                vc_loss = vc_std_coeff * std_l + vc_cov_coeff * cov_l
-                loss = loss + vc_loss
-                loss_dict = {**loss_dict,
-                             "vc_std_loss": std_l.item(),
-                             "vc_cov_loss": cov_l.item(),
-                             "vc_loss": vc_loss.item()}
-                _hook_state["tokens"] = None
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()

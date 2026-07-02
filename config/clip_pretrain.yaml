@@ -60,19 +60,12 @@ loss:
   proj_dim: 512        # iter3: 1024 to 512; matched to encoder embed_dim so EEG MLP doesn't need to expand (also program.md idea #1 explicit "proj=512")
   temperature: 0.07    # initial logit-scale value (learnable; clamped exp ≤ 100)
   drop_proj: 0.5       # dropout inside the EEG-side residual block
-  # iter6: auxiliary VICReg-style regularizer on encoder token outputs.
-  # Encourages std >= 1 per dim (anti-collapse) and decorrelated dims. Both
-  # coeffs = 0 disables it. std_loss is a hinge (zero when std >= 1) so
-  # only fires under collapse; cov_loss is always active. Fresh500 JEPA
-  # used (0.25, 0.25); start conservative here.
-  vc_std_coeff: 0.1
-  vc_cov_coeff: 0.1
 
 optim:
   epochs: 50
-  lr: 1.0e-4  # iter5: revert iter4 (lr=3e-4 discarded, val delta_r2=+0.005 vs iter3 +0.011). from-scratch prefers lr=1e-4 across shapes.
+  lr: 1.0e-4  # from-scratch prefers lr=1e-4 across shapes (iter4 lr=3e-4 hurt).
   lr_min: 1.0e-6
-  warmup_epochs: 5
+  warmup_epochs: 10  # iter7: 5 to 10. Idea #7 hint: more warmup with the REVE-shape encoder (deeper than fresh500's depth=4) may stabilize early learning.
 
 logging:
   log_wandb: true
