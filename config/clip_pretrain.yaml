@@ -10,7 +10,7 @@ meta:
   encoder_init_from: null
 
 data:
-  batch_size: 128       # iter18: 64 to 128. Larger effective batch reduces InfoNCE gradient noise; compute-bound regime should benefit. VRAM has headroom at iter12 shape.
+  batch_size: 64
   num_workers: 4
   task: ThePresent
   n_windows: 1
