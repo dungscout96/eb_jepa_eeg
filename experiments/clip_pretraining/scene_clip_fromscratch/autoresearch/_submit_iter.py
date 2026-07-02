@@ -16,8 +16,9 @@ AUTORESEARCH_DIR = "experiments/clip_pretraining/scene_clip_fromscratch/autorese
 # shutdown" RPC errors during iter 0/3/4 write windows).
 CKPT_ROOT = "/work/hdd/bbnv/dtyoung/eb_jepa/autoresearch/jul1"
 
-# iter15: mlp_dim_ratio 2.66 to 4 at iter12 baseline. FFN dominant so ~1.5x
-# per-epoch cost -> ~5.4 s/ep. 300 ep = 27 min + 8 min probe = 35 min. Fits.
+# iter16: n_residual_blocks 1 to 3 in projection head at iter12 baseline.
+# Projection head is small vs encoder so per-epoch impact negligible; expect
+# ~4 s/ep like iter12. 300 ep = 20 min + 8 min probe = 28 min.
 EPOCHS = 300
 
 
