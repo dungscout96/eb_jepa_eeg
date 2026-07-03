@@ -60,7 +60,7 @@ loss:
 
 optim:
   epochs: 50
-  lr: 1.0e-4           # jul1 iter 4/17: from-scratch prefers lr=1e-4 across shapes
+  lr: 2.0e-4           # iter3: 1e-4 to 2e-4. jul1 iter4 confirmed lr=3e-4 hurts single-movie, but multi-movie has 2x data / lower gradient noise; moderate lift may now work.
   lr_min: 1.0e-6
   warmup_epochs: 5
 

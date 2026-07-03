@@ -25,11 +25,8 @@ AUTORESEARCH_DIR = "experiments/clip_pretraining/scene_clip_multimovie/autoresea
 # /u/dtyoung home Lustre: has room; /work/hdd/bbnv is currently over team soft quota
 CKPT_ROOT = "/u/dtyoung/eb_jepa_eeg/checkpoints/autoresearch/multimovie_jul2"
 
-# iter2: 500 ep to test whether multi-movie trajectory keeps climbing past
-# iter1's +0.041 (matches jul1 single-movie iter12 ep500 length). At
-# ~11 s/ep, 500 ep = 92 min train + 15 min probes = 107 min. 120-min
-# wall (02:00:00) has margin.
-EPOCHS = 500
+# iter3+: back to 400 ep (iter1 sweet spot; iter2 500 ep tied within noise).
+EPOCHS = 400
 
 
 def build_job(iter_num: int) -> Job:
@@ -41,7 +38,7 @@ def build_job(iter_num: int) -> Job:
         cluster="delta",
         repo_path=REPO,
         partition="gpuA40x4",
-        time_limit="02:00:00",
+        time_limit="01:45:00",
         command=(
             f"mkdir -p {exp_dir} && "
             # Snapshot multi-movie config (used for training)
