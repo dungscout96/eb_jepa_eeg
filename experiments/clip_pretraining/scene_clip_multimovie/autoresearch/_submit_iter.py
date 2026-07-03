@@ -25,8 +25,12 @@ AUTORESEARCH_DIR = "experiments/clip_pretraining/scene_clip_multimovie/autoresea
 # /u/dtyoung home Lustre: has room; /work/hdd/bbnv is currently over team soft quota
 CKPT_ROOT = "/u/dtyoung/eb_jepa_eeg/checkpoints/autoresearch/multimovie_jul2"
 
-# iter3+: back to 400 ep (iter1 sweet spot; iter2 500 ep tied within noise).
-EPOCHS = 400
+# iter4+: switch to 30-min-training compute budget for faster config search.
+# Multi-movie ~11 s/ep, so 30 min = 164 ep. Rounded to 160. Plus ~15 min for
+# two probes + slack = ~50 min wall total. Under this budget iter1's +0.041
+# at 400 ep is not the reference - each iter compares to the NEW same-budget
+# baseline (iter 4 re-establishes at EPOCHS=160).
+EPOCHS = 160
 
 
 def build_job(iter_num: int) -> Job:
@@ -38,7 +42,7 @@ def build_job(iter_num: int) -> Job:
         cluster="delta",
         repo_path=REPO,
         partition="gpuA40x4",
-        time_limit="01:45:00",
+        time_limit="01:00:00",
         command=(
             f"mkdir -p {exp_dir} && "
             # Snapshot multi-movie config (used for training)

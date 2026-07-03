@@ -80,12 +80,21 @@ Once confirmed, kick off the experimentation loop.
 
 Each experiment runs one training + one probe eval on a single GPU.
 
-**Fixed budget: ~50 min training + ~10 min probe eval per iteration**
-(60-min wall). Multi-movie has ~2× the data per epoch vs single-movie,
-so per-epoch is roughly doubled. At iter 12's shape (patch=400
-depth=12 embed=512), single-movie ran ~5 s/ep for 500 epochs in 40
-min; expect multi-movie ~10 s/ep, so ~300 epochs fit inside 50 min
-of training. Aim for **~15 iterations/day** on one A40.
+**Fixed budget: ~30 min training + ~15 min probes per iteration**
+(~50-min wall total). Matches jul1's training-budget spec (30 min
+train + ~5 min probe) but scaled up on the probe side because we
+probe each movie separately. Multi-movie has ~2× the data per epoch
+vs single-movie, so at iter 12's shape (patch=400 depth=12 embed=512)
+per-epoch is ~11 s and 30 min of training fits ~160 epochs. Aim for
+**~20 iterations/day** on one A40.
+
+**Note on same-budget baseline**: iter 0 and iter 1 (250 ep and 400
+ep) established the long-budget trajectory. Under this shorter budget
+the reference number to beat is whatever iter 4 (or later, the first
+short-budget iter) establishes as the new best-at-160-ep config.
+Comparing short-budget iters to long-budget ones is unfair on
+absolute Δr² — they're just measuring different points on the same
+config's trajectory.
 
 Launch template (Delta A40, single job):
 
