@@ -45,7 +45,7 @@ To set up a new experiment, work with the user to:
      — the full single-movie search history. Read every row: iter 12
      is the winner; iterations 4/5/6/7/13/14/15/16/17/18 record
      confirmed dead ends at that shape.
-   - [`../../scene_clip_fromscratch/RESULTS.md`](../../scene_clip_fromscratch/RESULTS.md)
+   - [`../../scene_clip_fromscratch/RESULTS_fresh500_sweep.md`](../../scene_clip_fromscratch/RESULTS_fresh500_sweep.md)
      — pre-autoresearch single-movie sweep results.
    - [`../../scene_clip_from_checkpoint/RESULTS.md`](../../scene_clip_from_checkpoint/RESULTS.md)
      — the REVE-warmstart sibling. §3 known pathologies you MUST NOT repeat.

@@ -65,7 +65,7 @@ config/                        # OmegaConf configs
 experiments/                   # one folder per study; library is unaware of these
   clip_pretraining/            # CLIP / scene_clip studies
     scene_clip_from_checkpoint/    # REVE warm-start (current best); RESULTS.md
-    scene_clip_fromscratch/        # from-scratch CLIP baseline; RESULTS.md
+    scene_clip_fromscratch/        # from-scratch CLIP baseline; RESULTS_fresh500_sweep.md + autoresearch/RESULTS_autoresearch_jul1.md
     embedding_feature_correlation/ # V-JEPA-2 analysis + recipe artifact precompute
   canonical_replication/       # spec-faithful 5-seed JEPA headline run
   temporal_sweep/              # n_windows x window_size grid

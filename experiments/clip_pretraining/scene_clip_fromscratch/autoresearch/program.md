@@ -282,7 +282,7 @@ of the gap to REVE-warmstart** is the moral-win threshold.
 ## Known dead ends (do not re-run without a new theory)
 
 From [scene_clip_from_checkpoint/RESULTS.md](../../scene_clip_from_checkpoint/RESULTS.md)
-and [scene_clip_fromscratch/RESULTS.md](../RESULTS.md):
+and [scene_clip_fromscratch/RESULTS_fresh500_sweep.md](../RESULTS_fresh500_sweep.md):
 
 - **Extending schedule past the cosine floor** — 1000 ep at lr=1e-4
   landed at val Δr +0.11 vs the 300-ep sibling's +0.198. Same effect
