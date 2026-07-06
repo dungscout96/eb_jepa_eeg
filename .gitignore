@@ -1,6 +1,10 @@
 # EB-JEPA specific stuff
 /datasets/
 /outputs/
+# Per-branch autoresearch scratchpad (see experiments/clip_pretraining/scene_clip_fromscratch/autoresearch/program.md)
+experiments/clip_pretraining/scene_clip_fromscratch/autoresearch/results.tsv
+experiments/clip_pretraining/scene_clip_fromscratch/autoresearch/probe_*.json
+experiments/clip_pretraining/scene_clip_fromscratch/autoresearch/run.log
 __pycache__/**
 jepa_decoder.pth
 .vscode/**

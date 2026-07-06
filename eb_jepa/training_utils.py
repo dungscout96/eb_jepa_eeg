@@ -172,7 +172,14 @@ def save_checkpoint(
 
     checkpoint.update(extra_state)
 
-    torch.save(checkpoint, path)
+    # Atomic write: save to `.tmp`, then rename. If torch.save fails mid-write
+    # (Lustre RPC / zipfile corruption), the previous `path` remains intact.
+    # Use legacy (pre-zipfile) serialization to sidestep torch zipfile position
+    # mismatches on Lustre - the newer zipfile format seeks around and hits
+    # bugs on some Lustre configs.
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    torch.save(checkpoint, tmp_path, _use_new_zipfile_serialization=False)
+    tmp_path.replace(path)
     logger.info(f"Saved checkpoint: {path}")
 
 

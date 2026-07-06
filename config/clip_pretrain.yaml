@@ -23,19 +23,20 @@ data:
   corrca_filters: null
   annotation_duration_tolerance_s: 1.0
   max_recording_overshoot_s: 60.0
+  channel_dropout_p: 0.0  # iter5 (p=0.1) hurt; revert. Kept as knob for future exploration at smaller p.
 
 model:
   # REVE encoder — same fields as jepa_pretrain.yaml so a JEPA checkpoint loads
   # cleanly via encoder_init_from. Predictor / masking blocks are intentionally
   # absent since the CLIP path doesn't use them.
-  encoder_embed_dim: 1024
-  encoder_depth: 4
-  encoder_heads: 4
-  encoder_head_dim: 16
-  patch_size: 50
-  patch_overlap: 20
-  freqs: 6              # FourierEmb4D needs freqs^4 >= encoder_embed_dim/2 (512 for 1024-d)
-  mlp_dim_ratio: 2.66
+  encoder_embed_dim: 512
+  encoder_depth: 12        # iter15: revert iter14 depth=22 (tied with iter12; discard)
+  encoder_heads: 8
+  encoder_head_dim: 64
+  patch_size: 400
+  patch_overlap: 0
+  freqs: 4
+  mlp_dim_ratio: 2.66      # iter16: revert iter15 (ratio=4 slightly worse; REVE default 2.66)
 
 loss:
   # mode=clip   : legacy symmetric InfoNCE (CLIPPretrain). Diagonal positives.
@@ -44,9 +45,10 @@ loss:
   mode: scene_clip
   # Recipe knobs (only used when mode=scene_clip):
   mean_center: true            # subtract V-JEPA-2 global mean at dataset init
-  target_kind: shot_mean       # {per_window, shot_mean}; per_window keeps the
+  target_kind: per_window      # {per_window, shot_mean}; per_window keeps the
                                # mean-pooled clip vector, shot_mean replaces it
-                               # with the recipe's shot-mean lookup
+                               # with the recipe's shot-mean lookup. per_window
+                               # wins downstream on the val probe (fresh500 sweep).
   temporal_buffer_s: 2.0       # mask cross-scene pairs with |Δt|<2s from denom
 
   # Symmetric mode: both EEG and V-JEPA-2 project into a learned proj_dim-d
@@ -55,15 +57,17 @@ loss:
   # vision_proj is a learnable Linear(1408, 1024). Set vision_passthrough=true
   # for strict NICE-style asymmetric (vision identity, proj_dim auto = 1408).
   vision_passthrough: false
-  proj_dim: 1024       # only used when vision_passthrough=false
+  proj_dim: 512        # iter3: 1024 to 512; matched to encoder embed_dim so EEG MLP doesn't need to expand (also program.md idea #1 explicit "proj=512")
+  n_residual_blocks: 1 # iter17: revert iter16 (n_res=3 hurt); back to iter12 default
   temperature: 0.07    # initial logit-scale value (learnable; clamped exp ≤ 100)
   drop_proj: 0.5       # dropout inside the EEG-side residual block
 
 optim:
   epochs: 50
-  lr: 3.0e-4
+  lr: 1.0e-4  # from-scratch prefers lr=1e-4 across shapes (iter4 lr=3e-4 hurt).
   lr_min: 1.0e-6
-  warmup_epochs: 5
+  warmup_epochs: 5  # iter9: revert iter7 (10 hurt). Back to fresh500 default.
+  optimizer: adam      # iter18: revert iter17 (adamw wd=0.05 identical to adam at 300 ep)
 
 logging:
   log_wandb: true
