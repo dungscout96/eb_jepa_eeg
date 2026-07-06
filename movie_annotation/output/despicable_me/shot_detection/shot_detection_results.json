@@ -1,0 +1,193 @@
+{
+  "video": "movies/despicable_me.mp4",
+  "video_info": {
+    "fps": 25.0,
+    "n_frames": 4266,
+    "width": 624,
+    "height": 336
+  },
+  "tolerance_frames": 12,
+  "methods": {
+    "pyscenedetect": {
+      "boundaries": [
+        95,
+        206,
+        282,
+        483,
+        538,
+        563,
+        608,
+        665,
+        710,
+        791,
+        896,
+        1033,
+        1085,
+        1134,
+        1255,
+        1301,
+        1475,
+        1514,
+        1596,
+        1700,
+        1819,
+        2027,
+        2091,
+        2212,
+        2302,
+        2518,
+        2835,
+        2909,
+        2983,
+        3537,
+        3964,
+        4078,
+        4113,
+        4162,
+        4221
+      ]
+    },
+    "transnetv2": {
+      "boundaries": [
+        95,
+        206,
+        282,
+        483,
+        538,
+        563,
+        608,
+        665,
+        710,
+        791,
+        896,
+        1033,
+        1085,
+        1134,
+        1255,
+        1301,
+        1475,
+        1514,
+        1596,
+        1819,
+        2027,
+        2091,
+        2212,
+        2302,
+        2518,
+        2835,
+        2909,
+        2983,
+        3537,
+        3964,
+        4078,
+        4113,
+        4162,
+        4221
+      ]
+    },
+    "ffmpeg": {
+      "boundaries": [
+        95,
+        206,
+        282,
+        483,
+        538,
+        563,
+        608,
+        665,
+        710,
+        896,
+        1033,
+        1134,
+        1255,
+        1301,
+        1475,
+        1514,
+        1596,
+        1819,
+        2027,
+        2091,
+        2212,
+        2302,
+        2518,
+        2835,
+        2909,
+        2983,
+        4113,
+        4162,
+        4221
+      ]
+    }
+  },
+  "agreement": {
+    "per_method": {
+      "pyscenedetect": {
+        "n_boundaries": 35
+      },
+      "transnetv2": {
+        "n_boundaries": 34
+      },
+      "ffmpeg": {
+        "n_boundaries": 29
+      }
+    },
+    "pairwise": {
+      "pyscenedetect_vs_transnetv2": {
+        "precision": 1.0,
+        "recall": 0.971,
+        "f1": 0.986,
+        "n_pyscenedetect_matched_in_transnetv2": 34,
+        "n_transnetv2_matched_in_pyscenedetect": 34
+      },
+      "pyscenedetect_vs_ffmpeg": {
+        "precision": 1.0,
+        "recall": 0.829,
+        "f1": 0.906,
+        "n_pyscenedetect_matched_in_ffmpeg": 29,
+        "n_ffmpeg_matched_in_pyscenedetect": 29
+      },
+      "transnetv2_vs_ffmpeg": {
+        "precision": 1.0,
+        "recall": 0.853,
+        "f1": 0.921,
+        "n_transnetv2_matched_in_ffmpeg": 29,
+        "n_ffmpeg_matched_in_transnetv2": 29
+      }
+    },
+    "three_way": {
+      "n_agreed": 29,
+      "frames": [
+        95,
+        206,
+        282,
+        483,
+        538,
+        563,
+        608,
+        665,
+        710,
+        896,
+        1033,
+        1134,
+        1255,
+        1301,
+        1475,
+        1514,
+        1596,
+        1819,
+        2027,
+        2091,
+        2212,
+        2302,
+        2518,
+        2835,
+        2909,
+        2983,
+        4113,
+        4162,
+        4221
+      ],
+      "anchor_method": "ffmpeg"
+    }
+  }
+}
