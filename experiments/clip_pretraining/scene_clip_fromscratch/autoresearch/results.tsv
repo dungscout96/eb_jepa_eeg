@@ -1,0 +1,23 @@
+commit	val_delta_r2	val_mean_r2	memory_gb	epochs	status	description
+d5c9497	+0.00319	+0.0222	25.2	120	keep	baseline per_window lr3e4; wall cut at ep128 mid-write; probed ep120; per-epoch ~19s so 130 exceeds budget
+ed6ac2a	+0.00965	+0.0286	23.4	100	keep	lr 3e-4 to 1e-4; matches fresh500 ep99 trajectory (+0.0099); still 3x below fresh500_ep499 target
+ab05fdf	0.000000	0.0	0.0	0	crash	depth 4 to 8 keeping embed=1024; CUDA OOM at ep0 on A40 (42.9GB used); reshape needed
+0f3d528	+0.01093	+0.0299	21.9	98	keep	shallow REVE-shape depth=8 embed=512 heads=8 head_dim=64 proj=512; +0.00128 over iter1; per-epoch ~27s so 100 ep exceeded wall probed ep98
+745ed67	+0.00544	+0.0244	21.9	70	discard	lr 1e-4 to 3e-4 at REVE-shape; hurts vs iter3; contradicts sec 3.3 for from-scratch; probe cut wall so probed ep70
+a67320b	+0.00769	+0.0267	21.9	70	discard	channel_dropout_p=0.1 at REVE-shape; hurts vs iter3 (undertrained regime does not need regularization); infra: switched checkpoints to /work/hdd, all clean
+a12135a	+0.00927	+0.0282	22.1	70	discard	aux VC loss (std_coeff=cov_coeff=0.1) on encoder tokens via hook; hurts vs iter3; consistent pattern: any regularization at 70-100 ep budget hurts (model is undertrained not overfit)
+487568c	+0.00827	+0.0272	22.1	70	discard	warmup_epochs 5 to 10 at REVE-shape; hurts vs iter3; 4th consecutive miss suggests knob-tuning saturated at 70-100 ep budget
+d97096b	+0.01353	+0.0325	22.0	70	keep	continuation from iter3 ep99 at lr=5e-5 for 70 more ep; +0.00260 over iter3; matches program section 2 finding 2 pattern (depth=4 got +0.005 gain from same recipe); not a new config but confirms compute-bound
+2262052	+0.01443	+0.0334	16.5	120	keep	NEW BEST config. patch_size 50 to 100 (tokens/window 12 to 6); +0.00350 over iter3 at LESS compute (29 vs 44 min wall); confirms patch coarsening is a genuine architectural win at short-budget
+3e2eed9	+0.02353	+0.0425	14.0	180	keep	NEW BEST. patch_size 100 to 200 (2 tokens/window); +0.00909 over iter9; every feature improves; motion_energy nearly doubles (0.032 to 0.058); 87% of the way to fresh500_ep499 target (+0.0272) in only 18 min wall
+5b647b1	+0.03445	+0.0534	12.5	300	keep	NEW BEST. patch_size 200 to 400 (1 token/window == CLIP alignment granularity); +0.01092 over iter10; BEATS fresh500_ep499 target (+0.0272) by +0.0072 in 24 min wall; every feature climbs again motion 0.058 to 0.076
+a6ebfe7	+0.03902	+0.0580	13.0	300	keep	NEW BEST. depth 8 to 12 at patch=400; +0.00457 over iter11; deep transformer on the 129-token sequence extracts richer window abstractions; every feature climbs, narrative finally jumps (0.024 to 0.028)
+243ded2	+0.03877	+0.0577	16.5	250	discard	embed 512 to 768 (heads=12 freqs=5) at patch=400 depth=12; TIED with iter12 within noise (-0.00025); width axis saturated at this shape; simplicity favors embed=512
+35784f0	+0.03911	+0.0581	14.0	300	discard	depth 12 to 22 (REVE-full) at patch=400; TIED with iter12 within noise (+0.00009); more compute (39 min vs 25 min) no clear win; depth saturates at 12 at this shape
+7a1866c	+0.03845	+0.0574	14.0	300	discard	mlp_dim_ratio 2.66 to 4 at iter12 baseline; slightly worse (-0.00057); FFN axis saturated too - all 3 encoder capacity axes (width/depth/FFN) plateau at iter12 shape
+21edc20	+0.03634	+0.0553	14.0	300	discard	n_residual_blocks 1 to 3 (complex projection head) at iter12; hurts (-0.00268); consistent with from_checkpoint finding at lr=1e-5 (bigger projector hurts)
+6a830e6	+0.03901	+0.0580	14.0	300	discard	Adam to AdamW wd=0.05 at iter12; IDENTICAL result to iter12 (-0.00001); wd=0.05 is negligible over 300 ep at lr=1e-4 (cumulative decay ~1%); optimizer saturated too
+07e9772	+0.03465	+0.0536	14.0	300	discard	batch_size 64 to 128 at iter12; hurts (-0.00437); confirms RESULTS sec2 note 3 (smaller batch helps) is real not just confounded - fewer optim steps per epoch hurts in compute-bound regime
+a6ebfe7-long	+0.04744	+0.0664	14.0	500	keep	iter12 scale-up run: same config as iter12 for 500 epochs single cosine; +0.00842 over iter12 ep300; probe_traintest val Pearson r=+0.256 delta_r=+0.126 (random baseline r=+0.130 due to strong patch=400 architectural prior)
+a6ebfe7-cont5e5	+0.04420	+0.0632	14.0	500+500	discard	continuation from iter12 ep500 at lr=5e-5 fresh cosine 500 more ep; hurts vs ep500 base (-0.00324); confirms schedule-length pathology sec 3.2 applies here too
+a6ebfe7-cont1e4	+0.04632	+0.0653	14.0	500+500	discard	SGDR-style continuation from iter12 ep500 at lr=1e-4 (same peak) fresh cosine 500 more ep; hurts slightly (-0.00112); iter12 ceiling firmly at ep500

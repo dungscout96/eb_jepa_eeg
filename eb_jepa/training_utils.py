@@ -172,11 +172,11 @@ def save_checkpoint(
 
     checkpoint.update(extra_state)
 
-    # Atomic write with legacy serialization to sidestep Lustre torch.save
-    # zipfile-position-mismatch bugs we hit repeatedly on jul1 (see
-    # scene_clip_fromscratch/autoresearch/RESULTS.md, Infrastructure lessons).
-    # Save to `.tmp`, then rename. Legacy serialization avoids the seek-based
-    # writes that Lustre partial-flush semantics can corrupt.
+    # Atomic write: save to `.tmp`, then rename. If torch.save fails mid-write
+    # (Lustre RPC / zipfile corruption), the previous `path` remains intact.
+    # Use legacy (pre-zipfile) serialization to sidestep torch zipfile position
+    # mismatches on Lustre - the newer zipfile format seeks around and hits
+    # bugs on some Lustre configs.
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     torch.save(checkpoint, tmp_path, _use_new_zipfile_serialization=False)
     tmp_path.replace(path)
