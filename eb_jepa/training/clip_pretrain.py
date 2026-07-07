@@ -173,12 +173,17 @@ def run(
         raise ValueError(
             f"Unknown loss.mode={loss_mode!r}; expected 'clip', 'scene_clip', or 'soft_target_clip'."
         )
-    recipe_mode = loss_mode in {"scene_clip", "soft_target_clip"}
+    # `recipe_mode` controls the DATASET path (mean-centered targets, 7-tuple
+    # batch with scene_ids + t_starts). All three loss modes can consume it —
+    # vanilla CLIP just discards scene_ids/t_starts at model-call time. This
+    # lets us run a fair vanilla-CLIP baseline with the same mean-centering
+    # that scene_clip / soft_target_clip enjoy.
+    recipe_mode = loss_mode in {"clip", "scene_clip", "soft_target_clip"}
     recipe_target_kind = str(cfg.loss.get("target_kind", "shot_mean"))
     recipe_mean_center = bool(cfg.loss.get("mean_center", True))
-    # soft_target_clip ignores shot / scene labels — allow the dataset to run
-    # without shot-boundary coverage for that mode (still needs global_mean).
-    recipe_require_shots = loss_mode != "soft_target_clip"
+    # Only scene_clip actually reads shot / scene labels; the other two ignore
+    # them, so we can run without shot boundaries when they aren't required.
+    recipe_require_shots = loss_mode == "scene_clip"
     temporal_buffer_s = float(cfg.loss.get("temporal_buffer_s", 2.0))
     soft_alpha = float(cfg.loss.get("soft_alpha", 0.5))
     soft_tau_teacher = float(cfg.loss.get("soft_tau_teacher", 0.1))
@@ -462,10 +467,13 @@ def run(
                 eeg = eeg * mask
 
             optimizer.zero_grad()
-            if recipe_mode:
-                loss, loss_dict = model(eeg, embeds, scene_ids, t_starts)
-            else:
+            # SceneCLIPPretrain / SoftTargetCLIPPretrain want the extended
+            # signature; vanilla CLIPPretrain wants just (eeg, embeds). The
+            # dataset returns the extended batch whenever recipe_mode=True.
+            if loss_mode == "clip":
                 loss, loss_dict = model(eeg, embeds)
+            else:
+                loss, loss_dict = model(eeg, embeds, scene_ids, t_starts)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()

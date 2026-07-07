@@ -1,4 +1,4 @@
-"""Submit a soft_target_clip vs scene_clip A/B run to Delta (multi-movie).
+"""Submit a soft_target_clip / scene_clip / vanilla-clip run to Delta (multi-movie).
 
 Mirrors the flow of `scene_clip_multimovie/autoresearch/_submit_iter.py`:
 train once on the multi-movie config (task=[ThePresent, DespicableMe]), then
@@ -7,7 +7,10 @@ probe val on each movie separately using per-movie config snapshots.
 Usage:
     uv run --group eeg python _submit_ab.py <arm> <run_tag> [submit]
 
-    arm      : "scene_clip" (baseline) or "soft_target_clip" (test).
+    arm      : "clip" (vanilla InfoNCE, diagonal positives, mean-centered
+               per-window targets — the pre-scene_clip baseline extended to
+               matched training conditions), "scene_clip" (scene-ID
+               multi-positive baseline), or "soft_target_clip" (test).
     run_tag  : short slug to disambiguate this pair of runs (e.g. "jul7").
     submit   : append to actually sbatch. Otherwise dry-run.
 
@@ -42,8 +45,10 @@ DEFAULT_EPOCHS = 160
 
 
 def build_job(arm: str, run_tag: str, alpha: float, tau: float, epochs: int) -> Job:
-    if arm not in {"scene_clip", "soft_target_clip"}:
-        raise ValueError(f"arm must be scene_clip or soft_target_clip, got {arm!r}")
+    if arm not in {"clip", "scene_clip", "soft_target_clip"}:
+        raise ValueError(
+            f"arm must be clip, scene_clip, or soft_target_clip, got {arm!r}"
+        )
     exp_dir = f"{CKPT_ROOT}/{run_tag}_{arm}"
     output_TP = f"{EXP_DIR}/probe_val_{run_tag}_{arm}_TP.json"
     output_DM = f"{EXP_DIR}/probe_val_{run_tag}_{arm}_DM.json"
