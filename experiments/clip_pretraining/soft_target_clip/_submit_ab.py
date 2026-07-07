@@ -11,9 +11,12 @@ Usage:
     run_tag  : short slug to disambiguate this pair of runs (e.g. "jul7").
     submit   : append to actually sbatch. Otherwise dry-run.
 
-Optional overrides for the test arm (positional --kw=):
-    --alpha=0.5              soft_alpha (blend weight on teacher)
-    --tau=0.1                soft_tau_teacher (teacher softmax temperature)
+Optional overrides (positional --kw=):
+    --alpha=0.5              soft_alpha (blend weight on teacher); test arm only
+    --tau=0.1                soft_tau_teacher (teacher softmax temperature); test arm only
+    --epochs=160             training epochs. Default 160 (~45 min). Use 400 for
+                             the long-budget schedule that jul2 iter 1 established
+                             as best for multi-movie scene_clip (~1h 45m job).
 
 Job structure per arm:
   1. mkdir checkpoint dir
@@ -32,12 +35,13 @@ REPO = "/u/dtyoung/eb_jepa_eeg"
 EXP_DIR = "experiments/clip_pretraining/soft_target_clip"
 CKPT_ROOT = "/work/hdd/bbnv/dtyoung/eb_jepa/soft_target_clip"
 
-# Match scene_clip_multimovie jul2 budget: ~11 s/ep at embed=512 baseline,
-# 160 ep = 29 min train + ~8 min per-movie probes = ~45 min total.
-EPOCHS = 160
+# Default matches scene_clip_multimovie jul2 iter 4: ~11 s/ep at embed=512
+# baseline, 160 ep = 29 min train + ~8 min per-movie probes = ~45 min total.
+# 400 ep = jul2 iter 1 long-budget best, ~1h 45m total (needs longer time_limit).
+DEFAULT_EPOCHS = 160
 
 
-def build_job(arm: str, run_tag: str, alpha: float, tau: float) -> Job:
+def build_job(arm: str, run_tag: str, alpha: float, tau: float, epochs: int) -> Job:
     if arm not in {"scene_clip", "soft_target_clip"}:
         raise ValueError(f"arm must be scene_clip or soft_target_clip, got {arm!r}")
     exp_dir = f"{CKPT_ROOT}/{run_tag}_{arm}"
@@ -61,12 +65,16 @@ def build_job(arm: str, run_tag: str, alpha: float, tau: float) -> Job:
         f"PYTHONPATH=. uv run --group eeg python -c \"{patch_lines}\" && "
     )
 
+    # ~11 s/ep base + ~8 min probes; add 25% headroom.
+    est_min = int(epochs * 11 / 60 + 8) + int(0.25 * epochs * 11 / 60)
+    hours, mins = divmod(max(60, est_min), 60)
+    time_limit = f"{hours:02d}:{mins:02d}:00"
     return Job(
         name=f"soft_clip_{run_tag}_{arm}",
         cluster="delta",
         repo_path=REPO,
         partition="gpuA40x4",
-        time_limit="01:00:00",
+        time_limit=time_limit,
         command=(
             f"mkdir -p {exp_dir} && "
             f"cp config/clip_pretrain.yaml {exp_dir}/config.yaml && "
@@ -85,7 +93,7 @@ def build_job(arm: str, run_tag: str, alpha: float, tau: float) -> Job:
             # Train (multi-movie).
             "PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.clip_pretrain"
             f" --fname={exp_dir}/config.yaml"
-            f" --optim.epochs={EPOCHS}"
+            f" --optim.epochs={epochs}"
             f" --folder={exp_dir}"
             f" --logging.wandb_group=soft_target_clip_{run_tag}"
             " && "
@@ -123,21 +131,22 @@ def _parse_kv(args: list[str], key: str, default: float) -> float:
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("Usage: _submit_ab.py <arm> <run_tag> [--alpha=0.5] [--tau=0.1] [submit]")
+        print("Usage: _submit_ab.py <arm> <run_tag> [--alpha=0.5] [--tau=0.1] [--epochs=160] [submit]")
         sys.exit(1)
     arm = sys.argv[1]
     run_tag = sys.argv[2]
     args = sys.argv[3:]
     alpha = _parse_kv(args, "alpha", 0.5)
     tau = _parse_kv(args, "tau", 0.1)
+    epochs = int(_parse_kv(args, "epochs", DEFAULT_EPOCHS))
     submit = "submit" in args
-    job = build_job(arm, run_tag, alpha, tau)
+    job = build_job(arm, run_tag, alpha, tau, epochs)
     if submit:
-        print(f"Submitting {job.name} (alpha={alpha}, tau={tau})")
+        print(f"Submitting {job.name} (alpha={alpha}, tau={tau}, epochs={epochs})")
         print(f"job_id: {job.submit()}")
     else:
         print(
             f"Dry-run {job.name} (arm={arm}, run_tag={run_tag}, "
-            f"alpha={alpha}, tau={tau}). Add 'submit' to actually run."
+            f"alpha={alpha}, tau={tau}, epochs={epochs}). Add 'submit' to actually run."
         )
         print(job.submit(dry_run=True))
