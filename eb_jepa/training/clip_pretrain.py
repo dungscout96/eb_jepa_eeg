@@ -20,7 +20,7 @@ from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
 from eb_jepa.architectures import MovieCLIPHead
-from eb_jepa.clip import CLIPPretrain, SceneCLIPPretrain
+from eb_jepa.clip import CLIPPretrain, SceneCLIPPretrain, SoftTargetCLIPPretrain
 from eb_jepa.datasets.hbn import JEPAMovieDataset
 from eb_jepa.logging import get_logger
 from eb_jepa.paths import resolve_preprocessed_dir
@@ -169,12 +169,16 @@ def run(
     temporal_stride = cfg.data.get("temporal_stride", 1)
 
     loss_mode = str(cfg.loss.get("mode", "clip"))
-    if loss_mode not in {"clip", "scene_clip"}:
-        raise ValueError(f"Unknown loss.mode={loss_mode!r}; expected 'clip' or 'scene_clip'.")
-    recipe_mode = loss_mode == "scene_clip"
+    if loss_mode not in {"clip", "scene_clip", "soft_target_clip"}:
+        raise ValueError(
+            f"Unknown loss.mode={loss_mode!r}; expected 'clip', 'scene_clip', or 'soft_target_clip'."
+        )
+    recipe_mode = loss_mode in {"scene_clip", "soft_target_clip"}
     recipe_target_kind = str(cfg.loss.get("target_kind", "shot_mean"))
     recipe_mean_center = bool(cfg.loss.get("mean_center", True))
     temporal_buffer_s = float(cfg.loss.get("temporal_buffer_s", 2.0))
+    soft_alpha = float(cfg.loss.get("soft_alpha", 0.5))
+    soft_tau_teacher = float(cfg.loss.get("soft_tau_teacher", 0.1))
 
     # ------------------------------------------------------------------
     # Experiment directory + W&B
@@ -331,6 +335,14 @@ def run(
     if loss_mode == "scene_clip":
         model = SceneCLIPPretrain(
             encoder, clip_head, temporal_buffer_s=temporal_buffer_s
+        ).to(device)
+    elif loss_mode == "soft_target_clip":
+        model = SoftTargetCLIPPretrain(
+            encoder,
+            clip_head,
+            alpha=soft_alpha,
+            tau_teacher=soft_tau_teacher,
+            temporal_buffer_s=temporal_buffer_s,
         ).to(device)
     else:
         model = CLIPPretrain(encoder, clip_head).to(device)

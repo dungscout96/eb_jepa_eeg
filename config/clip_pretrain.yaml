@@ -44,14 +44,22 @@ loss:
   # mode=clip   : legacy symmetric InfoNCE (CLIPPretrain). Diagonal positives.
   # mode=scene_clip: §9 bottom-line recipe. Requires vjepa2_recipe.npz built via
   #                  experiments/clip_pretraining/embedding_feature_correlation/precompute_vjepa2_recipe.py.
+  # mode=soft_target_clip: Andonian-2022-style soft-target distillation from the
+  #                  V-JEPA-2 similarity matrix. Same recipe/data requirements
+  #                  as scene_clip; ignores scene_id (teacher carries the label).
   mode: scene_clip
-  # Recipe knobs (only used when mode=scene_clip):
+  # Recipe knobs (used when mode in {scene_clip, soft_target_clip}):
   mean_center: true            # subtract V-JEPA-2 global mean at dataset init
   target_kind: per_window      # {per_window, shot_mean}; per_window keeps the
                                # mean-pooled clip vector, shot_mean replaces it
                                # with the recipe's shot-mean lookup. per_window
                                # wins downstream on the val probe (fresh500 sweep + jul1 iter 12).
   temporal_buffer_s: 2.0       # mask cross-scene pairs with |Δt|<2s from denom
+  # Soft-target knobs (only used when mode=soft_target_clip):
+  soft_alpha: 0.5              # blend weight: t = (1-α)·diag + α·teacher_softmax(V V^T / τ_t)
+  soft_tau_teacher: 0.1        # teacher temperature; lower → sharper (near one-hot),
+                               # higher → smoother. See centered-cosine range in
+                               # experiments/.../clip_design_observations_vjepa2.md §2.
 
   # Symmetric mode: both EEG and V-JEPA-2 project into a learned proj_dim-d
   # space. proj_dim=1024 matches the encoder embed dim so the EEG MLP doesn't
