@@ -19,7 +19,10 @@ Optional overrides (positional --kw=):
     --tau=0.1                soft_tau_teacher (teacher softmax temperature); test arm only
     --epochs=160             training epochs. Default 160 (~45 min). Use 400 for
                              the long-budget schedule that jul2 iter 1 established
-                             as best for multi-movie scene_clip (~1h 45m job).
+                             as best for multi-movie scene_clip (~2h 25m job).
+    --seed=2025              training seed (cfg.meta.seed). Include in exp_dir
+                             and probe output filenames so seed replicates don't
+                             collide. Probe fold seed is independent (cfg.eval.probe_seed).
 
 Job structure per arm:
   1. mkdir checkpoint dir
@@ -44,14 +47,19 @@ CKPT_ROOT = "/work/hdd/bbnv/dtyoung/eb_jepa/soft_target_clip"
 DEFAULT_EPOCHS = 160
 
 
-def build_job(arm: str, run_tag: str, alpha: float, tau: float, epochs: int) -> Job:
+def build_job(
+    arm: str, run_tag: str, alpha: float, tau: float, epochs: int, seed: int
+) -> Job:
     if arm not in {"clip", "scene_clip", "soft_target_clip"}:
         raise ValueError(
             f"arm must be clip, scene_clip, or soft_target_clip, got {arm!r}"
         )
-    exp_dir = f"{CKPT_ROOT}/{run_tag}_{arm}"
-    output_TP = f"{EXP_DIR}/probe_val_{run_tag}_{arm}_TP.json"
-    output_DM = f"{EXP_DIR}/probe_val_{run_tag}_{arm}_DM.json"
+    # Encode seed into the exp_dir and output filenames so seed replicates
+    # don't overwrite each other. Naming: <run_tag>_<arm>_seed<seed>.
+    slug = f"{run_tag}_{arm}_seed{seed}"
+    exp_dir = f"{CKPT_ROOT}/{slug}"
+    output_TP = f"{EXP_DIR}/probe_val_{slug}_TP.json"
+    output_DM = f"{EXP_DIR}/probe_val_{slug}_DM.json"
 
     # Patch loss.mode; add soft-target knobs if applicable. Runs inside sbatch
     # so the on-disk config/clip_pretrain.yaml is untouched by concurrent runs.
@@ -70,12 +78,14 @@ def build_job(arm: str, run_tag: str, alpha: float, tau: float, epochs: int) -> 
         f"PYTHONPATH=. uv run --group eeg python -c \"{patch_lines}\" && "
     )
 
-    # ~11 s/ep base + ~8 min probes; add 25% headroom.
-    est_min = int(epochs * 11 / 60 + 8) + int(0.25 * epochs * 11 / 60)
+    # Multi-movie training runs at ~15 s/ep at embed=512 (measured on 400-ep
+    # jobs 19972997/19973767 that TIMEOUT-ed at 1h39). Each per-movie probe
+    # takes ~8 min (two of them). 25% headroom for startup / I/O.
+    est_min = int(((epochs * 15 + 2 * 8 * 60) / 60) * 1.25)
     hours, mins = divmod(max(60, est_min), 60)
     time_limit = f"{hours:02d}:{mins:02d}:00"
     return Job(
-        name=f"soft_clip_{run_tag}_{arm}",
+        name=f"soft_clip_{slug}",
         cluster="delta",
         repo_path=REPO,
         partition="gpuA40x4",
@@ -99,6 +109,7 @@ def build_job(arm: str, run_tag: str, alpha: float, tau: float, epochs: int) -> 
             "PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.clip_pretrain"
             f" --fname={exp_dir}/config.yaml"
             f" --optim.epochs={epochs}"
+            f" --meta.seed={seed}"
             f" --folder={exp_dir}"
             f" --logging.wandb_group=soft_target_clip_{run_tag}"
             " && "
@@ -136,7 +147,7 @@ def _parse_kv(args: list[str], key: str, default: float) -> float:
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("Usage: _submit_ab.py <arm> <run_tag> [--alpha=0.5] [--tau=0.1] [--epochs=160] [submit]")
+        print("Usage: _submit_ab.py <arm> <run_tag> [--alpha=0.5] [--tau=0.1] [--epochs=160] [--seed=2025] [submit]")
         sys.exit(1)
     arm = sys.argv[1]
     run_tag = sys.argv[2]
@@ -144,14 +155,15 @@ if __name__ == "__main__":
     alpha = _parse_kv(args, "alpha", 0.5)
     tau = _parse_kv(args, "tau", 0.1)
     epochs = int(_parse_kv(args, "epochs", DEFAULT_EPOCHS))
+    seed = int(_parse_kv(args, "seed", 2025))
     submit = "submit" in args
-    job = build_job(arm, run_tag, alpha, tau, epochs)
+    job = build_job(arm, run_tag, alpha, tau, epochs, seed)
     if submit:
-        print(f"Submitting {job.name} (alpha={alpha}, tau={tau}, epochs={epochs})")
+        print(f"Submitting {job.name} (alpha={alpha}, tau={tau}, epochs={epochs}, seed={seed})")
         print(f"job_id: {job.submit()}")
     else:
         print(
             f"Dry-run {job.name} (arm={arm}, run_tag={run_tag}, "
-            f"alpha={alpha}, tau={tau}, epochs={epochs}). Add 'submit' to actually run."
+            f"alpha={alpha}, tau={tau}, epochs={epochs}, seed={seed}). Add 'submit' to actually run."
         )
         print(job.submit(dry_run=True))
