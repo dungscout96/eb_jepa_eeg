@@ -144,11 +144,16 @@ def build_job(
             f"{patch_cmd}"
             f"{snapshot_cmd}"
             # Train (multi-movie or single-movie per patched config.yaml).
+            # save_every=99999 disables periodic epoch_N.pth.tar checkpoints;
+            # only the always-overwritten latest.pth.tar is kept. Prevents the
+            # jul7 quota-fill incident (17 x 448 MB = ~8 GB per run * 12 runs
+            # = ~100 GB) — we only need latest.pth.tar for the downstream probe.
             "PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.clip_pretrain"
             f" --fname={exp_dir}/config.yaml"
             f" --optim.epochs={epochs}"
             f" --meta.seed={seed}"
             f" --folder={exp_dir}"
+            " --logging.save_every=99999"
             f" --logging.wandb_group=soft_target_clip_{run_tag}"
             " && "
             f"{probe_block}"
