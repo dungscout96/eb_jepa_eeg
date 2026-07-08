@@ -20,7 +20,7 @@ from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
 from eb_jepa.architectures import MovieCLIPHead
-from eb_jepa.clip import CLIPPretrain, SceneCLIPPretrain
+from eb_jepa.clip import CLIPPretrain, SceneCLIPPretrain, SoftTargetCLIPPretrain
 from eb_jepa.datasets.hbn import JEPAMovieDataset
 from eb_jepa.logging import get_logger
 from eb_jepa.paths import resolve_preprocessed_dir
@@ -169,12 +169,24 @@ def run(
     temporal_stride = cfg.data.get("temporal_stride", 1)
 
     loss_mode = str(cfg.loss.get("mode", "clip"))
-    if loss_mode not in {"clip", "scene_clip"}:
-        raise ValueError(f"Unknown loss.mode={loss_mode!r}; expected 'clip' or 'scene_clip'.")
-    recipe_mode = loss_mode == "scene_clip"
+    if loss_mode not in {"clip", "scene_clip", "soft_target_clip"}:
+        raise ValueError(
+            f"Unknown loss.mode={loss_mode!r}; expected 'clip', 'scene_clip', or 'soft_target_clip'."
+        )
+    # `recipe_mode` controls the DATASET path (mean-centered targets, 7-tuple
+    # batch with scene_ids + t_starts). All three loss modes can consume it —
+    # vanilla CLIP just discards scene_ids/t_starts at model-call time. This
+    # lets us run a fair vanilla-CLIP baseline with the same mean-centering
+    # that scene_clip / soft_target_clip enjoy.
+    recipe_mode = loss_mode in {"clip", "scene_clip", "soft_target_clip"}
     recipe_target_kind = str(cfg.loss.get("target_kind", "shot_mean"))
     recipe_mean_center = bool(cfg.loss.get("mean_center", True))
+    # Only scene_clip actually reads shot / scene labels; the other two ignore
+    # them, so we can run without shot boundaries when they aren't required.
+    recipe_require_shots = loss_mode == "scene_clip"
     temporal_buffer_s = float(cfg.loss.get("temporal_buffer_s", 2.0))
+    soft_alpha = float(cfg.loss.get("soft_alpha", 0.5))
+    soft_tau_teacher = float(cfg.loss.get("soft_tau_teacher", 0.1))
 
     # ------------------------------------------------------------------
     # Experiment directory + W&B
@@ -239,6 +251,7 @@ def run(
         recipe_mode=recipe_mode,
         recipe_target_kind=recipe_target_kind,
         recipe_mean_center=recipe_mean_center,
+        recipe_require_shots=recipe_require_shots,
     )
     if train_set.frame_embedding_dim == 0:
         raise RuntimeError(
@@ -281,6 +294,7 @@ def run(
             recipe_mode=True,
             recipe_target_kind=recipe_target_kind,
             recipe_mean_center=recipe_mean_center,
+            recipe_require_shots=recipe_require_shots,
             eeg_norm_stats=train_set.get_eeg_norm_stats(),
         )
         # Deterministic recording subset for stable per-epoch diagnostics.
@@ -331,6 +345,14 @@ def run(
     if loss_mode == "scene_clip":
         model = SceneCLIPPretrain(
             encoder, clip_head, temporal_buffer_s=temporal_buffer_s
+        ).to(device)
+    elif loss_mode == "soft_target_clip":
+        model = SoftTargetCLIPPretrain(
+            encoder,
+            clip_head,
+            alpha=soft_alpha,
+            tau_teacher=soft_tau_teacher,
+            temporal_buffer_s=temporal_buffer_s,
         ).to(device)
     else:
         model = CLIPPretrain(encoder, clip_head).to(device)
@@ -445,10 +467,13 @@ def run(
                 eeg = eeg * mask
 
             optimizer.zero_grad()
-            if recipe_mode:
-                loss, loss_dict = model(eeg, embeds, scene_ids, t_starts)
-            else:
+            # SceneCLIPPretrain / SoftTargetCLIPPretrain want the extended
+            # signature; vanilla CLIPPretrain wants just (eeg, embeds). The
+            # dataset returns the extended batch whenever recipe_mode=True.
+            if loss_mode == "clip":
                 loss, loss_dict = model(eeg, embeds)
+            else:
+                loss, loss_dict = model(eeg, embeds, scene_ids, t_starts)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()

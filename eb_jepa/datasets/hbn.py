@@ -645,8 +645,12 @@ def _load_vjepa2_recipe(movie: str) -> dict | None:
     """Load and cache V-JEPA-2 recipe artifacts (global mean, shot means, scene IDs).
 
     Built by ``experiments/clip_pretraining/embedding_feature_correlation/precompute_vjepa2_recipe.py``.
-    Returns ``{"global_mean": [D], "shot_means": [n_shots, D], "scene_id_per_shot": [n_shots]}``
+    Returns ``{"global_mean": [D], "shot_means": [n_shots, D] or None, "scene_id_per_shot": [n_shots] or None}``
     or ``None`` if not configured for *movie*.
+
+    Only ``global_mean`` is required in the .npz — ``shot_means`` and
+    ``scene_id_per_shot`` are optional so a recipe can be built for objectives
+    that don't need shot structure (e.g. ``soft_target_clip``).
     """
     if movie in _VJEPA2_RECIPE_CACHE:
         return _VJEPA2_RECIPE_CACHE[movie]
@@ -657,16 +661,23 @@ def _load_vjepa2_recipe(movie: str) -> dict | None:
     data = np.load(path)
     bundle = {
         "global_mean": data["global_mean"].astype(np.float32),
-        "shot_means": data["shot_means"].astype(np.float32),
-        "scene_id_per_shot": data["scene_id_per_shot"].astype(np.int64),
+        "shot_means": (
+            data["shot_means"].astype(np.float32) if "shot_means" in data.files else None
+        ),
+        "scene_id_per_shot": (
+            data["scene_id_per_shot"].astype(np.int64)
+            if "scene_id_per_shot" in data.files else None
+        ),
     }
     _VJEPA2_RECIPE_CACHE[movie] = bundle
+    n_shots = bundle["shot_means"].shape[0] if bundle["shot_means"] is not None else 0
+    n_scenes = (
+        len(set(bundle["scene_id_per_shot"].tolist()))
+        if bundle["scene_id_per_shot"] is not None else 0
+    )
     logger.info(
         "Loaded %s V-JEPA-2 recipe from %s: %d shots, %d scenes, dim=%d",
-        movie, path,
-        bundle["shot_means"].shape[0],
-        len(set(bundle["scene_id_per_shot"].tolist())),
-        bundle["global_mean"].shape[0],
+        movie, path, n_shots, n_scenes, bundle["global_mean"].shape[0],
     )
     return bundle
 
@@ -1022,6 +1033,7 @@ class JEPAMovieDataset(HBNMovieDataset):
         recipe_mode: bool = False,
         recipe_target_kind: str = "shot_mean",
         recipe_mean_center: bool = True,
+        recipe_require_shots: bool = True,
     ):
         super().__init__(
             split, window_size_seconds, task, cfg=cfg,
@@ -1093,6 +1105,12 @@ class JEPAMovieDataset(HBNMovieDataset):
         self.recipe_mode = recipe_mode
         self.recipe_target_kind = recipe_target_kind
         self.recipe_mean_center = recipe_mean_center
+        self.recipe_require_shots = recipe_require_shots
+        if recipe_mode and recipe_target_kind == "shot_mean" and not recipe_require_shots:
+            raise ValueError(
+                "recipe_target_kind='shot_mean' requires recipe_require_shots=True "
+                "(shot_mean targets need per-window shot ids)."
+            )
         self._vjepa2_recipes = {t: _load_vjepa2_recipe(t) for t in self.tasks}
         if recipe_mode:
             missing = [t for t, b in self._vjepa2_recipes.items() if b is None]
@@ -1190,30 +1208,46 @@ class JEPAMovieDataset(HBNMovieDataset):
             scene_ids_t = torch.full((n_win,), -1, dtype=torch.long)
             if recipe is not None:
                 task_idx = self._task_to_idx[rec_task]
-                shot_means_t = torch.from_numpy(recipe["shot_means"])
                 global_mean_t = torch.from_numpy(recipe["global_mean"])
-                scene_per_shot_t = torch.from_numpy(recipe["scene_id_per_shot"])
+                shot_means_t = (
+                    torch.from_numpy(recipe["shot_means"])
+                    if recipe.get("shot_means") is not None else None
+                )
+                scene_per_shot_t = (
+                    torch.from_numpy(recipe["scene_id_per_shot"])
+                    if recipe.get("scene_id_per_shot") is not None else None
+                )
                 valid_shot = shot_ids_t >= 0
-                if self.recipe_mode and not valid_shot.all():
+                if (
+                    self.recipe_mode
+                    and self.recipe_require_shots
+                    and not valid_shot.all()
+                ):
                     raise ValueError(
-                        f"recipe_mode=True but {(~valid_shot).sum().item()}/{n_win} "
-                        f"windows in {self._fif_paths[rec_idx]} (task={rec_task}) "
-                        "have no shot id. Shot boundaries must cover every window — "
-                        "fix the boundaries or disable recipe_mode."
+                        f"recipe_mode=True (recipe_require_shots=True) but "
+                        f"{(~valid_shot).sum().item()}/{n_win} windows in "
+                        f"{self._fif_paths[rec_idx]} (task={rec_task}) have no shot id. "
+                        "Shot boundaries must cover every window — fix the boundaries, "
+                        "disable recipe_mode, or set recipe_require_shots=False."
                     )
                 if self.recipe_mode and self.recipe_target_kind == "shot_mean":
+                    if shot_means_t is None:
+                        raise ValueError(
+                            f"recipe_target_kind='shot_mean' but recipe for task "
+                            f"{rec_task!r} has no shot_means field."
+                        )
                     # Replace per-window mean V-JEPA-2 with the shot-mean target.
                     embeds_t = shot_means_t[shot_ids_t].clone()
                 if self.recipe_mode and self.recipe_mean_center:
                     embeds_t = embeds_t - global_mean_t
-                # Always populate scene IDs when the recipe is available so
-                # downstream code can opt in without recomputing.
-                scene_ids_t = torch.full((n_win,), -1, dtype=torch.long)
-                if valid_shot.any():
+                # Populate scene IDs when the recipe carries scene labels AND
+                # at least some windows have valid shot ids. Otherwise scene_ids
+                # stays at -1, which downstream (SceneCLIPPretrain) treats as
+                # singleton positives — soft_target_clip ignores scene_ids
+                # entirely and only needs the -1 sentinel to exist.
+                if scene_per_shot_t is not None and valid_shot.any():
                     local_scene = scene_per_shot_t[shot_ids_t.clamp(min=0)]
-                    scene_ids_t = (
-                        local_scene + task_idx * self._SCENE_NAMESPACE
-                    )
+                    scene_ids_t = local_scene + task_idx * self._SCENE_NAMESPACE
                     scene_ids_t[~valid_shot] = -1
 
             filtered_paths.append(self._fif_paths[rec_idx])
