@@ -7,6 +7,13 @@ Sibling to [`../scene_clip_fromscratch/`](../scene_clip_fromscratch/) and
 V-JEPA-2 embeddings themselves — the "Option 4" line in
 [`../embedding_feature_correlation/clip_design_observations_vjepa2.md`](../embedding_feature_correlation/clip_design_observations_vjepa2.md) §6.
 
+> **Experiment concluded 2026-07-08. Final results in [`RESULTS_jul7.md`](RESULTS_jul7.md).**
+> TL;DR — soft τ=0.05 wins on TP-only 400 ep (+0.0026 mean Δr² over vanilla CLIP,
+> 2.6× seed std); ties vanilla on multi-movie 400 ep; and reaches R6-test
+> Pearson r = 0.1517 (+0.099 vs random) — the best from-scratch checkpoint on
+> record, +0.019 raw r over fresh500. Full analysis, per-feature breakdown,
+> and reproducibility recipes in the RESULTS file.
+
 ## Objective (in one paragraph)
 
 Andonian 2022 (*Robust Cross-Modal Representation Learning With Progressive
