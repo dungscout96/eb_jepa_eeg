@@ -1,24 +1,34 @@
 """Top-K retrieval evaluation for EEG ↔ V-JEPA-2 CLIP-style checkpoints.
 
 Implements the SSL-literature-standard retrieval evaluation used by
-EEG2Video, EEG-CLIP, and NICE-EEG. For each EEG window in the eval split
-(anchor), the trained encoder + `MovieCLIPHead` projects to `z_eeg`; each
-unique (task, movie-time) in the eval split becomes one V-JEPA-2 candidate
-projected to `z_vis`. Cosine similarity `z_eeg @ z_vis.T` produces the
-retrieval matrix.
+EEG2Video, EEG-CLIP, and NICE-EEG. Three pool granularities computed in one
+pass:
 
-Two directions reported (both are standard in the SSL literature):
+- **time** (finest): each unique (task, round(t_start / t_bucket_s)) is one
+  candidate. V-JEPA-2 targets at the same movie-time are identical, so the
+  pool entry is the first occurrence's projected vector. Retrieval means
+  "identify the exact movie moment you're watching." Largest pool → highest
+  chance level.
+- **shot**: each unique (task, shot_id) is one candidate. Pool entry is the
+  L2-normalized centroid of projected V-JEPA-2 vectors within that shot.
+  Retrieval means "identify the shot you're watching." Smaller pool.
+- **scene**: each unique (task, scene_id) is one candidate. Pool entry is
+  the L2-normalized centroid across all windows in that scene. Retrieval
+  means "identify the scene you're watching." Smallest pool.
+
+Windows without shot / scene coverage (id = -1) are dropped from those
+levels but retained for the time-level metrics.
+
+Two directions per level:
 
 - **e→v** (EEG anchor → find paired vision): for each EEG window, is the
-  correct (task, movie-time) V-JEPA-2 target in the top-K by cosine? This
-  is "identify the frame you're watching."
-- **v→e** (vision anchor → find matching EEG): for each unique (task,
-  movie-time) V-JEPA-2 target, is any EEG window at that same (task,
-  movie-time) in the top-K by cosine? This is "given a frame, find someone
-  watching it." Multi-positive by construction because multiple subjects
-  view the same time.
+  correct pool entry (its own time / shot / scene) in the top-K by cosine?
+- **v→e** (vision anchor → find matching EEG): for each pool entry, is any
+  EEG window belonging to that pool entry in the top-K by cosine? Multi-
+  positive at all levels because multiple subject-windows map to the same
+  pool entry.
 
-Chance level for e→v Top-1 is `1 / n_pool`. Report both raw accuracy and
+Chance level for e→v Top-K is `K / N_pool`. Report both raw accuracy and
 "chance-relative" accuracy (raw / chance) for interpretability across pool
 sizes.
 
@@ -97,28 +107,103 @@ def _embed_recording_and_meta(encoder, dataset, rec_idx, device, batch_size):
     return X, t_starts, embeds
 
 
-def _build_vision_pool(all_task_ids, all_t_starts, all_embeds, t_bucket_s):
-    """Dedupe V-JEPA-2 targets by (task, round(t_start / t_bucket_s)).
+def _build_pool_first_occurrence(keys: list, embeds: np.ndarray):
+    """Dedupe by exact key equality; take the first occurrence's embedding as
+    the pool entry. Suitable for time-bucket retrieval where V-JEPA-2 targets
+    at the same movie-time are identical (up to window-boundary rounding).
+
+    Args:
+        keys:   list[hashable] of length M — one key per anchor (e.g. tuples).
+        embeds: [M, D] float — per-anchor embeddings (V-JEPA-2 raw, or z_vis).
 
     Returns:
-        pool_embeds:   [N_pool, D_v] — one V-JEPA-2 vector per unique key
-        anchor_to_pool: [M] int64 — for each anchor row in all_task_ids, the pool index
-        pool_keys:     list of (task_id, t_bucket) tuples, len == N_pool
+        pool_embeds:    [N_pool, D] float
+        anchor_to_pool: [M] int64 — for each anchor row, its pool index
+        valid_mask:     [M] bool  — all True for this variant
     """
-    buckets = np.round(all_t_starts / t_bucket_s).astype(np.int64)
-    keys = list(zip(all_task_ids.tolist(), buckets.tolist()))
-    key_to_idx: dict[tuple[int, int], int] = {}
+    key_to_idx: dict = {}
     pool_embeds_list: list[np.ndarray] = []
-    pool_keys: list[tuple[int, int]] = []
     anchor_to_pool = np.empty(len(keys), dtype=np.int64)
     for i, k in enumerate(keys):
         if k not in key_to_idx:
             key_to_idx[k] = len(key_to_idx)
-            pool_embeds_list.append(all_embeds[i])
-            pool_keys.append(k)
+            pool_embeds_list.append(embeds[i])
         anchor_to_pool[i] = key_to_idx[k]
     pool_embeds = np.stack(pool_embeds_list, axis=0)
-    return pool_embeds, anchor_to_pool, pool_keys
+    valid_mask = np.ones(len(keys), dtype=bool)
+    return pool_embeds, anchor_to_pool, valid_mask
+
+
+def _build_pool_centroid(keys: list, embeds: np.ndarray):
+    """Dedupe by key equality; take the L2-normalized MEAN of all embeddings
+    at each key as the pool entry (centroid). Suitable for shot/scene
+    retrieval where the "pool entry" semantically means the group centroid
+    in the projected (L2-normalized) space.
+
+    Callers should pre-filter to remove invalid keys (e.g. shot_id=-1) —
+    this function assumes all keys in ``keys`` are valid pool members.
+
+    Args:
+        keys:   list[hashable] of length M — pre-filtered per-anchor keys.
+        embeds: [M, D] float — per-anchor embeddings (typically L2-normalized z_vis).
+
+    Returns:
+        pool_embeds:    [N_pool, D] float — one L2-normalized centroid per unique key
+        anchor_to_pool: [M] int64 — pool index for each anchor
+        valid_mask:     [M] bool — all True (kept for API parity with the other builder)
+    """
+    if len(keys) == 0:
+        raise ValueError("No valid anchors for pool centroid — empty keys list.")
+    key_to_idx: dict = {}
+    anchor_to_pool = np.empty(len(keys), dtype=np.int64)
+    for i, k in enumerate(keys):
+        if k not in key_to_idx:
+            key_to_idx[k] = len(key_to_idx)
+        anchor_to_pool[i] = key_to_idx[k]
+    N_pool = len(key_to_idx)
+    D = embeds.shape[1]
+    sums = np.zeros((N_pool, D), dtype=np.float64)
+    counts = np.zeros(N_pool, dtype=np.int64)
+    np.add.at(sums, anchor_to_pool, embeds)
+    np.add.at(counts, anchor_to_pool, 1)
+    centroids = (sums / counts[:, None]).astype(np.float32)
+    # Re-normalize because the mean of L2-normalized vectors is not itself unit-length.
+    norms = np.linalg.norm(centroids, axis=1, keepdims=True)
+    centroids = centroids / np.clip(norms, 1e-8, None)
+    valid_mask = np.ones(len(keys), dtype=bool)
+    return centroids, anchor_to_pool, valid_mask
+
+
+def _build_time_pool(task_ids, t_starts, embeds, t_bucket_s):
+    """Time-bucket pool: key = (task, round(t_start / t_bucket_s))."""
+    buckets = np.round(t_starts / t_bucket_s).astype(np.int64)
+    keys = list(zip(task_ids.tolist(), buckets.tolist()))
+    return _build_pool_first_occurrence(keys, embeds)
+
+
+def _build_group_pool(task_ids, group_ids, embeds):
+    """Shot/scene pool: key = (task, group_id). Pool entry = L2-normalized
+    centroid over anchors sharing the key. Anchors with group_id=-1 are
+    filtered out before centroid computation.
+
+    Returns:
+        pool_embeds:    [N_pool, D] float32
+        anchor_to_pool: [M_valid] int64 — pool index for each retained anchor
+        valid_mask:     [M] bool — which anchors survived (group_id >= 0)
+    """
+    valid_mask = group_ids >= 0
+    if not valid_mask.any():
+        return (
+            np.zeros((0, embeds.shape[1]), dtype=np.float32),
+            np.zeros(0, dtype=np.int64),
+            valid_mask,
+        )
+    task_v = task_ids[valid_mask]
+    grp_v = group_ids[valid_mask]
+    embeds_v = embeds[valid_mask]
+    keys = list(zip(task_v.tolist(), grp_v.tolist()))
+    pool, a2p, _ = _build_pool_centroid(keys, embeds_v)
+    return pool, a2p, valid_mask
 
 
 def _topk_e2v(similarity: np.ndarray, correct_idx: np.ndarray, ks: list[int]) -> dict[int, float]:
@@ -162,10 +247,13 @@ def _load_from_npz(path: str):
 
     Returns:
         z_eeg [M, P] float32 — EEG anchors (rows with is_vision=False)
-        z_vis_all [M, P] float32 — paired V-JEPA-2 vectors (rows with is_vision=True),
+        z_vis_paired [M, P] float32 — paired V-JEPA-2 vectors (rows with is_vision=True),
             aligned 1:1 with z_eeg by row order (coherent_subsample preserves pairing)
         t_starts [M] float32 — movie time per (EEG, vision) pair
+        shot_ids [M] int64 — shot id per pair (-1 = no shot boundary)
+        scene_ids [M] int64 — scene id per pair (-1 = no scene)
         task_ids [M] int64 — integer task IDs (built from unique task strings)
+        unique_tasks: list[str] — task label strings, indexed by task_ids
     """
     d = np.load(path, allow_pickle=False)
     required = ["z_shared", "is_vision", "task", "t_start"]
@@ -180,6 +268,15 @@ def _load_from_npz(path: str):
     z_vis = z_shared[is_vision]
     t_starts = t_start[~is_vision]
     task_strs = task[~is_vision]
+    # Optional shot / scene columns — present in newer npz files.
+    shot_ids = (
+        d["shot_id"][~is_vision].astype(np.int64) if "shot_id" in d.files
+        else np.full(len(t_starts), -1, dtype=np.int64)
+    )
+    scene_ids = (
+        d["scene_id"][~is_vision].astype(np.int64) if "scene_id" in d.files
+        else np.full(len(t_starts), -1, dtype=np.int64)
+    )
     # plot_modality_gap.py concatenates EEG then vision from the same paired
     # source rows, so is_vision=False and is_vision=True are already row-aligned
     # by index. Sanity: check vision-side task/t_start match EEG-side to catch
@@ -194,7 +291,58 @@ def _load_from_npz(path: str):
     unique_tasks = sorted(set(task_strs.tolist()))
     task_to_id = {t: i for i, t in enumerate(unique_tasks)}
     task_ids = np.array([task_to_id[t] for t in task_strs.tolist()], dtype=np.int64)
-    return z_eeg, z_vis, t_starts, task_ids, unique_tasks
+    return z_eeg, z_vis, t_starts, shot_ids, scene_ids, task_ids, unique_tasks
+
+
+def _eval_time_level(z_eeg, z_vis_paired, task_ids, t_starts, topks, t_bucket_s):
+    """Time-bucket-level retrieval. Each unique (task, round(t/dt)) is one candidate.
+    Uses first-occurrence deduplication (V-JEPA-2 targets at the same movie-time
+    are identical up to window-boundary rounding, so any occurrence works)."""
+    pool, a2p, _ = _build_time_pool(task_ids, t_starts, z_vis_paired, t_bucket_s)
+    N = pool.shape[0]
+    M = z_eeg.shape[0]
+    S = z_eeg @ pool.T
+    return {
+        "n_eeg_anchors_M": int(M),
+        "n_vision_pool_N": int(N),
+        "e2v_top_k": _topk_e2v(S, a2p, topks),
+        "v2e_top_k": _topk_v2e(S, a2p, N, topks),
+    }
+
+
+def _eval_group_level(z_eeg, z_vis_paired, task_ids, group_ids, topks, label):
+    """Shot- or scene-level retrieval. Pool entries are L2-normalized centroids
+    of z_vis over all anchors sharing (task, group_id). Anchors with
+    group_id=-1 are filtered from both anchors and the pool."""
+    pool, a2p, valid_mask = _build_group_pool(task_ids, group_ids, z_vis_paired)
+    if pool.shape[0] == 0:
+        return {
+            "n_eeg_anchors_M": 0,
+            "n_vision_pool_N": 0,
+            "e2v_top_k": {k: 0.0 for k in topks},
+            "v2e_top_k": {k: 0.0 for k in topks},
+            "note": f"no valid {label} labels; all anchors had group_id=-1",
+        }
+    z_eeg_v = z_eeg[valid_mask]
+    N = pool.shape[0]
+    M = z_eeg_v.shape[0]
+    S = z_eeg_v @ pool.T
+    return {
+        "n_eeg_anchors_M": int(M),
+        "n_vision_pool_N": int(N),
+        "e2v_top_k": _topk_e2v(S, a2p, topks),
+        "v2e_top_k": _topk_v2e(S, a2p, N, topks),
+    }
+
+
+def _evaluate_all_levels(z_eeg, z_vis_paired, task_ids, t_starts, shot_ids,
+                         scene_ids, topks, t_bucket_s):
+    """Compute retrieval metrics at all three pool granularities."""
+    return {
+        "time": _eval_time_level(z_eeg, z_vis_paired, task_ids, t_starts, topks, t_bucket_s),
+        "shot": _eval_group_level(z_eeg, z_vis_paired, task_ids, shot_ids, topks, "shot"),
+        "scene": _eval_group_level(z_eeg, z_vis_paired, task_ids, scene_ids, topks, "scene"),
+    }
 
 
 def main():
@@ -202,31 +350,23 @@ def main():
 
     if args.from_npz:
         print(f"Loading pre-computed shared-space embeddings from {args.from_npz} ...")
-        z_eeg, z_vis_paired, t_starts, task_ids, unique_tasks = _load_from_npz(args.from_npz)
+        z_eeg, z_vis_paired, t_starts, shot_ids, scene_ids, task_ids, unique_tasks = (
+            _load_from_npz(args.from_npz)
+        )
         M = z_eeg.shape[0]
         print(f"  M={M} paired (EEG, vision) rows, tasks={unique_tasks}")
+        print(f"  shot coverage: {(shot_ids >= 0).sum()}/{M}   "
+              f"scene coverage: {(scene_ids >= 0).sum()}/{M}")
 
-        pool_embeds_placeholder, anchor_to_pool, pool_keys = _build_vision_pool(
-            task_ids, t_starts, z_vis_paired, args.t_bucket_s,
+        levels = _evaluate_all_levels(
+            z_eeg, z_vis_paired, task_ids, t_starts, shot_ids, scene_ids,
+            args.topks, args.t_bucket_s,
         )
-        # The .npz already carries head-projected z_vis; the pool builder used
-        # z_vis_paired as the "embeddings" so the dedup logic naturally selects
-        # one projected vector per unique (task, t_bucket). No further
-        # projection needed.
-        z_vis = pool_embeds_placeholder.astype(np.float32)
-        N_pool = z_vis.shape[0]
-        print(f"  N_pool={N_pool} unique (task, t_bucket={args.t_bucket_s}s) vision targets")
-
-        S = z_eeg @ z_vis.T
-        e2v_topk = _topk_e2v(S, anchor_to_pool, args.topks)
-        v2e_topk = _topk_v2e(S, anchor_to_pool, N_pool, args.topks)
-
-        _report(args, results_meta={
+        _report(args, {
             "source": "npz",
             "npz_path": args.from_npz,
-            "n_eeg_anchors_M": M,
-            "n_vision_pool_N": N_pool,
-        }, e2v_topk=e2v_topk, v2e_topk=v2e_topk, N_pool=N_pool, M=M)
+            "n_eeg_anchors_total_M": int(M),
+        }, levels)
         return
 
     if args.config is None:
@@ -266,21 +406,32 @@ def main():
     clip_head.to(device).eval()
 
     # ------------------------------------------------------------------
-    # Encode every window in every recording; collect (X_eeg, t_start,
-    # task_id, V-JEPA-2 target).
+    # Encode every window in every recording; also collect per-anchor
+    # (t_start, shot_id, scene_id, V-JEPA-2 target).
     # ------------------------------------------------------------------
     n_rec = len(dataset) if args.max_recordings is None else min(args.max_recordings, len(dataset))
     all_X_eeg, all_t_starts, all_task_ids, all_embeds = [], [], [], []
+    all_shot_ids, all_scene_ids = [], []
     for rec_idx in range(n_rec):
-        X, t_starts, embeds = _embed_recording_and_meta(
+        X, t_starts_rec, embeds_rec = _embed_recording_and_meta(
             encoder, dataset, rec_idx, device, args.encode_batch,
         )
         task = dataset._recording_tasks[rec_idx]
         task_id = dataset._task_to_idx[task]
         all_X_eeg.append(X)
-        all_t_starts.append(t_starts)
+        all_t_starts.append(t_starts_rec)
         all_task_ids.append(np.full(len(X), task_id, dtype=np.int64))
-        all_embeds.append(embeds)
+        all_embeds.append(embeds_rec)
+        # shot_id_recordings / scene_id_recordings may be empty when the
+        # dataset wasn't in recipe_mode; fall back to -1.
+        if dataset.shot_id_recordings:
+            all_shot_ids.append(dataset.shot_id_recordings[rec_idx].numpy().astype(np.int64))
+        else:
+            all_shot_ids.append(np.full(len(X), -1, dtype=np.int64))
+        if dataset.scene_id_recordings:
+            all_scene_ids.append(dataset.scene_id_recordings[rec_idx].numpy().astype(np.int64))
+        else:
+            all_scene_ids.append(np.full(len(X), -1, dtype=np.int64))
         if (rec_idx + 1) % 20 == 0:
             print(f"  encoded {rec_idx + 1}/{n_rec} recordings")
 
@@ -288,80 +439,92 @@ def main():
     t_starts = np.concatenate(all_t_starts, axis=0).astype(np.float32)  # [M]
     task_ids = np.concatenate(all_task_ids, axis=0).astype(np.int64)    # [M]
     embeds = np.concatenate(all_embeds, axis=0).astype(np.float32)      # [M, D_v]
+    shot_ids = np.concatenate(all_shot_ids, axis=0).astype(np.int64)    # [M]
+    scene_ids = np.concatenate(all_scene_ids, axis=0).astype(np.int64)  # [M]
     M = X_eeg.shape[0]
     print(f"Anchor total: M={M} EEG windows across {n_rec} recordings")
+    print(f"  shot coverage: {(shot_ids >= 0).sum()}/{M}   "
+          f"scene coverage: {(scene_ids >= 0).sum()}/{M}")
 
     # ------------------------------------------------------------------
-    # Project through the clip_head and build the vision pool.
-    # ------------------------------------------------------------------
-    # project_eeg expects [B, D, T, 1, 1] and treats T as the token axis. Our
-    # per-window vectors from embed_recording_all_windows have already been
+    # Project through the clip_head. project_eeg expects [B, D, T, 1, 1] and
+    # treats T as the token axis. Our per-window vectors have already been
     # pooled to one token per window (T=1 after pool_to_windows), so we add
     # trailing dims to match the head's expected shape.
+    # ------------------------------------------------------------------
     with torch.no_grad():
         eeg_batched = (
             torch.from_numpy(X_eeg).to(device).view(-1, X_eeg.shape[1], 1, 1, 1)
         )
         z_eeg = clip_head.project_eeg(eeg_batched).float().cpu().numpy()
-
-    pool_embeds, anchor_to_pool, pool_keys = _build_vision_pool(
-        task_ids, t_starts, embeds, args.t_bucket_s,
-    )
-    with torch.no_grad():
-        z_vis = clip_head.project_vision(
-            torch.from_numpy(pool_embeds).float().to(device)
+        z_vis_paired = clip_head.project_vision(
+            torch.from_numpy(embeds).float().to(device)
         ).float().cpu().numpy()
-    N_pool = z_vis.shape[0]
-    print(f"Pool: N={N_pool} unique (task, t_bucket) V-JEPA-2 targets "
-          f"(bucketed at {args.t_bucket_s}s)")
 
-    # ------------------------------------------------------------------
-    # Retrieval matrix + Top-K.
-    # ------------------------------------------------------------------
-    # z_eeg [M, P], z_vis [N_pool, P] — cosine (they are already L2-normalized by the head).
-    S = z_eeg @ z_vis.T                                   # [M, N_pool]
-
-    e2v_topk = _topk_e2v(S, anchor_to_pool, args.topks)
-    v2e_topk = _topk_v2e(S, anchor_to_pool, N_pool, args.topks)
-
-    _report(args, results_meta={
+    levels = _evaluate_all_levels(
+        z_eeg, z_vis_paired, task_ids, t_starts, shot_ids, scene_ids,
+        args.topks, args.t_bucket_s,
+    )
+    _report(args, {
         "source": "checkpoint",
         "checkpoint": args.checkpoint,
         "split": args.split,
-        "n_recordings": n_rec,
-        "n_eeg_anchors_M": M,
-        "n_vision_pool_N": N_pool,
-    }, e2v_topk=e2v_topk, v2e_topk=v2e_topk, N_pool=N_pool, M=M)
+        "n_recordings": int(n_rec),
+        "n_eeg_anchors_total_M": int(M),
+    }, levels)
 
 
-def _report(args, results_meta: dict, e2v_topk: dict[int, float],
-            v2e_topk: dict[int, float], N_pool: int, M: int):
-    """Assemble the results JSON + stdout summary shared by both entry paths."""
-    chance_e2v = {k: k / N_pool for k in args.topks}
-    chance_v2e = {k: k / M for k in args.topks}
+def _report(args, results_meta: dict, levels: dict):
+    """Assemble the results JSON + stdout summary shared by both entry paths.
 
+    ``levels`` is {'time': {...}, 'shot': {...}, 'scene': {...}} where each
+    inner dict has n_eeg_anchors_M, n_vision_pool_N, e2v_top_k, v2e_top_k.
+    """
+    ks = args.topks
+
+    def _add_chance_relative(level_res: dict) -> dict:
+        M = level_res["n_eeg_anchors_M"]
+        N = level_res["n_vision_pool_N"]
+        e2v = level_res["e2v_top_k"]
+        v2e = level_res["v2e_top_k"]
+        chance_e2v = {k: (k / N if N else 0.0) for k in ks}
+        chance_v2e = {k: (k / M if M else 0.0) for k in ks}
+        return {
+            **level_res,
+            "e2v_top_k": {str(k): float(e2v[k]) for k in ks},
+            "v2e_top_k": {str(k): float(v2e[k]) for k in ks},
+            "e2v_chance": {str(k): chance_e2v[k] for k in ks},
+            "v2e_chance": {str(k): chance_v2e[k] for k in ks},
+            "e2v_relative": {str(k): (e2v[k] / max(chance_e2v[k], 1e-12)) for k in ks},
+            "v2e_relative": {str(k): (v2e[k] / max(chance_v2e[k], 1e-12)) for k in ks},
+        }
+
+    levels_out = {name: _add_chance_relative(lvl) for name, lvl in levels.items()}
     results = {
         **results_meta,
         "random_baseline": args.random_baseline,
         "t_bucket_s": args.t_bucket_s,
-        "topks": args.topks,
-        "e2v_top_k": {str(k): e2v_topk[k] for k in args.topks},
-        "e2v_chance": {str(k): chance_e2v[k] for k in args.topks},
-        "e2v_relative": {str(k): e2v_topk[k] / max(chance_e2v[k], 1e-12) for k in args.topks},
-        "v2e_top_k": {str(k): v2e_topk[k] for k in args.topks},
-        "v2e_chance": {str(k): chance_v2e[k] for k in args.topks},
-        "v2e_relative": {str(k): v2e_topk[k] / max(chance_v2e[k], 1e-12) for k in args.topks},
+        "topks": ks,
+        "levels": levels_out,
     }
 
-    print()
-    print(f"e→v Top-K (retrieve V-JEPA-2 target for each EEG anchor, N_pool={N_pool}):")
-    for k in args.topks:
-        print(f"  Top-{k}: {e2v_topk[k]:.4f}  (chance {chance_e2v[k]:.4f}, "
-              f"{e2v_topk[k]/max(chance_e2v[k], 1e-12):.1f}× above chance)")
-    print(f"v→e Top-K (retrieve EEG anchor for each vision pool entry, M={M}):")
-    for k in args.topks:
-        print(f"  Top-{k}: {v2e_topk[k]:.4f}  (chance {chance_v2e[k]:.4f}, "
-              f"{v2e_topk[k]/max(chance_v2e[k], 1e-12):.1f}× above chance)")
+    for name, lvl in levels.items():
+        M = lvl["n_eeg_anchors_M"]
+        N = lvl["n_vision_pool_N"]
+        if N == 0:
+            print(f"\n[{name}] skipped ({lvl.get('note', 'no valid labels')})")
+            continue
+        e2v = lvl["e2v_top_k"]
+        v2e = lvl["v2e_top_k"]
+        print(f"\n[{name}] pool N={N} (candidates), anchors M={M}")
+        print(f"  e→v Top-K (identify {name} from EEG):")
+        for k in ks:
+            ch = k / N
+            print(f"    Top-{k}: {e2v[k]:.4f}  (chance {ch:.4f}, {e2v[k]/max(ch, 1e-12):.1f}× above chance)")
+        print(f"  v→e Top-K (find EEG in {name}):")
+        for k in ks:
+            ch = k / M
+            print(f"    Top-{k}: {v2e[k]:.4f}  (chance {ch:.4f}, {v2e[k]/max(ch, 1e-12):.1f}× above chance)")
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
