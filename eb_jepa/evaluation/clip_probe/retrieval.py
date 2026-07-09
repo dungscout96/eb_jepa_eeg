@@ -487,16 +487,22 @@ def _report(args, results_meta: dict, levels: dict):
         N = level_res["n_vision_pool_N"]
         e2v = level_res["e2v_top_k"]
         v2e = level_res["v2e_top_k"]
-        chance_e2v = {k: (k / N if N else 0.0) for k in ks}
-        chance_v2e = {k: (k / M if M else 0.0) for k in ks}
+        # Chance level for e→v Top-K under a random encoder: K/N_pool (uniform
+        # over pool). For v→e Top-K the chance is also K/N_pool under
+        # random sampling — each pool entry has ~M/N EEG anchors in its group,
+        # so probability that any of the top-K EEG anchors falls in that group
+        # is ≈ K · (M/N) / M = K/N. Reporting K/M (probability of a specific
+        # anchor being in top-K) understates chance and inflates "relative"
+        # ratios by a factor of ~M/N.
+        chance = {k: (k / N if N else 0.0) for k in ks}
         return {
             **level_res,
             "e2v_top_k": {str(k): float(e2v[k]) for k in ks},
             "v2e_top_k": {str(k): float(v2e[k]) for k in ks},
-            "e2v_chance": {str(k): chance_e2v[k] for k in ks},
-            "v2e_chance": {str(k): chance_v2e[k] for k in ks},
-            "e2v_relative": {str(k): (e2v[k] / max(chance_e2v[k], 1e-12)) for k in ks},
-            "v2e_relative": {str(k): (v2e[k] / max(chance_v2e[k], 1e-12)) for k in ks},
+            "e2v_chance": {str(k): chance[k] for k in ks},
+            "v2e_chance": {str(k): chance[k] for k in ks},
+            "e2v_relative": {str(k): (e2v[k] / max(chance[k], 1e-12)) for k in ks},
+            "v2e_relative": {str(k): (v2e[k] / max(chance[k], 1e-12)) for k in ks},
         }
 
     levels_out = {name: _add_chance_relative(lvl) for name, lvl in levels.items()}
@@ -516,15 +522,15 @@ def _report(args, results_meta: dict, levels: dict):
             continue
         e2v = lvl["e2v_top_k"]
         v2e = lvl["v2e_top_k"]
-        print(f"\n[{name}] pool N={N} (candidates), anchors M={M}")
+        print(f"\n[{name}] pool N={N} (candidates), anchors M={M}, chance Top-1 = {1/N:.4f}")
         print(f"  e→v Top-K (identify {name} from EEG):")
         for k in ks:
             ch = k / N
-            print(f"    Top-{k}: {e2v[k]:.4f}  (chance {ch:.4f}, {e2v[k]/max(ch, 1e-12):.1f}× above chance)")
+            print(f"    Top-{k}: {e2v[k]:.4f}  ({e2v[k]/max(ch, 1e-12):.1f}× chance)")
         print(f"  v→e Top-K (find EEG in {name}):")
         for k in ks:
-            ch = k / M
-            print(f"    Top-{k}: {v2e[k]:.4f}  (chance {ch:.4f}, {v2e[k]/max(ch, 1e-12):.1f}× above chance)")
+            ch = k / N
+            print(f"    Top-{k}: {v2e[k]:.4f}  ({v2e[k]/max(ch, 1e-12):.1f}× chance)")
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
