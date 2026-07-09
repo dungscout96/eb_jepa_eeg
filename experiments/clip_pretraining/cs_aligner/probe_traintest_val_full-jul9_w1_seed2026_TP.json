@@ -1,0 +1,97 @@
+{
+  "random_baseline": false,
+  "eval_split": "val",
+  "n_train_recordings": 701,
+  "n_test_recordings": 293,
+  "n_train_windows": 70801,
+  "n_test_windows": 29593,
+  "encoder_dim": 512,
+  "features": {
+    "luminance_mean": {
+      "r2": 0.07820278406143188,
+      "pearson_r": 0.2923438847064972,
+      "alpha": 1000.0,
+      "n_train": 70801,
+      "n_test": 29593
+    },
+    "contrast_rms": {
+      "r2": 0.06251412630081177,
+      "pearson_r": 0.2682003974914551,
+      "alpha": 1000.0,
+      "n_train": 70801,
+      "n_test": 29593
+    },
+    "edge_density": {
+      "r2": 0.03878539800643921,
+      "pearson_r": 0.22213415801525116,
+      "alpha": 1000.0,
+      "n_train": 70801,
+      "n_test": 29593
+    },
+    "saturation_mean": {
+      "r2": 0.0664176344871521,
+      "pearson_r": 0.2743310332298279,
+      "alpha": 1000.0,
+      "n_train": 70801,
+      "n_test": 29593
+    },
+    "entropy": {
+      "r2": 0.06669020652770996,
+      "pearson_r": 0.2752797603607178,
+      "alpha": 1000.0,
+      "n_train": 70801,
+      "n_test": 29593
+    },
+    "motion_energy": {
+      "r2": 0.08778613805770874,
+      "pearson_r": 0.311242938041687,
+      "alpha": 1000.0,
+      "n_train": 70801,
+      "n_test": 29593
+    },
+    "n_faces": {
+      "r2": 0.04482579231262207,
+      "pearson_r": 0.22284384071826935,
+      "alpha": 1000.0,
+      "n_train": 70801,
+      "n_test": 29593
+    },
+    "face_area_frac": {
+      "r2": 0.03234142065048218,
+      "pearson_r": 0.19857704639434814,
+      "alpha": 1000.0,
+      "n_train": 70801,
+      "n_test": 29593
+    },
+    "depth_mean": {
+      "r2": 0.036461830139160156,
+      "pearson_r": 0.2190096080303192,
+      "alpha": 316.22776601683796,
+      "n_train": 70801,
+      "n_test": 29593
+    },
+    "scene_natural_score": {
+      "r2": 0.045417606830596924,
+      "pearson_r": 0.2375667244195938,
+      "alpha": 316.22776601683796,
+      "n_train": 70801,
+      "n_test": 29593
+    },
+    "position_in_movie": {
+      "r2": 0.047696709632873535,
+      "pearson_r": 0.24487048387527466,
+      "alpha": 1000.0,
+      "n_train": 70801,
+      "n_test": 29593
+    },
+    "narrative_event_score": {
+      "r2": 0.028324604034423828,
+      "pearson_r": 0.2020304650068283,
+      "alpha": 316.22776601683796,
+      "n_train": 70801,
+      "n_test": 29593
+    }
+  },
+  "seed": 42,
+  "bootstrap_iters": 0
+}
