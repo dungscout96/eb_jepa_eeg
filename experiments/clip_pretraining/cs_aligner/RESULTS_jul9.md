@@ -15,8 +15,9 @@ on branch [`feature/cs-aligner`](https://github.com/dungscout96/eb_jepa_eeg/tree
 
 CS-Aligner adds a distributional-alignment term `L = L_InfoNCE + λ · D_CS` on
 top of vanilla CLIP. Sweep over `λ ∈ {0.001, 0.01, 0.05, 0.1, 1.0, 10.0}`
-plus a `λ=0` control, all at 60 ep TP-only seed=2026, plus a paper-default
-full run at 400 ep.
+plus a `λ=0` control at 60 ep TP-only seed=2026, plus a full 400-ep run at
+`λ=1.0` on TP-only, plus a **3-seed replicate at 400 ep on multi-movie**
+(TP + DM).
 
 **Findings:**
 
@@ -29,26 +30,33 @@ full run at 400 ep.
    `λ=0` (vanilla CLIP + temporal buffer) is the best arm; every `λ>0`
    arm underperforms, and the degradation is monotonic in `λ`:
    `Δr² = 0.0162 → 0.0053` as `λ` goes 0 → 10.
-3. **At 400 ep the story converges to a tie.** CS-Aligner `λ=1.0` matches
-   vanilla CLIP within seed noise (**test r = 0.1479 vs 0.1459**, val CV
-   Δr² = +0.0452 vs +0.0475). It loses to the jul7-best soft-target
+3. **At 400 ep TP-only the story converges to a tie.** CS-Aligner `λ=1.0`
+   matches vanilla CLIP within seed noise (**test r = 0.1479 vs 0.1459**,
+   val CV Δr² = +0.0452 vs +0.0475). It loses to jul7-best soft-target
    `τ=0.05` by 0.004 raw r on test and 0.005 Δr² on val — genuine but small.
-4. **The gap CS closes is the wrong gap.** At `λ=1.0` after 400 ep, CS
+4. **At 400 ep multi-movie, cs_aligner ties both baselines within noise
+   across all metrics.** 3-seed mean joint Δr² = **+0.0422 ± 0.0010**
+   vs vanilla +0.0423 ± 0.0005 vs soft +0.0426 ± 0.0006. TP and DM axes
+   both indistinguishable within noise. **The apparent seed=2026 DM
+   improvement (+0.0395) was a 1.5σ outlier within cs_aligner's own seed
+   distribution** — with n=3 the DM mean is +0.0384 ± 0.0010, no ceiling
+   break.
+5. **The gap CS closes is the wrong gap.** At `λ=1.0` after 400 ep, CS
    reduces the visual modality gap by ~47% (cross-minus-within-avg cosine
    moves from −0.0958 → −0.0505). But it does so by **dispersing the EEG
    cluster** (within-EEG cos halves, 0.226 → 0.111) rather than pulling
    matched pairs together — cross-modal similarity actually *decreases*
    (+0.022 → +0.011). The linear probe reads out pair-level information,
    which is exactly what CS erodes.
-5. **The paper's Fig-1 claim replicates visually but not usefully.** The
+6. **The paper's Fig-1 claim replicates visually but not usefully.** The
    t-SNE of jul7-best vs cs_aligner_w=1.0 shows CS produces a marginally
    more diffuse EEG cluster and a slightly more mixed periphery — the
    distributional gap did close — but the improvement is cosmetic; probe
    utility does not follow the visual signal.
-6. **Recommendation**: continue using soft `τ=0.05` for TP-only from-scratch
-   training. CS-Aligner is not a lever for our pipeline. The largest
-   remaining gap (jul7 §5.4, REVE warm-start at test r=0.1715) is still
-   unclosed by any from-scratch objective.
+7. **Recommendation**: continue using soft `τ=0.05` for TP-only and vanilla
+   CLIP for multi-movie from-scratch training. CS-Aligner is not a lever
+   for our pipeline. The largest remaining gap (jul7 §5.4, REVE warm-start
+   at test r=0.1715) is still unclosed by any from-scratch objective.
 
 ---
 
@@ -203,6 +211,61 @@ functionally: **cs_aligner ≈ vanilla CLIP at 400 ep, within noise**.
 
 ---
 
+## §3b. Multi-movie 3-seed replicate at 400 ep (Phase 7)
+
+The TP-only Phase 4 result is one seed. Ran a 3-seed replicate (seeds
+2025, 2026, 2027) on the **multi-movie** config (`task=[ThePresent,
+DespicableMe]`) to test whether cs_aligner behaves differently when
+trained across movies — a natural next question because DM has been
+loss-independent at ~+0.0378 across every jul7 arm
+([jul7 §4.2](../soft_target_clip/RESULTS_jul7.md), "the loss-independent
+DM ceiling").
+
+### 3b.1 Per-seed 5-fold-CV Δr²
+
+| seed | TP Δr² | DM Δr² | joint Δr² |
+|---:|---:|---:|---:|
+| 2025 | +0.0452 | +0.0375 | +0.0414 |
+| 2026 | +0.0470 | **+0.0395** | +0.0433 |
+| 2027 | +0.0458 | +0.0384 | +0.0421 |
+| **mean ± std** | **+0.0460 ± 0.0009** | **+0.0384 ± 0.0010** | **+0.0422 ± 0.0010** |
+
+### 3b.2 Comparison to jul7 3-seed multi-movie baselines
+
+| arm | TP Δr² | DM Δr² | joint Δr² |
+|---|---:|---:|---:|
+| vanilla clip (jul7 3-seed) | +0.0468 ± 0.0002 | +0.0378 ± 0.0008 | +0.0423 ± 0.0005 |
+| soft τ=0.05 (jul7 3-seed) | +0.0474 ± 0.0010 | +0.0379 ± 0.0004 | +0.0426 ± 0.0006 |
+| **cs_aligner w=1.0** (NEW) | **+0.0460 ± 0.0009** | **+0.0384 ± 0.0010** | **+0.0422 ± 0.0010** |
+
+Two things worth reading off:
+
+- **All three losses converge to the same multi-movie ceiling within
+  seed noise** — joint Δr² pinned at +0.0422 ± 0.0004 across the three
+  arms. Consistent with jul7 §4.1's observation that "everything at 400
+  ep, embed=512 lands in ~[+0.041, +0.043]."
+- **The seed=2026 DM signal (+0.0395) that motivated this replicate does
+  not survive n=3.** DM mean drops to +0.0384, which sits 0.6σ above
+  vanilla's +0.0378 — no meaningful ceiling break. The single-seed
+  observation was a 1.5σ outlier within cs_aligner's own seed
+  distribution (std=0.0010).
+
+### 3b.3 Why the DM ceiling did NOT break
+
+Two hypotheses were plausible after Phase 7's n=1 signal:
+
+- *H1*: CS's distributional-alignment term provides a noise-robust
+  alignment signal that helps precisely when the pair-level V-JEPA-2
+  teacher is degraded (as on DM).
+- *H2*: The seed=2026 DM value was seed noise on a small effect size.
+
+The 3-seed replicate favors *H2*. Under *H1* we'd expect the DM boost
+to persist across seeds; instead the std doubles (from 0.0004 for soft
+to 0.0010 for cs_aligner) without a meaningful shift in mean. Consistent
+with jul7 §5.3 — the DM ceiling is teacher-limited, not loss-limited.
+
+---
+
 ## §4. Modality-gap analysis (Phase 5)
 
 ### 4.1 Quantitative gap metrics
@@ -310,12 +373,13 @@ Three probable reasons this pipeline diverges from the paper's claim:
 
 ## §6. Recommendation
 
-- **Continue with soft `τ=0.05`** for TP-only from-scratch training. It
-  remains the best from-scratch checkpoint on the R6 test protocol
-  (r = 0.1517).
+- **Continue with soft `τ=0.05` on TP-only, vanilla CLIP on multi-movie**
+  — matches the jul7 §7.1 recipe. Both remain undisputed within seed
+  noise across all objectives tested.
 - **Do not use `loss.mode=cs_aligner`** for downstream work. The
   distributional-alignment framing does not translate to per-window probe
-  utility in this pipeline.
+  utility in this pipeline, on either single-movie or multi-movie
+  training, at any weight in `{0.001 – 10.0}`.
 - **REVE warm-start remains the largest remaining lever** at the same
   400-ep budget, per [jul7 §5.4](../soft_target_clip/RESULTS_jul7.md).
   CS-Aligner does not narrow that ~0.020 raw-r gap.
@@ -347,10 +411,18 @@ unpaired-data support:
 
 ## §8. Reproducibility
 
-Full 400-ep run:
+Full 400-ep TP-only run (Phase 4):
 ```bash
 uv run --group eeg python experiments/clip_pretraining/cs_aligner/_submit_train.py \
     full-jul9 --cs-weight=1.0 --epochs=400 --seed=2026 --task=ThePresent submit
+```
+
+Full 400-ep multi-movie 3-seed replicate (Phase 7 + 7b):
+```bash
+for seed in 2025 2026 2027; do
+    uv run --group eeg python experiments/clip_pretraining/cs_aligner/_submit_train.py \
+        full-jul9-mm --cs-weight=1.0 --epochs=400 --seed=$seed submit
+done
 ```
 
 R6 train→test probe (val + test):
@@ -385,8 +457,9 @@ uv run --group eeg python experiments/clip_pretraining/cs_aligner/_submit.py \
     --struct-png=embedding_structure_cs_aligner.png submit
 ```
 
-Total Delta compute for jul9: ~2.5 GPU-hours across 9 training jobs (5
-Phase 3a + 3 Phase 3b + 1 Phase 4) + 2 probe jobs + 1 plot job.
+Total Delta compute for jul9: ~8 GPU-hours across 12 training jobs (5
+Phase 3a + 3 Phase 3b + 1 Phase 4 + 3 Phase 7/7b) + 2 probe jobs + 1
+plot job.
 
 ---
 
@@ -400,6 +473,7 @@ images, and the extracted embeddings.
 - `probe_val_sweep-jul9_w1_bw0.5_seed2026_TP.json` — Phase 3a fixed-σ
 - `probe_val_sweep2-jul9_{w0p001,w0p01,w0p05}_bwauto_seed2026_TP.json` — Phase 3b
 - `probe_val_full-jul9_w1_bwauto_seed2026_TP.json` — Phase 4
+- `probe_val_full-jul9-mm_w1_bwauto_seed{2025,2026,2027}_{TP,DM}.json` — Phase 7 + 7b
 
 **Train→test Pearson r probe (val + test splits):**
 - `probe_traintest_{val,test}_full-jul9_w1_seed2026_TP.json`
