@@ -64,7 +64,7 @@ from pathlib import Path
 import fire
 import torch
 from omegaconf import OmegaConf
-from torch.optim import Adam
+from torch.optim import Adam, AdamW
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -255,7 +255,16 @@ def run(
         + list(jepa.predictor.parameters())
         + [p for p in jepa.anti_collapse.parameters() if p.requires_grad]
     )
-    optimizer = Adam(jepa_params, lr=cfg.optim.lr)
+    optimizer_name = cfg.optim.get("optimizer", "adam").lower()
+    weight_decay = cfg.optim.get("weight_decay", 0.0)
+    if optimizer_name == "adamw":
+        optimizer = AdamW(jepa_params, lr=cfg.optim.lr, weight_decay=weight_decay)
+    elif optimizer_name == "adam":
+        optimizer = Adam(jepa_params, lr=cfg.optim.lr, weight_decay=weight_decay)
+    else:
+        raise ValueError(
+            f"Unknown optim.optimizer={optimizer_name!r}. Expected 'adam' or 'adamw'."
+        )
 
     # Cosine LR schedule with linear warmup (disabled if lr_min == 0)
     lr_min = cfg.optim.get("lr_min", 0.0)

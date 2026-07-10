@@ -1,0 +1,144 @@
+# Laya recipe — JEPA + SIGReg for EEG following Panchavati et al. 2026
+# ("Laya: A LeJEPA Approach to EEG via Latent Prediction over Reconstruction",
+#  arXiv:2603.16281).
+#
+# Differences from the pure LeJEPA config (../lejepa_reve/config.yaml):
+#
+#   Loss combination      LeJEPA convex  (1-λ)·pred + λ·sigreg
+#                         Laya additive  pred + λ·sigreg          [this file]
+#                         Wired via loss.sigreg.combine_mode='additive_weighted'.
+#
+#   Optimizer             LeJEPA Adam, no wd
+#                         Laya  AdamW, wd=0.05                     [this file]
+#
+#   Masking               LeJEPA V-JEPA multi-block (channel × patch)
+#                         Laya  temporal block only, ~60% ratio    [this file]
+#                         Set channel_scale=[1.0, 1.0] to force full-channel
+#                         masking so blocks span time only.
+#
+#   Encoder shape         LeJEPA 12L / 512d / 8h (REVE clip winner)
+#                         Laya   12L / 384d / 6h                   [this file]
+#
+#   Predictor             LeJEPA 2L / 512d
+#                         Laya   4L / 128d                         [this file]
+#                         The 128d predictor bottleneck is the paper's design.
+#
+#   Patching              LeJEPA patch=50, overlap=20
+#                         Laya   patch=25, overlap=0               [this file]
+#                         Non-overlapping 125 ms tokens (Laya §3.1).
+#
+#   λ (SIGReg weight)     LeJEPA 0.05
+#                         Laya   0.02 (base) / 0.05 (small)        [this file uses 0.02]
+#
+# Deliberately NOT matched (would need architectural changes / extra infra):
+#   - Learned channel-query mixer (16 queries/patch). REVE uses per-channel
+#     tokens; Laya's channel-agnostic design would need a new architecture.
+#   - γ·L_query auxiliary loss (depends on channel-query mixer above).
+#   - BF16 mixed precision (training loop is FP32 today).
+#   - 16 s max input duration + step-based warmup at 1K steps + 20K total steps
+#     over 29 K h multi-dataset corpus. We stay HBN-only with epoch-based
+#     schedule; the 5-epoch warmup ratio (~5 % of run) approximates Laya's
+#     1K/20K = 5 % step-based warmup fraction.
+#
+# Invoke via _submit.py (Delta). Smoke:
+#   PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.jepa_pretrain \
+#     --fname=experiments/jepa_pretraining/laya/config.yaml \
+#     --optim.epochs=1 --data.batch_size=8 --logging.log_wandb=false
+
+meta:
+  seed: 2025
+  device: auto
+
+data:
+  batch_size: 64            # ~2× more tokens per sample than lejepa_reve
+                            # (patch=25 → 16 patches × 129 chans = 2064 tokens
+                            # per window vs. 12·129=1548). bs=64 keeps A40
+                            # VRAM headroom; ideally 256 as in Laya but that
+                            # needs BF16.
+  num_workers: 4
+  task: ThePresent
+  n_windows: 1
+  window_size_seconds: 2    # Laya uses up to 16 s; we stay at 2 s to keep
+                            # token count and VRAM manageable at 129 channels
+                            # without BF16. This is a known gap vs. the paper.
+  temporal_stride: 1
+  preprocessed: true
+  preprocessed_dir: null
+  norm_mode: per_recording
+  add_envelope: false
+  corrca_filters: null
+  annotation_duration_tolerance_s: 1.0
+  max_recording_overshoot_s: 60.0
+
+model:
+  # Laya §3.1: transformer 12L / 384d / 6h.
+  encoder_embed_dim: 384
+  encoder_depth: 12
+  encoder_heads: 6
+  encoder_head_dim: 64      # 6 heads × 64 = 384
+
+  # Non-overlapping 125 ms tokens (25 samples @ 200 Hz).
+  patch_size: 25
+  patch_overlap: 0
+  freqs: 4                  # 4^4 = 256 ≥ embed_dim/2 = 192
+  mlp_dim_ratio: 2.66
+
+  # Laya §3.1: predictor 4L / 128d / 4h.
+  predictor_depth: 4
+  predictor_embed_dim: 128
+
+masking:
+  # Laya §3.2: 60 % block masking of CONTIGUOUS TEMPORAL spans (500 ms–1 s
+  # = 5–10 patches at 25-sample patch size). Channel dimension is not
+  # independently masked — every masked time span covers all channels.
+  # Emulate by setting channel_scale=[1.0, 1.0] (all channels) and using a
+  # single block-size range that lands the aggregate patch coverage at ~60 %.
+  n_pred_masks_short: 0
+  n_pred_masks_long: 4
+  short_channel_scale: [1.0, 1.0]   # unused (0 short masks) but kept valid
+  short_patch_scale: [0.3, 0.6]
+  long_channel_scale: [1.0, 1.0]    # all channels → temporal-only blocks
+  long_patch_scale: [0.31, 0.63]    # 5–10 patches / 16 patches per 2 s window
+                                     # → target aggregate ~60 % under 4 blocks
+  min_context_fraction: 0.15
+
+loss:
+  # Laya §3.2: total = MSE(pred, target) + λ·SIGReg(p_cls) + γ·L_query.
+  # We match the SIGReg term with combine_mode='additive_weighted' (see
+  # eb_jepa.anti_collapse.SIGRegAntiCollapse). L_query is skipped — no
+  # channel-query mixer in the REVE encoder.
+  anti_collapse: sigreg
+  sigreg:
+    num_slices: 1024
+    coeff: 0.02             # Laya-B λ. Use 0.05 for Laya-S small-model regime.
+    ep_t_range: 5.0
+    ep_n_points: 17
+    combine_mode: additive_weighted
+  pred_loss_type: mse       # Laya uses MSE, not Huber.
+
+optim:
+  optimizer: adamw          # Laya uses AdamW + wd=0.05.
+  weight_decay: 0.05
+  epochs: 100
+  lr: 1.0e-4                # Laya §3.3.
+  lr_min: 1.0e-6
+  warmup_epochs: 5          # 5% of 100 ep ≈ Laya's 1K / 20K step-based ratio.
+
+logging:
+  log_wandb: true
+  wandb_group: laya
+  log_every: 1
+  save_every: 20
+  tqdm_silent: false
+
+eval:
+  auto_run: true
+  n_passes: 20
+  probe_seed: 42
+  n_bootstrap: 2000
+  feature_names:
+    - contrast_rms
+    - luminance_mean
+    - position_in_movie
+    - narrative_event_score
+  visual_processing_delay_s: 0.0

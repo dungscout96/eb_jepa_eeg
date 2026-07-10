@@ -44,7 +44,8 @@ def build_anti_collapse(cfg, encoder) -> AntiCollapse:
             ep_t_range=sigreg_cfg.get("ep_t_range", 5.0),
             ep_n_points=sigreg_cfg.get("ep_n_points", 17),
         )
-        return SIGRegAntiCollapse(sigreg)
+        combine_mode = sigreg_cfg.get("combine_mode", "convex")
+        return SIGRegAntiCollapse(sigreg, combine_mode=combine_mode)
 
     if ac_type == "vicreg":
         vicreg_cfg = cfg.loss.get("vicreg", {})

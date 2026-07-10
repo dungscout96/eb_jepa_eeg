@@ -348,6 +348,9 @@ class MaskedJEPA(nn.Module):
         if self.anti_collapse.combine_mode == "convex":
             lam = self.anti_collapse.coeff
             total_loss = (1.0 - lam) * pred_loss + lam * ac_loss
+        elif self.anti_collapse.combine_mode == "additive_weighted":
+            # Laya-style: pred + λ · sigreg (λ from anti_collapse.coeff)
+            total_loss = pred_loss + self.anti_collapse.coeff * ac_loss
         else:
             total_loss = pred_loss + ac_loss
 
