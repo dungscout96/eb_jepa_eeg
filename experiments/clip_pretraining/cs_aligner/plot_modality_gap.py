@@ -41,6 +41,10 @@ from sklearn.manifold import TSNE
 
 from eb_jepa.architectures import MovieCLIPHead
 from eb_jepa.datasets.hbn import JEPAMovieDataset, _read_raw_windows
+
+# Continuous per-window movie features to store alongside embeddings so
+# downstream plots can color by them. Uses JEPAMovieDataset.DEFAULT_FEATURES.
+FEATURE_NAMES = list(JEPAMovieDataset.DEFAULT_FEATURES)
 from eb_jepa.evaluation.clip_probe.probe import load_encoder_state
 from eb_jepa.training.builder import build_encoder
 from eb_jepa.training_utils import load_config
@@ -91,7 +95,7 @@ def build_dataset(cfg, split, task_override=None):
         window_size_seconds=data_cfg.window_size_seconds,
         task=task,
         temporal_stride=data_cfg.get("temporal_stride", 1),
-        feature_names=[],
+        feature_names=FEATURE_NAMES,
         cfg=data_cfg,
         preprocessed=data_cfg.preprocessed,
         preprocessed_dir=data_cfg.get("preprocessed_dir", None),
@@ -139,6 +143,7 @@ def embed_windows(
     rec_order = np.random.default_rng(0).permutation(len(dataset))[:n_rec]
     z_eeg_all, z_vis_all = [], []
     task_all, shot_all, scene_all, tstart_all, rec_all = [], [], [], [], []
+    feats_all = []
     for step, rec_idx in enumerate(rec_order):
         rec_idx = int(rec_idx)
         crop_inds = dataset._crop_inds[rec_idx]
@@ -148,6 +153,7 @@ def embed_windows(
         shot_ids = dataset.shot_id_recordings[rec_idx].numpy()        # [n_win]
         scene_ids = dataset.scene_id_recordings[rec_idx].numpy()      # [n_win]
         t_starts = dataset.t_start_recordings[rec_idx].numpy()        # [n_win]
+        feats = dataset.feature_recordings[rec_idx].numpy()           # [n_win, n_features]
 
         n_win = len(crop_inds)
         if windows_per_recording is not None and n_win > windows_per_recording:
@@ -158,6 +164,7 @@ def embed_windows(
             shot_ids = shot_ids[keep]
             scene_ids = scene_ids[keep]
             t_starts = t_starts[keep]
+            feats = feats[keep]
 
         raw = _read_raw_windows(fif_path, crop_inds)          # [n_win, C, T]
         eeg = torch.from_numpy(raw)
@@ -189,10 +196,12 @@ def embed_windows(
         scene_all.append(scene_ids.astype(np.int64))
         tstart_all.append(t_starts.astype(np.float32))
         rec_all.append(np.full(n, rec_idx, dtype=np.int64))
+        feats_all.append(feats.astype(np.float32))
         if (step + 1) % 10 == 0:
             print(f"  {step + 1}/{n_rec} recordings embedded  "
                   f"(windows so far: {sum(len(x) for x in z_eeg_all)})")
 
+    feats_stack = np.concatenate(feats_all, axis=0)                # [N, n_features]
     meta = {
         "task": np.concatenate(task_all, axis=0),
         "shot_id": np.concatenate(shot_all, axis=0),
@@ -200,6 +209,8 @@ def embed_windows(
         "t_start": np.concatenate(tstart_all, axis=0),
         "rec_id": np.concatenate(rec_all, axis=0),
     }
+    for i, fname in enumerate(FEATURE_NAMES):
+        meta[f"feat_{fname}"] = feats_stack[:, i]
     return (np.concatenate(z_eeg_all, axis=0),
             np.concatenate(z_vis_all, axis=0),
             meta)

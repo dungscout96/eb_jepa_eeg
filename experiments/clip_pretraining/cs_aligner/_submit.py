@@ -42,7 +42,7 @@ BEST_LABEL = "Soft-Target CLIP (jul7 best)"
 def build_job(
     ckpt_a: str | None,
     label_a: str,
-    ckpt_b: str,
+    ckpt_b: str | None,
     label_b: str,
     config: str,
     split: str,
@@ -53,6 +53,7 @@ def build_job(
     struct_png: str,
 ) -> Job:
     ckpt_a_arg = f" --checkpoint-a {ckpt_a}" if ckpt_a else ""
+    ckpt_b_arg = f" --checkpoint-b {ckpt_b}" if ckpt_b else ""
     npz_path = f"{EXP_DIR}/{npz_name}"
     plot_gap = (
         "PYTHONPATH=. uv run --group eeg python"
@@ -60,7 +61,7 @@ def build_job(
         f" --config {config}"
         f"{ckpt_a_arg}"
         f' --label-a "{label_a}"'
-        f" --checkpoint-b {ckpt_b}"
+        f"{ckpt_b_arg}"
         f' --label-b "{label_b}"'
         f" --split {split}"
         f" --n-recordings {n_recordings}"
@@ -75,13 +76,23 @@ def build_job(
         f" --output {EXP_DIR}/{struct_png}"
         f' --title "{label_b} — embedding structure"'
     )
+    split_png = struct_png.replace("embedding_structure", "split_modality")
+    if split_png == struct_png:
+        split_png = "split_modality.png"
+    plot_split = (
+        "PYTHONPATH=. uv run --group eeg python"
+        f" {EXP_DIR}/plot_split_modality.py"
+        f" --npz {npz_path}"
+        f" --output {EXP_DIR}/{split_png}"
+        f' --title "{label_b} — per-modality t-SNE"'
+    )
     return Job(
         name="cs_aligner_modality_gap",
         cluster="delta",
         repo_path=REPO,
         partition="gpuA40x4",
         time_limit="00:30:00",
-        command=f"{plot_gap} && {plot_struct}",
+        command=f"{plot_gap} && {plot_struct} && {plot_split}",
         venv="__none__",
         branch="feature/cs-aligner",
         env_vars={
@@ -106,10 +117,14 @@ def parse_kv(args: list[str]) -> tuple[dict, bool]:
 
 if __name__ == "__main__":
     kv, submit = parse_kv(sys.argv[1:])
+    # Sentinel ``--ckpt-b=none`` (or empty) → random init for panel (b). Useful
+    # to emit a random-init npz for split-modality baseline plots.
+    ckpt_b_raw = kv.get("ckpt_b", BEST_CKPT)
+    ckpt_b = None if ckpt_b_raw.lower() in ("none", "") else ckpt_b_raw
     job = build_job(
         ckpt_a=kv.get("ckpt_a"),
         label_a=kv.get("label_a", "Random init"),
-        ckpt_b=kv.get("ckpt_b", BEST_CKPT),
+        ckpt_b=ckpt_b,
         label_b=kv.get("label_b", BEST_LABEL),
         config=kv.get("config", BEST_CONFIG),
         split=kv.get("split", "val"),
