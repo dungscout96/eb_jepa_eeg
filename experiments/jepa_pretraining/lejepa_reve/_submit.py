@@ -78,7 +78,7 @@ def build_job(
         name=f"lejepa_{slug}",
         cluster="delta",
         repo_path=REPO,
-        partition="gpuA40x4",
+        partition="gpuA100x4",  # A40 (44 GB) OOMs at bs=32; A100 (80 GB) has headroom
         time_limit=time_limit,
         command=(
             f"mkdir -p {exp_dir} && "
