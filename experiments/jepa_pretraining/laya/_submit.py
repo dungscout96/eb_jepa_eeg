@@ -94,6 +94,10 @@ def build_job(
         env_vars={
             "WANDB_PROJECT": "eb_jepa",
             "HBN_PREPROCESS_DIR": "/projects/bbnv/kkokate/hbn_preprocessed",
+            # Delta's neurolab profile defaults MNE_DATA=/projects/bcfj/dtyoung/mne_data
+            # which is not writable for this user → RevePositionBank fails on
+            # cache_dir stat with PermissionError. Point at $HOME instead.
+            "MNE_DATA": "/u/dtyoung/mne_data",
         },
     )
 
