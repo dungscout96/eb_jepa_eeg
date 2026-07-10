@@ -248,3 +248,8 @@ data/
 # Generated SLURM scripts
 slurm/generated/
 logs/
+
+# Session-produced embedding artifacts under experiments/ (large per-run .npz
+# dumps from plot_modality_gap.py etc.). Recipe .npz under movie_annotation/
+# stay tracked — they are load-bearing.
+experiments/**/*.npz
