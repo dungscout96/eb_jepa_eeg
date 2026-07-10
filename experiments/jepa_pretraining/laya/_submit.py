@@ -48,9 +48,18 @@ def build_job(
     batch_size: int,
     task: str,
     save_every: int,
+    auto_eval: bool,
 ) -> Job:
     slug = f"{run_tag}_laya_seed{seed}"
     exp_dir = f"{CKPT_ROOT}/{slug}"
+
+    # --task=multi is the sentinel for multi-movie training. Patch data.task
+    # as a Python list literal rather than a quoted string in that case.
+    task_expr = (
+        "['ThePresent', 'DespicableMe']"
+        if task == "multi"
+        else f"'{task}'"
+    )
 
     patch_lines = (
         "from omegaconf import OmegaConf; "
@@ -60,18 +69,22 @@ def build_job(
         f"c.optim.lr = {lr}; "
         f"c.optim.weight_decay = {weight_decay}; "
         f"c.data.batch_size = {batch_size}; "
-        f"c.data.task = '{task}'; "
+        f"c.data.task = {task_expr}; "
         f"c.loss.sigreg.coeff = {coeff}; "
         f"c.loss.sigreg.num_slices = {num_slices}; "
         f"c.logging.save_every = {save_every}; "
         f"c.logging.wandb_group = 'laya_{run_tag}'; "
+        f"c.eval.auto_run = {auto_eval}; "
         f"OmegaConf.save(c, '{exp_dir}/config.yaml')"
     )
     patch_cmd = f"PYTHONPATH=. uv run --group eeg python -c \"{patch_lines}\" && "
 
-    # ~2064 tokens/window at patch=25, embed=384/depth=12: rough estimate
-    # ~35 s/ep on A40 at bs=64. Auto-eval adds ~15 min.
-    est_min = int((epochs * 35 / 60 + 15) * 1.25)
+    # ~2064 tokens/window at patch=25, embed=384/depth=12: H200 bs=64 ~35 s/ep
+    # on ThePresent; multi-movie doubles the dataset → ~70 s/ep. Auto-eval adds
+    # ~15 min when enabled.
+    sec_per_ep = 70 if task == "multi" else 35
+    eval_overhead_min = 15 if auto_eval else 0
+    est_min = int((epochs * sec_per_ep / 60 + eval_overhead_min) * 1.25)
     hours, mins = divmod(max(60, est_min), 60)
     time_limit = f"{hours:02d}:{mins:02d}:00"
 
@@ -79,7 +92,7 @@ def build_job(
         name=f"laya_{slug}",
         cluster="delta",
         repo_path=REPO,
-        partition="gpuA100x4",  # A40 (44 GB) OOMs at bs=32; A100 (80 GB) has headroom
+        partition="gpuH200x8",  # Delta A40=44GB and A100=40GB both OOM at bs=32; H200=141GB fits comfortably
         time_limit=time_limit,
         command=(
             f"mkdir -p {exp_dir} && "
@@ -115,7 +128,8 @@ if __name__ == "__main__":
             "Usage: _submit.py <run_tag> "
             "[--epochs=100] [--seed=2025] [--coeff=0.02] [--num-slices=1024] "
             "[--lr=1e-4] [--weight-decay=0.05] [--batch-size=64] "
-            "[--task=ThePresent] [--save-every=20] [submit]"
+            "[--task=ThePresent|DespicableMe|multi] [--save-every=20] "
+            "[--auto-eval=true] [submit]"
         )
         sys.exit(1)
     run_tag = sys.argv[1]
@@ -129,8 +143,9 @@ if __name__ == "__main__":
     batch_size = _parse_kv(args, "batch-size", int, 64)
     task = _parse_kv(args, "task", str, "ThePresent")
     save_every = _parse_kv(args, "save-every", int, 20)
-    if task not in {"ThePresent", "DespicableMe"}:
-        print(f"--task must be ThePresent or DespicableMe, got {task!r}")
+    auto_eval = _parse_kv(args, "auto-eval", lambda s: s.lower() != "false", True)
+    if task not in {"ThePresent", "DespicableMe", "multi"}:
+        print(f"--task must be ThePresent, DespicableMe, or multi (both movies), got {task!r}")
         sys.exit(1)
     submit = "submit" in args
 
@@ -145,10 +160,12 @@ if __name__ == "__main__":
         batch_size=batch_size,
         task=task,
         save_every=save_every,
+        auto_eval=auto_eval,
     )
     banner = (
         f"(epochs={epochs}, seed={seed}, coeff={coeff}, num_slices={num_slices}, "
-        f"lr={lr}, wd={weight_decay}, bs={batch_size}, task={task}, save_every={save_every})"
+        f"lr={lr}, wd={weight_decay}, bs={batch_size}, task={task}, save_every={save_every}, "
+        f"auto_eval={auto_eval})"
     )
     if submit:
         print(f"Submitting {job.name} {banner}")

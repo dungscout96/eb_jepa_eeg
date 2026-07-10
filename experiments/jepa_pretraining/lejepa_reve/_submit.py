@@ -44,9 +44,18 @@ def build_job(
     batch_size: int,
     task: str,
     save_every: int,
+    auto_eval: bool,
 ) -> Job:
     slug = f"{run_tag}_lejepa_reve_seed{seed}"
     exp_dir = f"{CKPT_ROOT}/{slug}"
+
+    # --task=multi is the sentinel for multi-movie training. Patch data.task
+    # as a Python list literal rather than a quoted string in that case.
+    task_expr = (
+        "['ThePresent', 'DespicableMe']"
+        if task == "multi"
+        else f"'{task}'"
+    )
 
     # Patch snapshotted config before training so on-disk template stays clean
     # even under concurrent runs. We only patch fields that vary per submission;
@@ -58,19 +67,22 @@ def build_job(
         f"c.optim.epochs = {epochs}; "
         f"c.optim.lr = {lr}; "
         f"c.data.batch_size = {batch_size}; "
-        f"c.data.task = '{task}'; "
+        f"c.data.task = {task_expr}; "
         f"c.loss.sigreg.coeff = {coeff}; "
         f"c.loss.sigreg.num_slices = {num_slices}; "
         f"c.logging.save_every = {save_every}; "
         f"c.logging.wandb_group = 'lejepa_reve_{run_tag}'; "
+        f"c.eval.auto_run = {auto_eval}; "
         f"OmegaConf.save(c, '{exp_dir}/config.yaml')"
     )
     patch_cmd = f"PYTHONPATH=. uv run --group eeg python -c \"{patch_lines}\" && "
 
     # Timing estimate: depth=12, embed=512, patch=50 (~12 tokens/win/chan × 129
-    # chans = ~1500 tokens/sample). Rough guess ~30 s/ep on A40 at bs=128.
-    # Add ~15 min for the post-training auto-eval (probes + bootstrap).
-    est_min = int((epochs * 30 / 60 + 15) * 1.25)
+    # chans = ~1500 tokens/sample). H200 bs=64: ~37 s/ep on ThePresent; multi-movie
+    # doubles the dataset → ~74 s/ep. Add ~15 min for auto-eval if enabled.
+    sec_per_ep = 74 if task == "multi" else 37
+    eval_overhead_min = 15 if auto_eval else 0
+    est_min = int((epochs * sec_per_ep / 60 + eval_overhead_min) * 1.25)
     hours, mins = divmod(max(60, est_min), 60)
     time_limit = f"{hours:02d}:{mins:02d}:00"
 
@@ -78,7 +90,7 @@ def build_job(
         name=f"lejepa_{slug}",
         cluster="delta",
         repo_path=REPO,
-        partition="gpuA100x4",  # A40 (44 GB) OOMs at bs=32; A100 (80 GB) has headroom
+        partition="gpuH200x8",  # Delta A40=44GB and A100=40GB both OOM at bs=32; H200=141GB fits comfortably
         time_limit=time_limit,
         command=(
             f"mkdir -p {exp_dir} && "
@@ -113,8 +125,8 @@ if __name__ == "__main__":
         print(
             "Usage: _submit.py <run_tag> "
             "[--epochs=100] [--seed=2025] [--coeff=0.05] [--num-slices=1024] "
-            "[--lr=5e-4] [--batch-size=128] [--task=ThePresent] "
-            "[--save-every=20] [submit]"
+            "[--lr=5e-4] [--batch-size=128] [--task=ThePresent|DespicableMe|multi] "
+            "[--save-every=20] [--auto-eval=true] [submit]"
         )
         sys.exit(1)
     run_tag = sys.argv[1]
@@ -127,8 +139,9 @@ if __name__ == "__main__":
     batch_size = _parse_kv(args, "batch-size", int, 128)
     task = _parse_kv(args, "task", str, "ThePresent")
     save_every = _parse_kv(args, "save-every", int, 20)
-    if task not in {"ThePresent", "DespicableMe"}:
-        print(f"--task must be ThePresent or DespicableMe, got {task!r}")
+    auto_eval = _parse_kv(args, "auto-eval", lambda s: s.lower() != "false", True)
+    if task not in {"ThePresent", "DespicableMe", "multi"}:
+        print(f"--task must be ThePresent, DespicableMe, or multi (both movies), got {task!r}")
         sys.exit(1)
     submit = "submit" in args
 
@@ -142,10 +155,12 @@ if __name__ == "__main__":
         batch_size=batch_size,
         task=task,
         save_every=save_every,
+        auto_eval=auto_eval,
     )
     banner = (
         f"(epochs={epochs}, seed={seed}, coeff={coeff}, num_slices={num_slices}, "
-        f"lr={lr}, bs={batch_size}, task={task}, save_every={save_every})"
+        f"lr={lr}, bs={batch_size}, task={task}, save_every={save_every}, "
+        f"auto_eval={auto_eval})"
     )
     if submit:
         print(f"Submitting {job.name} {banner}")
