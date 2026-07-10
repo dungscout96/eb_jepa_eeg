@@ -15,8 +15,7 @@ organizes windows by shot / movie / features. The two rows therefore use
 INDEPENDENT t-SNE layouts, not shared coords.
 
 Usage:
-    PYTHONPATH=. uv run --group eeg python \\
-        experiments/clip_pretraining/cs_aligner/plot_split_modality.py \\
+    uv run --group eeg python -m eb_jepa.evaluation.visualization.plot_split_modality \\
         --npz experiments/clip_pretraining/cs_aligner/panel_b.npz \\
         --output experiments/clip_pretraining/cs_aligner/split_modality.png
 """
