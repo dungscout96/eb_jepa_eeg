@@ -41,9 +41,16 @@ EXP_DIR = "experiments/clip_pretraining/cs_aligner_from_checkpoint"
 CKPT_ROOT = "/work/hdd/bbnv/dtyoung/eb_jepa/cs_aligner_from_jepa"
 
 # JEPA checkpoints to warm-start from (jul10 H200 bs=64 seed=2025 runs).
+# --jepa-source picks between the single-movie and multi-movie JEPA runs.
 JEPA_CKPTS = {
-    "lejepa": "/work/hdd/bbnv/dtyoung/eb_jepa/lejepa_reve/jul10-h200-bs64_lejepa_reve_seed2025/latest.pth.tar",
-    "laya":   "/work/hdd/bbnv/dtyoung/eb_jepa/laya/jul10-h200-bs64_laya_seed2025/latest.pth.tar",
+    "single": {
+        "lejepa": "/work/hdd/bbnv/dtyoung/eb_jepa/lejepa_reve/jul10-h200-bs64_lejepa_reve_seed2025/latest.pth.tar",
+        "laya":   "/work/hdd/bbnv/dtyoung/eb_jepa/laya/jul10-h200-bs64_laya_seed2025/latest.pth.tar",
+    },
+    "multi": {
+        "lejepa": "/work/hdd/bbnv/dtyoung/eb_jepa/lejepa_reve/jul10-multi_lejepa_reve_seed2025/latest.pth.tar",
+        "laya":   "/work/hdd/bbnv/dtyoung/eb_jepa/laya/jul10-multi_laya_seed2025/latest.pth.tar",
+    },
 }
 
 
@@ -59,12 +66,15 @@ def build_job(
     batch_size: int,
     task: str,
     auto_eval: bool,
+    jepa_source: str,
 ) -> Job:
-    if model not in JEPA_CKPTS:
-        raise ValueError(f"--model must be one of {list(JEPA_CKPTS)}, got {model!r}")
-    jepa_ckpt = JEPA_CKPTS[model]
+    if jepa_source not in JEPA_CKPTS:
+        raise ValueError(f"--jepa-source must be one of {list(JEPA_CKPTS)}, got {jepa_source!r}")
+    if model not in JEPA_CKPTS[jepa_source]:
+        raise ValueError(f"--model must be one of {list(JEPA_CKPTS[jepa_source])}, got {model!r}")
+    jepa_ckpt = JEPA_CKPTS[jepa_source][model]
 
-    slug = f"{run_tag}_cs_from_{model}_seed{seed}"
+    slug = f"{run_tag}_cs_from_{model}_{jepa_source}_seed{seed}"
     exp_dir = f"{CKPT_ROOT}/{slug}"
     config_src = f"{EXP_DIR}/config_{model}.yaml"
 
@@ -141,6 +151,7 @@ if __name__ == "__main__":
             "[--epochs=100] [--seed=2025] [--cs-weight=1.0] [--kernel-bw=median] "
             "[--lr=1e-5] [--warmup=10] [--batch-size=64] "
             "[--task=ThePresent|DespicableMe|multi] "
+            "[--jepa-source=single|multi] "
             "[--auto-eval=false] [submit]\n"
             "  model : lejepa | laya"
         )
@@ -156,9 +167,13 @@ if __name__ == "__main__":
     warmup = _parse_kv(args, "warmup", int, 10)
     batch_size = _parse_kv(args, "batch-size", int, 64)
     task = _parse_kv(args, "task", str, "ThePresent")
+    jepa_source = _parse_kv(args, "jepa-source", str, "single")
     auto_eval = _parse_kv(args, "auto-eval", lambda s: s.lower() != "false", False)
     if task not in {"ThePresent", "DespicableMe", "multi"}:
         print(f"--task must be ThePresent, DespicableMe, or multi, got {task!r}")
+        sys.exit(1)
+    if jepa_source not in {"single", "multi"}:
+        print(f"--jepa-source must be single or multi, got {jepa_source!r}")
         sys.exit(1)
     submit = "submit" in args
 
@@ -174,11 +189,12 @@ if __name__ == "__main__":
         batch_size=batch_size,
         task=task,
         auto_eval=auto_eval,
+        jepa_source=jepa_source,
     )
     banner = (
         f"(model={model}, epochs={epochs}, seed={seed}, cs_weight={cs_weight}, "
         f"kernel_bw={kernel_bw}, lr={lr}, warmup={warmup}, bs={batch_size}, "
-        f"task={task}, auto_eval={auto_eval})"
+        f"task={task}, jepa_source={jepa_source}, auto_eval={auto_eval})"
     )
     if submit:
         print(f"Submitting {job.name} {banner}")
