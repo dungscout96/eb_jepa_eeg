@@ -20,7 +20,12 @@ from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
 from eb_jepa.architectures import MovieCLIPHead
-from eb_jepa.clip import CLIPPretrain, SceneCLIPPretrain, SoftTargetCLIPPretrain
+from eb_jepa.clip import (
+    CLIPPretrain,
+    CSAlignerCLIPPretrain,
+    SceneCLIPPretrain,
+    SoftTargetCLIPPretrain,
+)
 from eb_jepa.datasets.hbn import JEPAMovieDataset
 from eb_jepa.logging import get_logger
 from eb_jepa.paths import resolve_preprocessed_dir
@@ -169,24 +174,28 @@ def run(
     temporal_stride = cfg.data.get("temporal_stride", 1)
 
     loss_mode = str(cfg.loss.get("mode", "clip"))
-    if loss_mode not in {"clip", "scene_clip", "soft_target_clip"}:
+    if loss_mode not in {"clip", "scene_clip", "soft_target_clip", "cs_aligner"}:
         raise ValueError(
-            f"Unknown loss.mode={loss_mode!r}; expected 'clip', 'scene_clip', or 'soft_target_clip'."
+            f"Unknown loss.mode={loss_mode!r}; expected 'clip', 'scene_clip', "
+            f"'soft_target_clip', or 'cs_aligner'."
         )
     # `recipe_mode` controls the DATASET path (mean-centered targets, 7-tuple
-    # batch with scene_ids + t_starts). All three loss modes can consume it —
+    # batch with scene_ids + t_starts). All four loss modes can consume it —
     # vanilla CLIP just discards scene_ids/t_starts at model-call time. This
     # lets us run a fair vanilla-CLIP baseline with the same mean-centering
-    # that scene_clip / soft_target_clip enjoy.
-    recipe_mode = loss_mode in {"clip", "scene_clip", "soft_target_clip"}
+    # that scene_clip / soft_target_clip / cs_aligner enjoy.
+    recipe_mode = loss_mode in {"clip", "scene_clip", "soft_target_clip", "cs_aligner"}
     recipe_target_kind = str(cfg.loss.get("target_kind", "shot_mean"))
     recipe_mean_center = bool(cfg.loss.get("mean_center", True))
-    # Only scene_clip actually reads shot / scene labels; the other two ignore
+    # Only scene_clip actually reads shot / scene labels; the others ignore
     # them, so we can run without shot boundaries when they aren't required.
     recipe_require_shots = loss_mode == "scene_clip"
     temporal_buffer_s = float(cfg.loss.get("temporal_buffer_s", 2.0))
     soft_alpha = float(cfg.loss.get("soft_alpha", 0.5))
     soft_tau_teacher = float(cfg.loss.get("soft_tau_teacher", 0.1))
+    cs_weight = float(cfg.loss.get("cs_weight", 1.0))
+    _cs_bw_raw = cfg.loss.get("kernel_bandwidth", None)
+    cs_kernel_bandwidth = float(_cs_bw_raw) if _cs_bw_raw is not None else None
 
     # ------------------------------------------------------------------
     # Experiment directory + W&B
@@ -352,6 +361,14 @@ def run(
             clip_head,
             alpha=soft_alpha,
             tau_teacher=soft_tau_teacher,
+            temporal_buffer_s=temporal_buffer_s,
+        ).to(device)
+    elif loss_mode == "cs_aligner":
+        model = CSAlignerCLIPPretrain(
+            encoder,
+            clip_head,
+            cs_weight=cs_weight,
+            kernel_bandwidth=cs_kernel_bandwidth,
             temporal_buffer_s=temporal_buffer_s,
         ).to(device)
     else:

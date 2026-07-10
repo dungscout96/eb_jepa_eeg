@@ -47,8 +47,12 @@ loss:
   # mode=soft_target_clip: Andonian-2022-style soft-target distillation from the
   #                  V-JEPA-2 similarity matrix. Same recipe/data requirements
   #                  as scene_clip; ignores scene_id (teacher carries the label).
+  # mode=cs_aligner: InfoNCE + Cauchy–Schwarz divergence on batch marginals
+  #                  (Yin et al. 2025, arXiv:2502.17028). Directly attacks the
+  #                  modality gap that pairwise InfoNCE cannot close. Ignores
+  #                  scene_id; keeps the 2 s temporal buffer on the InfoNCE half.
   mode: scene_clip
-  # Recipe knobs (used when mode in {scene_clip, soft_target_clip}):
+  # Recipe knobs (used when mode in {scene_clip, soft_target_clip, cs_aligner}):
   mean_center: true            # subtract V-JEPA-2 global mean at dataset init
   target_kind: per_window      # {per_window, shot_mean}; per_window keeps the
                                # mean-pooled clip vector, shot_mean replaces it
@@ -60,6 +64,11 @@ loss:
   soft_tau_teacher: 0.1        # teacher temperature; lower → sharper (near one-hot),
                                # higher → smoother. See centered-cosine range in
                                # experiments/.../clip_design_observations_vjepa2.md §2.
+  # CS-Aligner knobs (only used when mode=cs_aligner):
+  cs_weight: 1.0               # λ in L = L_InfoNCE + λ · D_CS. Paper's default;
+                               # calibrate per-pipeline — sweep {0.1, 1.0, 10.0}.
+  kernel_bandwidth: null       # null → median heuristic per batch (σ² = median
+                               # ‖z_eeg−z_vis‖² / 2, detached). Float → fixed σ.
 
   # Symmetric mode: both EEG and V-JEPA-2 project into a learned proj_dim-d
   # space. proj_dim=1024 matches the encoder embed dim so the EEG MLP doesn't

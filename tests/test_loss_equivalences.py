@@ -357,5 +357,119 @@ class TestProbeLosses:
         assert loss_high.item() > 10.0
 
 
+class TestCSAlignerDivergence:
+    """Tests for the CS-Aligner (arXiv:2502.17028) CS-divergence kernel term.
+
+    Uses ``CSAlignerCLIPPretrain._cs_divergence`` directly with a fake module
+    so we avoid building the full encoder — the CS math is a self-contained
+    static computation on two L2-normalized batches."""
+
+    @staticmethod
+    def _make_module(kernel_bandwidth=None):
+        """Instantiate CSAlignerCLIPPretrain without touching the encoder/head."""
+        from eb_jepa.clip import CSAlignerCLIPPretrain
+        mod = CSAlignerCLIPPretrain.__new__(CSAlignerCLIPPretrain)
+        nn.Module.__init__(mod)
+        mod.kernel_bandwidth = kernel_bandwidth
+        mod.cs_weight = 1.0
+        mod.temporal_buffer_s = 0.0
+        return mod
+
+    @staticmethod
+    def _unit_norm(x):
+        return F.normalize(x, dim=-1)
+
+    def test_cs_zero_when_distributions_identical(self):
+        """D_CS(z, z) ≈ 0 — same samples in both slots."""
+        torch.manual_seed(0)
+        z = self._unit_norm(torch.randn(32, 64))
+        mod = self._make_module()
+        d_cs, _ = mod._cs_divergence(z, z)
+        assert d_cs.item() == pytest.approx(0.0, abs=1e-5), (
+            f"D_CS(z, z) = {d_cs.item():.6e}, expected ≈ 0"
+        )
+
+    def test_cs_monotonic_in_noise(self):
+        """D_CS(z, z + ε) is non-decreasing as ε grows."""
+        torch.manual_seed(1)
+        z = self._unit_norm(torch.randn(64, 128))
+        mod = self._make_module()
+        prev = None
+        for scale in [0.05, 0.2, 0.5, 1.0, 2.0]:
+            noise = scale * torch.randn_like(z)
+            z_shift = self._unit_norm(z + noise)
+            d_cs, _ = mod._cs_divergence(z, z_shift)
+            if prev is not None:
+                assert d_cs.item() >= prev - 1e-4, (
+                    f"D_CS decreased at scale={scale}: {d_cs.item():.4f} < {prev:.4f}"
+                )
+            prev = d_cs.item()
+
+    def test_cs_rotation_invariant(self):
+        """D_CS is invariant to a shared orthogonal transform of both modalities."""
+        torch.manual_seed(2)
+        d = 64
+        z_a = self._unit_norm(torch.randn(48, d))
+        z_b = self._unit_norm(torch.randn(48, d))
+        mod = self._make_module()
+        d_cs_before, _ = mod._cs_divergence(z_a, z_b)
+
+        # Random orthogonal matrix via QR.
+        A = torch.randn(d, d)
+        Q, _ = torch.linalg.qr(A)
+        z_a_rot = self._unit_norm(z_a @ Q)
+        z_b_rot = self._unit_norm(z_b @ Q)
+        d_cs_after, _ = mod._cs_divergence(z_a_rot, z_b_rot)
+
+        assert d_cs_before.item() == pytest.approx(d_cs_after.item(), abs=1e-4), (
+            f"D_CS not rotation-invariant: before={d_cs_before.item():.6f}, "
+            f"after={d_cs_after.item():.6f}"
+        )
+
+    def test_gradient_flows(self):
+        """d_cs.backward() populates gradients on an upstream leaf tensor."""
+        torch.manual_seed(3)
+        raw = torch.randn(16, 32, requires_grad=True)   # leaf
+        z_eeg = self._unit_norm(raw)                    # non-leaf, differentiable
+        z_vis = self._unit_norm(torch.randn(16, 32))
+        mod = self._make_module()
+        d_cs, _ = mod._cs_divergence(z_eeg, z_vis)
+        d_cs.backward()
+        assert raw.grad is not None and torch.isfinite(raw.grad).all()
+        assert raw.grad.abs().sum() > 0.0, "grad is all zero"
+
+    def test_median_bandwidth_matches_manual(self):
+        """Median-heuristic σ agrees with a manual numpy computation."""
+        torch.manual_seed(4)
+        z_eeg = self._unit_norm(torch.randn(4, 8))
+        z_vis = self._unit_norm(torch.randn(4, 8))
+
+        # Manual σ² = median(||z_eeg_i - z_vis_j||²) / 2
+        d2 = (z_eeg.unsqueeze(1) - z_vis.unsqueeze(0)).pow(2).sum(-1).reshape(-1)
+        expected_sigma = float((d2.median() / 2.0).sqrt().item())
+
+        mod = self._make_module(kernel_bandwidth=None)
+        _, diag = mod._cs_divergence(z_eeg, z_vis)
+        assert diag["cs_sigma"] == pytest.approx(expected_sigma, rel=1e-5), (
+            f"cs_sigma={diag['cs_sigma']:.6f}, expected={expected_sigma:.6f}"
+        )
+
+    def test_diagnostics_finite(self):
+        """log_kxx / log_kyy / log_kxy are all finite for typical inputs."""
+        torch.manual_seed(5)
+        z_eeg = self._unit_norm(torch.randn(20, 40))
+        z_vis = self._unit_norm(torch.randn(20, 40))
+        mod = self._make_module()
+        d_cs, diag = mod._cs_divergence(z_eeg, z_vis)
+        for k in ("cs_log_kxx", "cs_log_kyy", "cs_log_kxy", "cs_sigma"):
+            assert math_isfinite(diag[k]), f"{k}={diag[k]} not finite"
+        assert torch.isfinite(d_cs).item()
+
+
+def math_isfinite(x):
+    import math
+    return math.isfinite(x)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
