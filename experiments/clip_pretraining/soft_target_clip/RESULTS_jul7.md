@@ -246,6 +246,62 @@ the encoder toward exactly the semantic dimensions V-JEPA-2 emphasizes.
 These are complementary rather than strictly ordered wins — the largest
 open lever is combining them (§4.3).
 
+### 3.6 Top-K retrieval on the best checkpoint
+
+`probe_traintest.py` gives per-feature Pearson r; the SSL-literature
+counterpart is Top-K retrieval — for each EEG window, does the paired
+V-JEPA-2 target rank in the top-K by cosine similarity? Implemented in
+[`eb_jepa/evaluation/clip_probe/retrieval.py`](../../../eb_jepa/evaluation/clip_probe/retrieval.py)
+at three pool granularities:
+
+- **time**: one candidate per unique `(task, round(t_start / 0.5s))`. Time
+  bucketing matches V-JEPA-2's ~2 Hz clip rate. Task: "identify the movie
+  moment you're watching."
+- **shot**: one candidate per unique `(task, shot_id)`; pool entry is the
+  L2-normalized centroid of projected V-JEPA-2 vectors within that shot.
+  Task: "identify the shot."
+- **scene**: one candidate per unique `(task, scene_id)`; same centroid
+  semantics. Task: "identify the scene."
+
+Chance level for both directions is `K / N_pool` (both e→v and v→e — see
+[commit `0cb02ab`](https://github.com/dungscout96/eb_jepa_eeg/commit/0cb02ab) for the derivation).
+
+**VAL** (M = 29,593 EEG windows, 293 recordings):
+
+| level | N | e→v Top-1 | e→v Top-5 | e→v Top-10 | v→e Top-1 | v→e Top-10 |
+|---|---:|---:|---:|---:|---:|---:|
+| time | 101 | 0.083 (8.4×) | 0.229 (4.6×) | 0.339 (3.4×) | 0.010 (1.0×) | 0.109 (1.1×) |
+| shot | 49 | 0.122 (6.0×) | 0.343 (3.4×) | 0.505 (2.5×) | 0.020 (1.0×) | 0.184 (0.9×) |
+| scene | 35 | 0.145 (5.1×) | 0.438 (3.1×) | **0.618 (2.2×)** | 0.029 (1.0×) | 0.257 (0.9×) |
+
+**TEST** (M = 10,908 EEG windows, 108 recordings):
+
+| level | N | e→v Top-1 | e→v Top-5 | e→v Top-10 | v→e Top-1 | v→e Top-10 |
+|---|---:|---:|---:|---:|---:|---:|
+| time | 101 | 0.054 (5.5×) | 0.157 (3.2×) | 0.240 (2.4×) | 0.010 (1.0×) | 0.109 (1.1×) |
+| shot | 49 | 0.084 (4.1×) | 0.255 (2.5×) | 0.391 (1.9×) | 0.020 (1.0×) | 0.204 (1.0×) |
+| scene | 35 | 0.106 (3.7×) | 0.351 (2.5×) | **0.517 (1.8×)** | 0.029 (1.0×) | 0.257 (0.9×) |
+
+Two clean findings from these tables:
+
+1. **e→v works meaningfully**: the encoder identifies the correct scene
+   51.7 % of the time in top-10 on unseen R6 test recordings (out of 35
+   candidates, chance 28.6 %). Time-level Top-1 sits at 5.5 × chance on
+   test / 8.4 × on val. Val-vs-test optimism gap (~40 % on Top-1) mirrors
+   the Pearson-r probe pattern.
+2. **v→e is at chance across all levels and both splits.** The most-similar
+   EEG anchor for a given shot/scene centroid is essentially random — no
+   subject-window sits systematically closer to the centroid than others.
+   **Signature of cross-subject variability dominating within-group
+   alignment tightness**, consistent with the modality-gap literature
+   (see the sibling [`../cs_aligner/`](../cs_aligner/) work).
+
+JSONs: [`retrieval_val_jul7-tp_soft_seed2026_TP.json`](retrieval_val_jul7-tp_soft_seed2026_TP.json),
+[`retrieval_test_jul7-tp_soft_seed2026_TP.json`](retrieval_test_jul7-tp_soft_seed2026_TP.json).
+(Note: raw Top-K values in the JSONs are correct; the pre-`0cb02ab`
+`v2e_chance` field uses K/M and understates chance — the tables here
+use the corrected K/N formula.)
+
 ---
 
 ## §4. Full comparison to the historical record
