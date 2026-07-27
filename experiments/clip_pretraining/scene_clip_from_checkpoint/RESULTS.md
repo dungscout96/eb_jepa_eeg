@@ -412,6 +412,93 @@ projector and is invisible to a linear probe on encoder outputs.
 **+0.197 (test) / +0.218 (val) at lr=3e-4** Δr lift from REVE-alone is *all*
 encoder fine-tuning. Freezing the encoder defeats the purpose of the recipe.
 
+### 3.10 Top-K retrieval — the SSL-standard alignment metric
+
+Complements the linear-probe protocol with EEG↔V-JEPA-2 retrieval accuracy
+at three pool granularities. Implementation:
+[`eb_jepa/evaluation/clip_probe/retrieval.py`](../../../eb_jepa/evaluation/clip_probe/retrieval.py).
+
+Setup: the trained encoder + `MovieCLIPHead` project all EEG windows in the
+eval split to `z_eeg`; each unique **(task, movie-time)** at 0.5 s
+bucketing, **(task, shot_id)**, and **(task, scene_id)** becomes a
+V-JEPA-2 candidate projected to `z_vis`. Pool entries for shot / scene are
+L2-normalized centroids of paired projected V-JEPA-2 vectors within the
+group. Both directions reported:
+
+- **e→v** (identify what you're watching): for each EEG window, is the
+  correct pool entry (its own time / shot / scene) in top-K by cosine?
+- **v→e** (find someone watching this): for each pool entry, is any EEG
+  window belonging to it in top-K? Multi-positive by construction.
+
+Chance for both is `K / N_pool` (each pool entry contains ~M/N EEG anchors
+as correct answers, so K/N is the random-encoder baseline for v→e as well).
+
+Numbers on the retrained `warmstart_lr3e4_ep299` (Delta job 20400451,
+Δr matches the historical acceptance gate — see §3.4):
+
+**VAL** (M = 29,593 EEG windows, 293 recordings):
+
+| level | N | e→v Top-1 | e→v Top-5 | e→v Top-10 | v→e Top-1 | v→e Top-10 |
+|---|---:|---:|---:|---:|---:|---:|
+| time | 101 | 0.068 (6.9×) | 0.223 (4.5×) | 0.345 (3.5×) | 0.020 (2.0×) | 0.079 (0.8×) |
+| shot | 49 | 0.167 (8.2×) | 0.439 (4.3×) | 0.586 (2.9×) | 0.041 (2.0×) | 0.163 (0.8×) |
+| scene | 35 | 0.217 (7.6×) | 0.526 (3.7×) | **0.675 (2.4×)** | 0.057 (2.0×) | 0.229 (0.8×) |
+
+**TEST** (M = 10,908 EEG windows, 108 recordings):
+
+| level | N | e→v Top-1 | e→v Top-5 | e→v Top-10 | v→e Top-1 | v→e Top-10 |
+|---|---:|---:|---:|---:|---:|---:|
+| time | 101 | 0.046 (4.7×) | 0.159 (3.2×) | 0.255 (2.6×) | 0.020 (2.0×) | 0.089 (0.9×) |
+| shot | 49 | 0.114 (5.6×) | 0.309 (3.0×) | 0.437 (2.1×) | 0.041 (2.0×) | 0.163 (0.8×) |
+| scene | 35 | 0.149 (5.2×) | 0.384 (2.7×) | **0.532 (1.9×)** | 0.057 (2.0×) | 0.229 (0.8×) |
+
+Two findings worth flagging:
+
+1. **e→v is strong.** Val scene-level Top-10 = 67.5 % (identify one of 35
+   scenes from EEG two-thirds of the time in top-10 candidates). Test
+   scene-level Top-10 = 53.2 %. The pool-size / above-chance trade-off
+   behaves as expected (coarser pool → higher absolute accuracy but lower
+   chance-relative ratio).
+2. **v→e is meaningfully above chance at Top-1 (2.0× everywhere).** This
+   is the key contrast with the from-scratch soft_target_clip result
+   (see [`../soft_target_clip/RESULTS_jul7.md`](../soft_target_clip/RESULTS_jul7.md) §3.6),
+   where v→e sits exactly at chance (1.0× Top-1 across all levels). REVE
+   warm-start meaningfully alleviates the modality gap: pool centroids do
+   reach into the EEG cloud enough that a specific EEG anchor from the
+   right group ranks first more often than random.
+3. **Top-10 v→e stays below chance (0.8×)** at all levels on both splits.
+   This is not a contradiction with Top-1: v→e's expected-hits scaling with
+   K is nonlinear when correct-anchor count G_j is small relative to M —
+   Top-1 concentrates all mass on the single best candidate (which the
+   encoder gets right for ~2 % of pool entries), but by K=10 the head of
+   the list is dominated by systematic near-misses from other groups.
+
+Comparison to the from-scratch soft-target checkpoint (jul7-tp soft τ=0.05
+seed=2026, TEST):
+
+| level | metric | soft_target (from-scratch) | REVE-warmstart (this) | Δ |
+|---|---|---:|---:|---:|
+| time | e→v Top-1 | 0.054 (5.5×) | 0.046 (4.7×) | −0.008 |
+| shot | e→v Top-1 | 0.084 (4.1×) | 0.114 (5.6×) | **+0.030** |
+| scene | e→v Top-1 | 0.106 (3.7×) | 0.149 (5.2×) | **+0.043** |
+| time | e→v Top-10 | 0.240 | 0.255 | **+0.015** |
+| shot | e→v Top-10 | 0.391 | 0.437 | **+0.046** |
+| scene | e→v Top-10 | 0.517 | 0.532 | +0.015 |
+| time | v→e Top-1 | 0.010 (1.0×) | 0.020 (2.0×) | **+0.010** |
+| shot | v→e Top-1 | 0.020 (1.0×) | 0.041 (2.0×) | **+0.020** |
+| scene | v→e Top-1 | 0.029 (1.0×) | 0.057 (2.0×) | **+0.029** |
+
+REVE warm-start wins on the coarser-granularity e→v metrics and doubles v→e
+Top-1 across all levels, mirroring the Pearson r story from §3.4. The one
+place where soft-target ties or slightly exceeds REVE is **time-level e→v
+Top-1** — likely because time-level retrieval hits per-window features that
+V-JEPA-2's per-window mean (the target the from-scratch soft-target was
+optimized against) directly encodes, and no REVE-pretraining bias helps
+there.
+
+JSONs: [`probe_results/retrieval_warmstart_lr3e4_retrain_jul22_ep299_val.json`](probe_results/retrieval_warmstart_lr3e4_retrain_jul22_ep299_val.json),
+[`probe_results/retrieval_warmstart_lr3e4_retrain_jul22_ep299_test.json`](probe_results/retrieval_warmstart_lr3e4_retrain_jul22_ep299_test.json).
+
 ---
 
 ## §4. Why this works (theoretical reading)

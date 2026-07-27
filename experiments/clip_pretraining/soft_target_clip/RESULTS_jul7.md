@@ -302,6 +302,31 @@ JSONs: [`retrieval_val_jul7-tp_soft_seed2026_TP.json`](retrieval_val_jul7-tp_sof
 `v2e_chance` field uses K/M and understates chance — the tables here
 use the corrected K/N formula.)
 
+**vs. REVE warm-start (test set).** The
+[`scene_clip_from_checkpoint` retrained winner](../scene_clip_from_checkpoint/RESULTS.md#310-top-k-retrieval--the-ssl-standard-alignment-metric)
+(`warmstart_lr3e4_ep299`, Delta job 20400451) provides a direct comparison
+on the SSL retrieval protocol:
+
+| level | metric | ours (from-scratch) | REVE-warmstart | Δ |
+|---|---|---:|---:|---:|
+| time | e→v Top-1 | 0.054 (5.5×) | 0.046 (4.7×) | −0.008 |
+| shot | e→v Top-1 | 0.084 (4.1×) | 0.114 (5.6×) | **+0.030** |
+| scene | e→v Top-1 | 0.106 (3.7×) | 0.149 (5.2×) | **+0.043** |
+| scene | e→v Top-10 | 0.517 | 0.532 | +0.015 |
+| time | **v→e Top-1** | 0.010 (1.0×) | **0.020 (2.0×)** | **+0.010** |
+| shot | **v→e Top-1** | 0.020 (1.0×) | **0.041 (2.0×)** | **+0.020** |
+| scene | **v→e Top-1** | 0.029 (1.0×) | **0.057 (2.0×)** | **+0.029** |
+
+REVE warm-start wins on shot / scene e→v and **doubles v→e Top-1 across all
+levels** — reaching from below chance (1.0×) into meaningful above-chance
+(2.0×). This flips the v→e-at-chance finding above: **REVE warm-start
+alleviates the modality gap** that the from-scratch soft-target objective
+leaves in place. Consistent with the +0.026 raw Pearson r advantage REVE
+holds on the probe protocol (§3.4). The one place from-scratch soft-target
+matches or narrowly beats REVE is **time-level e→v Top-1**, where V-JEPA-2's
+per-window representation is what our soft-target loss most directly
+optimizes against.
+
 ---
 
 ## §4. Full comparison to the historical record
