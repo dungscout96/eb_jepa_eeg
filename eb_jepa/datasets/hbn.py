@@ -1419,21 +1419,25 @@ class JEPAMovieDataset(HBNMovieDataset):
     def __len__(self):
         return len(self._fif_paths)
 
-    def __getitem__(self, idx):
-        crop_inds = self._crop_inds[idx]
-        feats = self.feature_recordings[idx]
-        embeds = self.embedding_recordings[idx]
-        shot_ids = self.shot_id_recordings[idx]
-        scene_ids = self.scene_id_recordings[idx] if self.scene_id_recordings else None
-        t_starts = self.t_start_recordings[idx] if self.t_start_recordings else None
-        n = len(crop_inds)
-        required = (self.n_windows - 1) * self.temporal_stride + 1
-        start = torch.randint(0, n - required + 1, (1,)).item()
-        indices = list(range(start, start + required, self.temporal_stride))
+    def _load_clip(self, rec_idx, indices) -> torch.Tensor:
+        """Read, normalize, and spatially project one clip from one recording.
 
+        Shared by ``__getitem__`` and ``PairedSubjectJEPADataset`` so the
+        normalization / envelope / CorrCA semantics can never drift between
+        the single-subject and paired code paths.
+
+        Args:
+            rec_idx: recording index into ``_fif_paths`` / ``_crop_inds``.
+            indices: window indices within that recording (list or array).
+
+        Returns:
+            [len(indices), C_out, n_times] float32. ``C_out`` is ``n_chans``,
+            doubled when ``add_envelope`` is set, or the CorrCA component
+            count when ``corrca_filters`` is set.
+        """
         # Load only the needed windows from disk
         eeg = torch.from_numpy(
-            _read_raw_windows(self._fif_paths[idx], crop_inds[indices])
+            _read_raw_windows(self._fif_paths[rec_idx], self._crop_inds[rec_idx][indices])
         )
 
         # Normalization: per-recording removes subject fingerprint, global preserves it
@@ -1452,6 +1456,22 @@ class JEPAMovieDataset(HBNMovieDataset):
         if self._corrca_W is not None:
             # eeg: [n_windows, C, T] → [n_windows, k, T]
             eeg = torch.einsum("wct,ck->wkt", eeg, self._corrca_W)
+
+        return eeg
+
+    def __getitem__(self, idx):
+        crop_inds = self._crop_inds[idx]
+        feats = self.feature_recordings[idx]
+        embeds = self.embedding_recordings[idx]
+        shot_ids = self.shot_id_recordings[idx]
+        scene_ids = self.scene_id_recordings[idx] if self.scene_id_recordings else None
+        t_starts = self.t_start_recordings[idx] if self.t_start_recordings else None
+        n = len(crop_inds)
+        required = (self.n_windows - 1) * self.temporal_stride + 1
+        start = torch.randint(0, n - required + 1, (1,)).item()
+        indices = list(range(start, start + required, self.temporal_stride))
+
+        eeg = self._load_clip(idx, indices)
 
         # Binary subject label (age > median, sex, …) — scalar float tensor.
         # NaN means metadata was unavailable for this recording.

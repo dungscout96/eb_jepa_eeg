@@ -70,6 +70,7 @@ from tqdm import tqdm
 
 from eb_jepa.anti_collapse import DINOAntiCollapse
 from eb_jepa.datasets.hbn import JEPAMovieDataset
+from eb_jepa.datasets.paired import PairedSubjectJEPADataset
 from eb_jepa.logging import get_logger
 from eb_jepa.paths import resolve_preprocessed_dir
 from eb_jepa.training.builder import build_jepa
@@ -123,6 +124,10 @@ def run(
     device = setup_device(cfg.meta.device)
     setup_seed(cfg.meta.seed)
     temporal_stride = cfg.data.get("temporal_stride", 1)
+    # "masked" (default) or "cross_subject". Selects both the dataset class and
+    # the model class, so the two can never disagree.
+    objective = str(cfg.loss.get("objective", "masked"))
+    is_cross_subject = objective == "cross_subject"
 
     # Create experiment directory
     if folder is None:
@@ -149,12 +154,14 @@ def run(
             else:
                 ac_suffix = "_noac"
             nw_suffix = f"_nw{cfg.data.n_windows}_ws{cfg.data.window_size_seconds}s"
+            obj_suffix = "_xsubj" if is_cross_subject else ""
             exp_name = (
                 f"eeg_jepa_bs{cfg.data.batch_size}"
                 f"_lr{cfg.optim.lr}"
                 f"{ac_suffix}"
                 f"{nw_suffix}"
                 f"{stride_suffix}"
+                f"{obj_suffix}"
             )
             exp_dir = get_unified_experiment_dir(
                 example_name="eeg_jepa",
@@ -190,7 +197,19 @@ def run(
     # Pretraining is self-supervised: pass feature_names=[] to skip per-window
     # movie-feature tensor construction. visual_processing_delay_s defaults to
     # 0.0 — irrelevant since labels are unused; relevant only at eval time.
-    train_set = JEPAMovieDataset(
+    # Cross-subject pretraining needs time-aligned (subject A, subject B) pairs,
+    # so it swaps in the paired dataset. Items become [2, T, C, W] instead of
+    # [T, C, W]; the batch tuple shrinks from 5 to 3 (see the epoch loop below).
+    ds_cls = PairedSubjectJEPADataset if is_cross_subject else JEPAMovieDataset
+    ds_extra = (
+        {
+            "pairs_per_recording": cfg.data.get("pairs_per_recording", 1),
+            "pair_min_partners": cfg.data.get("pair_min_partners", 1),
+        }
+        if is_cross_subject
+        else {}
+    )
+    train_set = ds_cls(
         split="train",
         n_windows=cfg.data.n_windows,
         window_size_seconds=cfg.data.window_size_seconds,
@@ -200,6 +219,7 @@ def run(
         cfg=cfg.data,
         preprocessed=preprocessed,
         preprocessed_dir=preprocessed_dir,
+        **ds_extra,
     )
 
     num_workers = cfg.data.num_workers
@@ -309,10 +329,17 @@ def run(
             disable=cfg.logging.get("tqdm_silent", False),
         )
 
-        for eeg, _features, _embeds, _shot_ids, _probe_labels in pbar:
+        for batch in pbar:
+            if is_cross_subject:
+                # eeg: [B, 2, T, C, W] — subject A / subject B at the same
+                # movie time. t_starts and rec_ids are carried for debugging
+                # only; the loss reads neither.
+                eeg, _t_starts, _rec_ids = batch
+            else:
+                eeg, _features, _embeds, _shot_ids, _probe_labels = batch
             eeg = eeg.to(device)
 
-            # --- Masked JEPA pretraining ---
+            # --- JEPA pretraining ---
             optimizer.zero_grad()
             jepa_loss, loss_dict = jepa(eeg, global_step=global_step)
             jepa_loss.backward()
@@ -339,11 +366,20 @@ def run(
                 if k not in ("total_loss", "ac_loss", "pred_loss")
             }
 
-            pbar.set_postfix({
+            postfix = {
                 "loss": f"{jepa_loss.item():.4f}",
                 "ac":   f"{float(acl):.4f}",
                 "pred": f"{float(pl):.4f}",
-            })
+            }
+            # Cross-subject collapse detectors. Surfaced in the progress bar (not
+            # just wandb) because they are the kill-switch signal and need to be
+            # readable straight from the job log: pred_loss_gap must be > 0 and
+            # growing, pred_var_ratio must stay well above 0.
+            if "pred_loss_gap" in loss_dict:
+                postfix["gap"] = f"{float(loss_dict['pred_loss_gap']):.4f}"
+            if "pred_var_ratio" in loss_dict:
+                postfix["pvr"] = f"{float(loss_dict['pred_var_ratio']):.3f}"
+            pbar.set_postfix(postfix)
 
             if wandb_run:
                 import wandb
@@ -416,7 +452,19 @@ def run(
     # a separate SLURM job should set cfg.eval.auto_run=false.
     # ------------------------------------------------------------------
     eval_cfg = cfg.get("eval", None)
-    if eval_cfg is None or eval_cfg.get("auto_run", True):
+    if eval_cfg is None:
+        auto_run = True
+    else:
+        # A dot-notation CLI override (--eval.auto_run=false) arrives as the
+        # STRING "false", which is truthy -- so a plain truthiness check silently
+        # runs the full probe eval anyway. Same coercion idiom as vicreg
+        # use_projector above.
+        _ar = eval_cfg.get("auto_run", True)
+        auto_run = (
+            _ar if isinstance(_ar, bool)
+            else str(_ar).lower() not in ("false", "0", "no")
+        )
+    if auto_run:
         _run_auto_eval(cfg, exp_dir, fname, wandb_run_id=wandb_run_id)
 
 

@@ -17,7 +17,7 @@ from eb_jepa.anti_collapse import (
     VICRegAntiCollapse,
 )
 from eb_jepa.architectures import EEGEncoderTokens, MaskedPredictor, Projector
-from eb_jepa.jepa import MaskedJEPA
+from eb_jepa.jepa import CrossSubjectJEPA, MaskedJEPA
 from eb_jepa.losses import SIGRegLoss, VCLoss
 from eb_jepa.masking import MultiBlockMaskCollator
 
@@ -93,17 +93,12 @@ def build_encoder(cfg, *, n_chans: int, n_times: int, chs_info,
     )
 
 
-def build_jepa(cfg, *, n_chans: int, n_times: int, chs_info,
-               n_windows: int) -> MaskedJEPA:
-    """Build a MaskedJEPA from a config.
-
-    Args:
-        cfg: OmegaConf config with ``model``, ``loss``, ``masking`` sections.
-        n_chans / n_times / chs_info: dataset-derived inputs.
-        n_windows: number of windows per sample.
+def _build_components(cfg, *, n_chans: int, n_times: int, chs_info,
+                      n_windows: int):
+    """Construct the four pieces every JEPA variant shares.
 
     Returns:
-        A fully assembled ``MaskedJEPA`` on CPU. The caller moves it to a device.
+        (encoder, predictor, mask_collator, anti_collapse)
     """
     embed_dim = cfg.model.encoder_embed_dim
     masking_cfg = cfg.get("masking", {})
@@ -132,11 +127,56 @@ def build_jepa(cfg, *, n_chans: int, n_times: int, chs_info,
         min_context_fraction=masking_cfg.get("min_context_fraction", 0.15),
     )
     anti_collapse = build_anti_collapse(cfg, encoder)
-    pred_loss_type = cfg.loss.get("pred_loss_type", "mse")
+    return encoder, predictor, mask_collator, anti_collapse
 
-    return MaskedJEPA(
-        encoder, predictor, mask_collator, anti_collapse,
-        pred_loss_type=pred_loss_type,
+
+def build_jepa(cfg, *, n_chans: int, n_times: int, chs_info,
+               n_windows: int) -> MaskedJEPA:
+    """Build a JEPA model from a config.
+
+    ``cfg.loss.objective`` selects the variant:
+
+    - ``"masked"`` (default): ``MaskedJEPA`` — within-subject masked prediction.
+    - ``"cross_subject"``: ``CrossSubjectJEPA`` — predict a different subject's
+      tokens at the same movie time. Requires ``PairedSubjectJEPADataset``,
+      which yields ``[B, 2, T, C, W]`` batches.
+
+    Both share the same submodule layout, so a checkpoint from either loads
+    into the encoder-only evaluators unchanged.
+
+    Args:
+        cfg: OmegaConf config with ``model``, ``loss``, ``masking`` sections.
+        n_chans / n_times / chs_info: dataset-derived inputs.
+        n_windows: number of windows per sample.
+
+    Returns:
+        A fully assembled model on CPU. The caller moves it to a device.
+    """
+    encoder, predictor, mask_collator, anti_collapse = _build_components(
+        cfg, n_chans=n_chans, n_times=n_times, chs_info=chs_info,
+        n_windows=n_windows,
+    )
+    pred_loss_type = cfg.loss.get("pred_loss_type", "mse")
+    objective = str(cfg.loss.get("objective", "masked"))
+
+    if objective == "masked":
+        return MaskedJEPA(
+            encoder, predictor, mask_collator, anti_collapse,
+            pred_loss_type=pred_loss_type,
+        )
+    if objective == "cross_subject":
+        cs_cfg = cfg.loss.get("cross_subject", {}) or {}
+        return CrossSubjectJEPA(
+            encoder, predictor, mask_collator, anti_collapse,
+            pred_loss_type=pred_loss_type,
+            symmetric=bool(cs_cfg.get("symmetric", True)),
+            context_mask_mode=str(cs_cfg.get("context_mask_mode", "masked")),
+            pred_target_mode=str(cs_cfg.get("pred_target_mode", "masked")),
+            within_subject_weight=float(cs_cfg.get("within_subject_weight", 0.0)),
+            diagnostic_every=int(cs_cfg.get("diagnostic_every", 50)),
+        )
+    raise ValueError(
+        f"Unknown loss.objective={objective!r}. Expected 'masked' or 'cross_subject'."
     )
 
 
