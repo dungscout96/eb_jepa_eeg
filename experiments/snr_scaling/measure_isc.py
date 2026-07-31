@@ -103,6 +103,14 @@ OBSERVED_PROBE_R = {
     "best_from_scratch_soft_tau0.05": 0.1517,
     "reve_warmstart": 0.1715,
 }
+# The (split, task) those numbers were measured on. CC_norm divides an observed
+# r by a ceiling, so BOTH must come from the same split and the same movie.
+# Pairing a test-split r against a val-split ceiling is exactly the mistake that
+# produced the retracted "48 % of ceiling / 2x headroom" claim (RESULTS.md 2.7),
+# and running this script on DespicableMe silently re-creates it in the task
+# axis as well. Emit CC_norm only on an exact match.
+OBSERVED_PROBE_SPLIT = "test"
+OBSERVED_PROBE_TASK = "ThePresent"
 
 # Bands. delta/theta carries the stimulus signal, alpha carries the variance
 # but is subject-specific. MEASURED on R5 val (RESULTS.md 2.4): delta/theta
@@ -415,7 +423,9 @@ def analyse_corrca(x: np.ndarray, subjects: list[str], sfreq: float,
 # ---------------------------------------------------------------------------
 
 def analyse_noise_ceiling(x: np.ndarray, sfreq: float, corrca: dict,
-                          seed: int, n_splits: int = 50) -> dict:
+                          seed: int, n_splits: int = 50,
+                          split: str = OBSERVED_PROBE_SPLIT,
+                          task: str = OBSERVED_PROBE_TASK) -> dict:
     """Sahani-Linden / split-half / Schoppe ceilings on the same data.
 
     Independent of the pairwise-ISC route in ``analyse_waveform`` /
@@ -423,9 +433,20 @@ def analyse_noise_ceiling(x: np.ndarray, sfreq: float, corrca: dict,
     variance decomposition. Agreement is the point -- see
     ``noise_ceiling.py`` for why the subject axis stands in for repeated
     trials, and what that means when citing the papers.
+
+    ``split``/``task`` gate the CC_norm columns only; every ceiling below is
+    computed from ``x`` alone and is always valid.
     """
     n_rec, n_anchors, n_chans, n_times = x.shape
-    out: dict = {"observed_probe_r": dict(OBSERVED_PROBE_R)}
+    comparable = (split == OBSERVED_PROBE_SPLIT and task == OBSERVED_PROBE_TASK)
+    probe_r = dict(OBSERVED_PROBE_R) if comparable else {}
+    out: dict = {"observed_probe_r": probe_r}
+    if not comparable:
+        out["cc_norm_skipped_because"] = (
+            f"OBSERVED_PROBE_R was measured on {OBSERVED_PROBE_SPLIT}/"
+            f"{OBSERVED_PROBE_TASK}; this run is {split}/{task}. CC_norm needs "
+            "the observed r and the ceiling from the same split and movie.")
+        logger.warning("CC_norm suppressed: %s", out["cc_norm_skipped_because"])
 
     # (1) Window-level band power -- the probe's unit of analysis.
     power = band_log_power(x, sfreq)                       # [R, A, C, B]
@@ -461,7 +482,7 @@ def analyse_noise_ceiling(x: np.ndarray, sfreq: float, corrca: dict,
             },
             "cc_norm_at_k1": {
                 name: noise_ceiling.cc_norm(v, sl["SP"], sl["NP"], 1)
-                for name, v in OBSERVED_PROBE_R.items()
+                for name, v in probe_r.items()
             },
         }
     out["bands"] = per_band
@@ -480,7 +501,7 @@ def analyse_noise_ceiling(x: np.ndarray, sfreq: float, corrca: dict,
             },
             "cc_norm_at_k1": {
                 name: (v / ceiling(combined, 1)) if combined > 0 else float("nan")
-                for name, v in OBSERVED_PROBE_R.items()
+                for name, v in probe_r.items()
             },
         }
     return out
@@ -532,7 +553,8 @@ def main() -> None:
     logger.info("CorrCA (cross-validated)...")
     corrca = analyse_corrca(x, subjects, sfreq, args.n_components, args.seed)
     logger.info("Noise ceilings (Sahani-Linden / split-half / Schoppe)...")
-    ceilings = analyse_noise_ceiling(x, sfreq, corrca, args.seed, args.n_splits)
+    ceilings = analyse_noise_ceiling(x, sfreq, corrca, args.seed, args.n_splits,
+                                     split=args.split, task=args.task)
 
     # The headline rho1 candidates, in increasing order of what a probe can
     # exploit. The CorrCA held-out number is the one the paper should quote.
@@ -612,9 +634,12 @@ def main() -> None:
               f"-> CC_max K=1 {cc['cc_max_by_k']['1']:.3f}, "
               f"K=10 {cc['cc_max_by_k']['10']:.3f}, "
               f"K=50 {cc['cc_max_by_k']['50']:.3f}")
-        print("  CC_norm at K=1 (1.0 = at the ceiling):")
-        for name, v in cc["cc_norm_at_k1"].items():
-            print(f"    {name:<34}{v:6.3f}")
+        if cc["cc_norm_at_k1"]:
+            print("  CC_norm at K=1 (1.0 = at the ceiling):")
+            for name, v in cc["cc_norm_at_k1"].items():
+                print(f"    {name:<34}{v:6.3f}")
+        else:
+            print(f"  CC_norm skipped -- {ceilings['cc_norm_skipped_because']}")
     print(f"\nWrote {args.output}")
 
 

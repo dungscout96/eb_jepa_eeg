@@ -251,6 +251,46 @@ Deliverable: `r(A, S)` surface + fitted exponents. If `r` scales with `S` but
 saturates in `A` (or vice versa), that single sentence is the paper's most
 quotable result.
 
+**Why `A` is in the design at all.** `S` buys repeats of the same stimulus —
+the Spearman-Brown axis E0.1/E0.2 already measured, where each subject shrinks
+noise on an anchor's target. `A` buys *new stimulus conditions*: it reduces no
+noise anywhere, it adds constraints and enlarges the covered region of V-JEPA-2
+space. Those are different failure modes and `r` alone cannot separate them.
+The thesis — EEG is SNR-limited, subjects are the currency — survives **only**
+if `r` climbs in `S` while flattening in `A`. If it is the other way round, the
+bottleneck was never noise, and the honest paper is about stimulus coverage.
+`A` is the axis that can falsify the claim, which is why it is worth ~4 runs.
+It also pre-empts the first reviewer objection: 101 anchors against
+image-decoding datasets with thousands of distinct stimuli invites "your
+ceiling is an anchor-count artifact," and a flat measured `r(A)` answers that
+with a curve instead of a paragraph.
+
+**An out-of-distribution `A` point already exists — jul2 multi-movie.**
+The same subjects watch both HBN movies (98.9 % of R1–R4 TP subjects also have
+DM; §2.9 of [RESULTS.md](RESULTS.md)), so
+[`scene_clip_multimovie/autoresearch/`](../clip_pretraining/scene_clip_multimovie/autoresearch/RESULTS_autoresearch_jul2_multimovie.md)
+is close to an `A`-only manipulation: **anchors +84 %** (101 → 186), **subjects
++7 %** (703 → 753 union). Result: TP per-domain Δr² went **+0.0505 → +0.0447**,
+i.e. *down*, and jul2's own diagnostics already rule out the two easy
+rebuttals — 2× wider and 2× deeper both come back tied (+0.0007, +0.0006), so
+"the encoder was too small to exploit the new anchors" is tested and rejected.
+
+Two caveats to state rather than let a reviewer find:
+- The added anchors are **out-of-distribution** (DM is 25 fps animated vs TP
+  live action), so this bounds *"do OOD anchors help?"*, not the
+  in-distribution `A` slope. The within-TP sweep is still required.
+- Steps are not matched: at ~2× data per epoch, multi-movie ep400 got ~1.6× the
+  updates of single-movie ep500, and jul2 found >400-equivalent *degrades*.
+  Both effects cut conservatively for the "anchors are not binding" reading.
+
+This also lifts the `A ≤ 101` cap the movie length otherwise imposes: TP+DM
+gives a real `A = 186` cell at fixed cohort, labelled OOD.
+
+Together the two close the anchor-count objection from both sides —
+*in-distribution anchors have saturated* **and** *out-of-distribution anchors do
+not help* — which is a sharper claim than either alone, and converts jul2's
+negative-transfer dead end into a result this paper needs.
+
 ---
 
 ## Tier 1 — the method. Cross-subject JEPA as a subject-efficiency claim.

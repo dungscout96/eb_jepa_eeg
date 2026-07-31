@@ -53,9 +53,16 @@ the record of what has been measured. Commits `b4492fe`, `6dd992d`, `fdf0b3b`.
 9. **The retrieval metric hides a collapse** (§2.7): the model answers "scene 0"
    — the black title card — for 40.6 % of test windows while it is correct 5.0 %
    of the time. Report the modal-answer share alongside Top-K.
-10. Two artifacts found and fixed that would have corrupted the headline: a flat
+10. **The ceiling replicates on a second movie with the same subjects** (§2.9).
+   DespicableMe gives `rho1 = 0.0922`, ceiling **0.304** vs ThePresent's 0.313 —
+   a 3 % difference — and the δ/θ-over-α ratio replicates at 3.06 vs 2.84. The
+   cohorts are 98.9 % shared, so stimulus is the only thing varying. Say
+   "replicates across movies within HBN," not "replicates."
+11. Two artifacts found and fixed that would have corrupted the headline: a flat
    reference channel faking ISC ≈ 0.4, and CorrCA component 1 failing to
-   generalise despite the largest in-sample eigenvalue.
+   generalise despite the largest in-sample eigenvalue — the latter now known to
+   be **rank-unstable across movies** (§2.9), which is a stronger reason to avoid
+   any fixed-rank component statistic.
 
 ---
 
@@ -464,6 +471,66 @@ should encode each and average embeddings. Methodologically, **classical
 ERP-style signal averaging is the wrong aggregation point for a learned
 encoder**, which is not obvious a priori and is worth stating in the paper.
 
+### 2.9 The ceiling replicates on a second movie, same subjects
+
+Everything above rests on one 3-minute film, which invites the obvious
+objection that **0.313 is a fact about ThePresent, not about EEG**. HBN affords
+a clean test: the same subjects watch DespicableMe. Measured directly from
+`/projects/bbnv/kkokate/hbn_preprocessed`, the cohorts are near-identical —
+**292 / 296** shared in R5 val, **695 / 703** (98.9 %) across R1–R4. Subjects,
+montage, preprocessing, and estimator are held fixed; only the stimulus varies.
+
+R5 val, both movies, identical command modulo `--task`:
+
+| statistic | ThePresent | DespicableMe |
+|---|---:|---:|
+| recordings / anchors | 293 / 101 | 299 / 85 |
+| waveform, mean over channels | 0.0096 | 0.0103 |
+| waveform, best channel | 0.0228 | 0.0261 |
+| δ/θ ISC, mean over channels | 0.0396 | 0.0313 |
+| α ISC, mean over channels | 0.0139 | 0.0102 |
+| **δθ / α ratio** | **2.84** | **3.06** |
+| **CorrCA combined `rho1`** | **0.0982** | **0.0922** |
+| **ceiling, K=1** | **0.313** | **0.304** |
+| ceiling, K=10 | 0.722 | 0.710 |
+| ceiling, K=50 | 0.919 | 0.914 |
+
+**The headline number moves by 3 %** (0.313 → 0.304) across a live-action short
+and a 25 fps animated feature. The δ/θ-over-α ratio — the *mechanism* claim of
+§2.4 — replicates at 3.06 vs 2.84. The ceiling behaves like a property of
+stimulus-locked EEG under this pipeline rather than of one film.
+
+**What this does and does not license.** It generalises across *stimulus*, with
+cohort held fixed. It does **not** generalise across cohort, montage,
+preprocessing, or recording site — those are constant by construction here, and
+a second dataset would be needed to speak to them. State it as "replicates
+across movies within HBN," not "replicates."
+
+**Do not pair the DM ceiling with any TP probe number.** No probe has been
+trained or evaluated on DespicableMe, so there is no CC_norm for this column.
+The first DM run printed one anyway, because `OBSERVED_PROBE_R` in
+[`measure_isc.py`](measure_isc.py) is hardcoded to R6-test/ThePresent values —
+the same split-mismatch class of error as §2.2, now in the task axis too. The
+script now refuses to emit CC_norm unless the run's `(split, task)` matches
+where those probe numbers came from, with tests covering all three mismatch
+cases.
+
+**A second CorrCA finding, which tightens §3.2.** The non-generalising component
+is present in both movies but **at a different rank**:
+
+| rank | TP in-sample | TP held-out | DM in-sample | DM held-out |
+|---|---:|---:|---:|---:|
+| 1 | 0.2014 | **0.0019** | 0.0535 | 0.0492 |
+| 2 | 0.0582 | 0.0450 | 0.0428 | **0.0003** |
+| 3 | 0.0421 | 0.0402 | 0.0257 | 0.0296 |
+
+TP's component 1 has by far the largest in-sample eigenvalue and essentially
+zero held-out ISC; DM's component 1 generalises fine and its **component 2** is
+the dead one. So "take the top component" is not merely suboptimal (§3.2) — the
+rank of the bad component is **not stable across stimuli**, and any statistic
+keyed to a fixed rank would be movie-dependent. The max-component and
+SNR-combined statistics used throughout are unaffected.
+
 ## §3. Two artifacts that would have corrupted the headline
 
 ### 3.1 A flat reference channel faking ISC ≈ 0.4
@@ -623,6 +690,9 @@ Subject draws are seeded (`--seed`, default 0); the `n ≤ 16` rows are means ov
 - `isc_val_ThePresent.json`, `isc_test_ThePresent.json` — per-channel waveform
   and band ISC, cross-validated CorrCA, all three literature ceilings,
   Spearman-Brown tables, and CC_norm against the measured probe results.
+- `isc_val_DespicableMe.json` — §2.9, the same-cohort second-movie replication.
+  Carries **no** CC_norm by design: `OBSERVED_PROBE_R` is R6-test/ThePresent, so
+  the script suppresses it and records `cc_norm_skipped_because` instead.
 - `snr_scaling.png` / `.pdf` — ceiling vs K, and the (anchors × subjects)
   design space.
 - `k_averaging.png` / `.pdf` — E0.2 two-panel figure (Spearman-Brown
@@ -642,12 +712,14 @@ Subject draws are seeded (`--seed`, default 0); the `n ≤ 16` rows are means ov
 - [`noise_ceiling.py`](noise_ceiling.py) — Sahani-Linden, split-half, Schoppe.
 - [`scaling_calculator.py`](scaling_calculator.py) — analytic design calculator.
 - [`_submit_isc.py`](_submit_isc.py) — Delta submission.
-- [`tests/test_isc_estimator.py`](../../tests/test_isc_estimator.py) (13),
+- [`tests/test_isc_estimator.py`](../../tests/test_isc_estimator.py) (15),
   [`tests/test_noise_ceiling.py`](../../tests/test_noise_ceiling.py) (40),
   [`tests/test_k_averaging.py`](../../tests/test_k_averaging.py) (20) —
   rho1 recovery against planted ground truth, Spearman-Brown agreement with
   direct averaging, the CC_max ≡ Spearman-Brown identity, the standardised-SL
-  ≡ ISC identity, and regression tests for both artifacts in §3.
+  ≡ ISC identity, regression tests for both artifacts in §3, and the
+  CC_norm split/task gate (all three mismatch cases, plus a check that the gate
+  leaves every ceiling untouched).
 
 ---
 
@@ -662,15 +734,30 @@ Subject draws are seeded (`--seed`, default 0); the `n ≤ 16` rows are means ov
   saturation looked like unclaimed headroom. Now that the checkpoints measure at
   83–88 % of ceiling (§2.2), a ceiling effect is the simpler explanation and
   E0.3 answers a different question — whether *training* is anchor-limited,
-  which is separate from whether *readout* is ceiling-limited.
+  which is separate from whether *readout* is ceiling-limited. **Partly
+  pre-answered:** jul2 multi-movie is a near-clean OOD anchor point (+84 % `A`,
+  +7 % `S`) and adding anchors made TP *worse*; the within-TP `A` sweep is what
+  remains. See E0.3 in [`PLAN.md`](PLAN.md).
 - **E2.1** — subject-trait probes on the LeJEPA / Laya / random checkpoints.
 - More than 5 CorrCA components, to tighten the ceiling from below.
-- DespicableMe, and a ceiling for the multi-movie regime.
+- ~~DespicableMe ceiling~~ — **done, §2.9.** A ceiling for the *multi-movie
+  training regime* is still open, as is any probe evaluated on DespicableMe
+  (without one there is no DM CC_norm).
 
 [`PLAN.md`](PLAN.md) has been updated for §2.2 and §4.1 (thesis, consequence
-(a), and the run table). [`paper/workshop_outline.md`](../../paper/workshop_outline.md)
+(a), and the run table) and for §2.9 (E0.3 now carries the shared-cohort fact
+and the jul2 OOD anchor point).
+[`paper/workshop_outline.md`](../../paper/workshop_outline.md)
 has **not** — its §5 still argues "objective-limited vs SNR-limited" and its
 tables still carry pre-correction numbers. Rewrite it before drafting.
+
+Two upstream docs were corrected for the shared-cohort fact, since both
+attributed multi-movie negative transfer partly to a second *subject pool*:
+[`scene_clip_multimovie/NOTES.md`](../clip_pretraining/scene_clip_multimovie/NOTES.md)
+and
+[`RESULTS_autoresearch_jul2_multimovie.md`](../clip_pretraining/scene_clip_multimovie/autoresearch/RESULTS_autoresearch_jul2_multimovie.md).
+The domain-shift verdict survives — it is strengthened, since a constant cohort
+removes an alternative explanation — but the stated mechanism was wrong.
 
 ---
 

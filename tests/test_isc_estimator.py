@@ -133,3 +133,52 @@ def test_corrca_covariances_recover_a_planted_spatial_filter():
     top = np.abs(w[:, 0])
     assert int(np.argmax(top)) == 2
     assert eigs[0] > eigs[1]
+
+
+def _tiny_corrca_input(seed=0):
+    """Small [rec, anchor, chan, time] block plus a matching corrca dict."""
+    rng = np.random.default_rng(seed)
+    x = rng.standard_normal((8, 12, 4, 400)).astype(np.float32)
+    return x, {"held_out_waveform_isc": [0.05, 0.03, 0.01]}
+
+
+def test_cc_norm_is_emitted_only_on_the_split_and_task_it_was_measured_on():
+    """CC_norm divides an observed probe r by a ceiling, so both must come from
+    the same split AND the same movie. Pairing a test-split ThePresent r with a
+    val-split DespicableMe ceiling is the split-mismatch class of error that
+    forced a retraction once already; the estimator must refuse it rather than
+    print a plausible-looking number."""
+    x, corrca = _tiny_corrca_input()
+
+    ok = measure_isc.analyse_noise_ceiling(
+        x, 200.0, corrca, seed=0, n_splits=4,
+        split=measure_isc.OBSERVED_PROBE_SPLIT,
+        task=measure_isc.OBSERVED_PROBE_TASK)
+    assert ok["observed_probe_r"] == measure_isc.OBSERVED_PROBE_R
+    assert ok["corrca_combined"]["cc_norm_at_k1"]
+    assert "cc_norm_skipped_because" not in ok
+
+    for split, task in [("val", "ThePresent"),          # wrong split
+                        ("test", "DespicableMe"),        # wrong movie
+                        ("val", "DespicableMe")]:        # both wrong
+        bad = measure_isc.analyse_noise_ceiling(
+            x, 200.0, corrca, seed=0, n_splits=4, split=split, task=task)
+        assert bad["observed_probe_r"] == {}
+        assert bad["corrca_combined"]["cc_norm_at_k1"] == {}
+        assert "cc_norm_skipped_because" in bad
+        for band in bad["bands"].values():
+            assert band["cc_norm_at_k1"] == {}
+
+
+def test_ceilings_themselves_are_unaffected_by_the_cc_norm_gate():
+    """The gate must suppress only CC_norm -- every ceiling is computed from the
+    data alone and stays valid on any split/task."""
+    x, corrca = _tiny_corrca_input(seed=3)
+    a = measure_isc.analyse_noise_ceiling(x, 200.0, corrca, seed=0, n_splits=4,
+                                          split="test", task="ThePresent")
+    b = measure_isc.analyse_noise_ceiling(x, 200.0, corrca, seed=0, n_splits=4,
+                                          split="val", task="DespicableMe")
+    assert a["corrca_combined"]["reliability"] == b["corrca_combined"]["reliability"]
+    assert a["corrca_combined"]["cc_max_by_k"] == b["corrca_combined"]["cc_max_by_k"]
+    for band in a["bands"]:
+        assert a["bands"][band]["cc_max_by_k"] == b["bands"][band]["cc_max_by_k"]

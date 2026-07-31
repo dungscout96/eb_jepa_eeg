@@ -9,25 +9,33 @@ single-movie sweep.
 
 ## Hypothesis
 
+> **⚠️ CORRECTION (2026-07-31).** This section originally described the second
+> movie as bringing a second *subject pool*. It does not — **the same subjects
+> watch both movies** (98.9 % of R1–R4 TP subjects also have DM; 292/296 in R5
+> val; counts in
+> [`autoresearch/RESULTS_autoresearch_jul2_multimovie.md`](autoresearch/RESULTS_autoresearch_jul2_multimovie.md)).
+> Adding DM is therefore a **stimulus-diversity** manipulation at essentially
+> fixed cohort: anchors +84 % (101 → 186 distinct 2 s windows), subjects +7 %
+> (703 → 753 union). The text below is corrected accordingly.
+
 Three possible outcomes — the run will tell us which:
 
-1. **Multi-movie helps** (positive transfer): more diverse vision targets +
-   subject pools → encoder learns a more general EEG→vision representation
+1. **Multi-movie helps** (positive transfer): more diverse vision targets →
+   encoder learns a more general EEG→vision representation
    → higher Δr on both ThePresent and DespicableMe probes than single-movie
    training on either alone.
 2. **Multi-movie hurts** (negative transfer / interference): the two movies
-   share a teacher (V-JEPA-2) but the EEG distribution shifts between subject
-   pools / recording sessions. Forcing one encoder to align to both could
-   degrade per-movie alignment.
+   share a teacher (V-JEPA-2), but each movie induces its own EEG→vision
+   mapping. Forcing one encoder to align to both could degrade per-movie
+   alignment.
 3. **Multi-movie is neutral**: per-movie probes look similar to single-movie
    baselines.
 
 Prior on outcomes: contrastive learning *generally* benefits from larger,
-more diverse training sets, so #1 is the default expectation. But the
-EEG-side variance from a second subject pool (R1-R4 watching DespicableMe is
-the same release set as R1-R4 watching ThePresent, but the per-recording
-EEG is different) could either help (regularization) or hurt (signal
-dilution).
+more diverse training sets, so #1 is the default expectation. The countervailing
+risk is **not** subject heterogeneity — the cohort is held fixed — but capacity
+competition between two target distributions inside one encoder. (Outcome #2 is
+what happened; see the diagnostic verdict in the results doc.)
 
 ## What's new vs single-movie
 
