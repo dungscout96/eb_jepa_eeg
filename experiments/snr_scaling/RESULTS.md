@@ -7,7 +7,7 @@ Establishes what fraction of the achievable signal the CLIP/JEPA checkpoints in
 so results can be reported as *r*/ceiling rather than raw *r*.
 
 Forward-looking experiment design lives in [`PLAN.md`](PLAN.md); this file is
-the record of what has been measured. Commits `b4492fe`, `6dd992d`.
+the record of what has been measured. Commits `b4492fe`, `6dd992d`, `fdf0b3b`.
 
 ---
 
@@ -34,18 +34,26 @@ the record of what has been measured. Commits `b4492fe`, `6dd992d`.
    Measured best-channel δ/θ = 0.062 vs α = 0.029 (2.1×);
    [`experiments.md` § "Core Problem Identified"](../../experiments.md#core-problem-identified) cites 0.10–0.28 vs
    <0.05. **Quote the measured numbers.**
-6. **Test-time subject aggregation is worth far more than any objective.**
-   Ceiling rises 0.313 → 0.722 at K=10 → 0.919 at K=50. Single-trial work is
-   capped at ~2×; aggregation offers ~3×.
-7. **Subjects buy SNR; seconds do not.** Measured directly on Top-K retrieval
+6. **Test-time subject aggregation is worth far more than any objective, and
+   this is now measured rather than extrapolated** (E0.2, §2.8). Probe *r*
+   rises **0.289 → 0.742** from K=1 to K=128 — a **2.6× gain**, monotone, not
+   saturating — against ~1.15–1.2× of single-trial headroom left. Spearman-Brown
+   is validated to within 3–20 %, converging to 3 % at K=128, and the deviation
+   errs *upward*, the opposite of the failure mode the test was built to catch.
+7. **Aggregate AFTER the encoder, not before** (§2.8). Embedding-space averaging
+   beats signal-space at every K and the gap widens (0.742 vs 0.490 at K=128);
+   signal-space is even non-monotonic. The encoder is strongly non-linear in the
+   noise, so **classical ERP-style signal averaging is the wrong aggregation
+   point for a learned encoder**.
+8. **Subjects buy SNR; seconds do not.** Measured directly on Top-K retrieval
    (§2.6): scene Top-1 goes 0.217 → 0.571 with subject averaging, but pooling
    more seconds *within* a subject gains ~0.015 and then degrades — and the
    oracle-segment upper bound confirms that is the ceiling, not a blocking
    artifact. This closes the free alternative to collecting subjects.
-8. **The retrieval metric hides a collapse** (§2.7): the model answers "scene 0"
+9. **The retrieval metric hides a collapse** (§2.7): the model answers "scene 0"
    — the black title card — for 40.6 % of test windows while it is correct 5.0 %
    of the time. Report the modal-answer share alongside Top-K.
-9. Two artifacts found and fixed that would have corrupted the headline: a flat
+10. Two artifacts found and fixed that would have corrupted the headline: a flat
    reference channel faking ISC ≈ 0.4, and CorrCA component 1 failing to
    generalise despite the largest in-sample eigenvalue.
 
@@ -394,6 +402,60 @@ first guesses landing on one pool entry is not visible in Top-K.
 
 ---
 
+### 2.8 E0.2 — the K-averaging curve, measured
+
+Job 20654647, R5 val, 293 subjects, 101 anchors, 20 draws per K, best
+from-scratch checkpoint (soft τ=0.05 seed 2026). Ridge heads fit on the full
+train split. Artifacts: [`k_averaging_val.json`](k_averaging_val.json), code
+[`k_averaging.py`](k_averaging.py).
+
+| K | R(K) measured | R(K) Spearman-Brown from measured R(1) | ratio | probe *r* embedding-space | probe *r* signal-space |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 0.0515 | 0.0515 (anchor) | — | 0.289 | 0.271 |
+| 2 | 0.1178 | 0.0980 | 1.20 | 0.387 | 0.337 |
+| 4 | 0.2087 | 0.1784 | 1.17 | 0.456 | 0.281 |
+| 8 | 0.3564 | 0.3029 | 1.18 | 0.541 | 0.347 |
+| 16 | 0.5148 | 0.4649 | 1.11 | 0.627 | 0.382 |
+| 32 | 0.6941 | 0.6347 | 1.09 | 0.692 | 0.434 |
+| 64 | 0.8152 | 0.7766 | 1.05 | 0.725 | 0.443 |
+| 128 | 0.9019 | 0.8742 | 1.03 | **0.742** | 0.490 |
+
+**(a) Spearman-Brown holds in shape, and errs conservatively.** Anchored at the
+measured single-subject reliability, the predicted curve tracks the measurement
+within 3–20 %, and the gap closes monotonically as K grows. Crucially the
+deviation is *upward* — measured reliability grows slightly **faster** than
+predicted — which is the opposite of the failure mode the test was designed to
+catch (correlated non-stimulus structure across subjects would have made
+aggregation saturate early). The cause of the small excess is not established.
+**The test-time aggregation argument survives.**
+
+**(b) Aggregation is a large, real lever.** Probe *r* rises 0.289 → 0.742, a
+**2.6× gain**, monotonically, with no sign of saturating by K=128. Compare with
+the ~1.15–1.2× of single-trial headroom left to objective work (§2.2). This is
+now the strongest quantitative support for the thesis.
+
+This is an *independent* confirmation of §2.6, not a restatement: §2.6 measures
+subject aggregation on Top-K retrieval (scene Top-1 0.217 → 0.571), a metric
+that never enters the ceiling calculation, while this measures it on the
+continuous-feature probe against the ceiling directly. Two different metrics,
+same conclusion, same order of magnitude.
+
+**(c) Aggregate AFTER the encoder, not before.** Embedding-space averaging beats
+signal-space at every K, and the gap widens with K (0.742 vs 0.490 at K=128).
+Signal-space is also **non-monotonic** — it drops from 0.337 at K=2 to 0.281 at
+K=4 before recovering — which a genuine SNR gain cannot do.
+
+The likely cause is distribution shift: the encoder was trained on
+single-recording inputs normalised per recording, and a K-subject average has
+noise variance shrunk by ~K, so its amplitude statistics are increasingly
+out-of-distribution as K grows. The encoder is therefore **strongly non-linear
+in the noise** — had it been linear the two curves would coincide.
+
+Two consequences. Practically, a deployed system pooling several recordings
+should encode each and average embeddings. Methodologically, **classical
+ERP-style signal averaging is the wrong aggregation point for a learned
+encoder**, which is not obvious a priori and is worth stating in the paper.
+
 ## §3. Two artifacts that would have corrupted the headline
 
 ### 3.1 A flat reference channel faking ISC ≈ 0.4
@@ -434,54 +496,6 @@ reported quantities are the max component and the SNR-additive combination.
 
 ## §4. What this means
 
-### 2.8 E0.2 — the K-averaging curve, measured
-
-Job 20654647, R5 val, 293 subjects, 101 anchors, 20 draws per K, best
-from-scratch checkpoint (soft τ=0.05 seed 2026). Ridge heads fit on the full
-train split. Artifacts: [`k_averaging_val.json`](k_averaging_val.json), code
-[`k_averaging.py`](k_averaging.py).
-
-| K | R(K) measured | R(K) Spearman-Brown from measured R(1) | ratio | probe *r* embedding-space | probe *r* signal-space |
-|---:|---:|---:|---:|---:|---:|
-| 1 | 0.0515 | 0.0515 (anchor) | — | 0.289 | 0.271 |
-| 2 | 0.1178 | 0.0980 | 1.20 | 0.387 | 0.337 |
-| 4 | 0.2087 | 0.1784 | 1.17 | 0.456 | 0.281 |
-| 8 | 0.3564 | 0.3029 | 1.18 | 0.541 | 0.347 |
-| 16 | 0.5148 | 0.4649 | 1.11 | 0.627 | 0.382 |
-| 32 | 0.6941 | 0.6347 | 1.09 | 0.692 | 0.434 |
-| 64 | 0.8152 | 0.7766 | 1.05 | 0.725 | 0.443 |
-| 128 | 0.9019 | 0.8742 | 1.03 | **0.742** | 0.490 |
-
-**(a) Spearman-Brown holds in shape, and errs conservatively.** Anchored at the
-measured single-subject reliability, the predicted curve tracks the measurement
-within 3–20 %, and the gap closes monotonically as K grows. Crucially the
-deviation is *upward* — measured reliability grows slightly **faster** than
-predicted — which is the opposite of the failure mode the test was designed to
-catch (correlated non-stimulus structure across subjects would have made
-aggregation saturate early). The cause of the small excess is not established.
-**The test-time aggregation argument survives.**
-
-**(b) Aggregation is a large, real lever.** Probe *r* rises 0.289 → 0.742, a
-**2.6× gain**, monotonically, with no sign of saturating by K=128. Compare with
-the ~1.15–1.2× of single-trial headroom left to objective work (§2.2). This is
-now the strongest quantitative support for the thesis.
-
-**(c) Aggregate AFTER the encoder, not before.** Embedding-space averaging beats
-signal-space at every K, and the gap widens with K (0.742 vs 0.490 at K=128).
-Signal-space is also **non-monotonic** — it drops from 0.337 at K=2 to 0.281 at
-K=4 before recovering — which a genuine SNR gain cannot do.
-
-The likely cause is distribution shift: the encoder was trained on
-single-recording inputs normalised per recording, and a K-subject average has
-noise variance shrunk by ~K, so its amplitude statistics are increasingly
-out-of-distribution as K grows. The encoder is therefore **strongly non-linear
-in the noise** — had it been linear the two curves would coincide.
-
-Two consequences. Practically, a deployed system pooling several recordings
-should encode each and average embeddings. Methodologically, **classical
-ERP-style signal averaging is the wrong aggregation point for a learned
-encoder**, which is not obvious a priori and is worth stating in the paper.
-
 ### 4.1 The saturation IS consistent with a ceiling effect
 
 *(Reversed 2026-07-31. The previous text here claimed the ceiling hypothesis
@@ -510,14 +524,17 @@ from why *readout* saturates. E0.3 still separates them.
 
 ### 4.2 Aggregation beats objectives, by a lot
 
-The ceiling at K=1 is 0.313; at K=10 it is 0.722 and at K=50, 0.919. Objective
-work is bounded by ~2× improvement; test-time subject aggregation offers ~3×
-on top of that, and K_train aggregation in the objective is the mechanism for
+**Both sides of this are now measured, not extrapolated.** Objective work has
+~1.15–1.2× left at K=1 (§2.2). Test-time subject aggregation delivers a
+measured **2.6×** on the probe — *r* 0.289 → 0.742 from K=1 to K=128, monotone
+and not saturating (§2.8) — with the ceiling itself rising 0.313 → 0.722 at
+K=10 → 0.919 at K=50. K_train aggregation in the objective is the mechanism for
 approaching the K=1 ceiling. Any scaling law reported for this pipeline should
-be **2-D over (K_train, K_test)** — single-trial-only numbers understate the
-available effect by ~3×.
+be **2-D over (K_train, K_test)**; single-trial-only numbers understate the
+available effect roughly 2×.
 
-§2.6 measures this end-to-end rather than extrapolating it: on Top-K retrieval,
+Two independent metrics agree on the magnitude. §2.6 measures it on Top-K
+retrieval, which never enters the ceiling calculation:
 subject averaging takes scene Top-1 from 0.217 to 0.571 and saturates Top-5 at
 1.000 by ~16 subjects. The magnitude is consistent with the Spearman-Brown
 prediction above, on a metric that never enters the ceiling calculation.
@@ -593,6 +610,8 @@ Subject draws are seeded (`--seed`, default 0); the `n ≤ 16` rows are means ov
 ## §6. Artifacts
 
 **Results:**
+- `k_averaging_val.json` — E0.2: empirical R(K), Spearman-Brown prediction, and
+  probe *r* vs K in both embedding- and signal-space.
 - `isc_val_ThePresent.json`, `isc_test_ThePresent.json` — per-channel waveform
   and band ISC, cross-validated CorrCA, all three literature ceilings,
   Spearman-Brown tables, and CC_norm against the measured probe results.
@@ -604,7 +623,9 @@ Subject draws are seeded (`--seed`, default 0); the `n ≤ 16` rows are means ov
   checkpoint provenance travels inside the file.
 
 **Code:**
-- [`measure_isc.py`](measure_isc.py) — the measurement.
+- [`measure_isc.py`](measure_isc.py) — the E0.1 measurement.
+- [`k_averaging.py`](k_averaging.py) + [`_submit_k_averaging.py`](_submit_k_averaging.py)
+  — E0.2.
 - [`aggregation_curves.py`](aggregation_curves.py) — §2.6 / §2.7 curves.
   Depends on `demo/export_retrieval_npz.py` for *data* only; it imports nothing
   from `demo/`.
@@ -612,7 +633,8 @@ Subject draws are seeded (`--seed`, default 0); the `n ≤ 16` rows are means ov
 - [`scaling_calculator.py`](scaling_calculator.py) — analytic design calculator.
 - [`_submit_isc.py`](_submit_isc.py) — Delta submission.
 - [`tests/test_isc_estimator.py`](../../tests/test_isc_estimator.py) (13),
-  [`tests/test_noise_ceiling.py`](../../tests/test_noise_ceiling.py) (40) —
+  [`tests/test_noise_ceiling.py`](../../tests/test_noise_ceiling.py) (40),
+  [`tests/test_k_averaging.py`](../../tests/test_k_averaging.py) (20) —
   rho1 recovery against planted ground truth, Spearman-Brown agreement with
   direct averaging, the CC_max ≡ Spearman-Brown identity, the standardised-SL
   ≡ ISC identity, and regression tests for both artifacts in §3.
@@ -621,24 +643,25 @@ Subject draws are seeded (`--seed`, default 0); the `n ≤ 16` rows are means ov
 
 ## §7. Open
 
-- **E0.2** — empirical K-averaging curve, to validate the Spearman-Brown
-  extrapolation the K_test argument now leans on more heavily. **Partially
-  addressed by §2.6**: the K curve is measured end-to-end on Top-K retrieval and
-  agrees in magnitude, but `rho1(K)` / `r(K)` themselves are still unmeasured,
-  which is what would validate the extrapolation on its own terms.
-- **E0.3** — the (anchors × subjects) scaling surface, now the leading
-  explanation for the objective saturation.
+- ~~**E0.2**~~ — **done, §2.8.** `R(K)` and `r(K)` are both measured;
+  Spearman-Brown validated to 3–20 % and erring conservatively. §2.6 had
+  partially addressed it on the retrieval metric; §2.8 closes it on the probe
+  and on the extrapolation's own terms.
+- **E0.3** — the (anchors × subjects) scaling surface. Still worth running, but
+  demoted: it was the leading explanation for the objective saturation when that
+  saturation looked like unclaimed headroom. Now that the checkpoints measure at
+  83–88 % of ceiling (§2.2), a ceiling effect is the simpler explanation and
+  E0.3 answers a different question — whether *training* is anchor-limited,
+  which is separate from whether *readout* is ceiling-limited.
 - **E2.1** — subject-trait probes on the LeJEPA / Laya / random checkpoints.
 - More than 5 CorrCA components, to tighten the ceiling from below.
 - DespicableMe, and a ceiling for the multi-movie regime.
 
-Thesis framing in [`PLAN.md`](PLAN.md) and
-[`paper/workshop_outline.md`](../../paper/workshop_outline.md) still describes
-this line as "objective-limited vs SNR-limited" and **has not been updated**
-for §4.1. That rewrite needs a decision on how hard to lean on the
-anchor-count explanation.
+[`PLAN.md`](PLAN.md) has been updated for §2.2 and §4.1 (thesis, consequence
+(a), and the run table). [`paper/workshop_outline.md`](../../paper/workshop_outline.md)
+has **not** — its §5 still argues "objective-limited vs SNR-limited" and its
+tables still carry pre-correction numbers. Rewrite it before drafting.
 
 ---
 
-*E0.1 of [`PLAN.md`](PLAN.md) is complete. E0.2 is partially addressed by §2.6.
-Next: E0.2 proper (`rho1(K)`), then E0.3.*
+*E0.1 and E0.2 of [`PLAN.md`](PLAN.md) are complete. Next: E2.1, then E0.3.*
