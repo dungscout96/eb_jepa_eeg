@@ -1,0 +1,168 @@
+"""Submit the E0.3 (anchors x subjects) data-scaling surface on Delta.
+
+Retrains the jul7 best from-scratch recipe -- TP-only soft_target_clip,
+alpha=0.5, tau=0.05, seed 2026 -- while subsampling the two data axes
+independently, then probes each cell on the FULL val anchor set.
+
+Verified against the jul7 checkpoint rather than assumed:
+``latest.pth.tar`` reports ``{'epoch': 399, 'step': 4400}``, i.e. 400 epochs at
+11 steps/epoch = ceil(703 / 64), with ``n_windows: 1``.
+
+Two protocol requirements from PLAN.md E0.3, and how each is met:
+
+**Hold gradient steps constant, not epochs.** ``data.epoch_size=703`` on every
+cell, so ``len(dataset)`` -- and therefore steps/epoch -- is 703/64 -> 11
+regardless of how many subjects survive subsampling. Every cell runs exactly
+4400 steps under an identical LR schedule. The naive alternative (scale epochs
+as 703/S) would need 5624 epochs at S=50 and per-epoch overhead would dominate.
+
+**Always evaluate on the full anchor set.** The knobs are applied to the train
+dataset only (see ``clip_pretrain.py``); the val loader and the probe build
+their own datasets with no subsampling, so retrieval chance levels are
+identical across cells.
+
+One design note worth keeping: because ``n_windows == 1``, an item is a single
+window, so restricted-anchor sampling draws 1 window uniformly from the allowed
+set exactly as the unrestricted path draws 1 uniformly from all windows. The
+A=101 corner is therefore statistically identical to no restriction -- there is
+no sampling-mode confound between the corner cell and the rest of the surface.
+Passing ``max_anchors`` on every cell keeps that explicit.
+
+Usage:
+    uv run --group eeg python experiments/snr_scaling/_submit_e03.py          # dry run
+    uv run --group eeg python experiments/snr_scaling/_submit_e03.py submit
+    uv run --group eeg python experiments/snr_scaling/_submit_e03.py --only=703x101 submit
+"""
+import argparse
+
+from neurolab.jobs import Job
+
+REPO = "/u/dtyoung/eb_jepa_eeg"
+EXP_DIR = "experiments/snr_scaling"
+CKPT_ROOT = "/work/hdd/bbnv/dtyoung/eb_jepa/e03_scaling"
+
+# jul7 best from-scratch (RESULTS_jul7.md 3.4): TP-only soft target, tau=0.05.
+ARM = "soft_target_clip"
+ALPHA = 0.5
+TAU = 0.05
+SEED = 2026
+TASK = "ThePresent"
+EPOCHS = 400
+# Measured on Delta, not assumed: the TP train split is 703 recordings from 701
+# distinct subjects (two subjects contribute two recordings each). The S axis is
+# in SUBJECTS, so its top point is 701; epoch_size is in ITEMS and tracks the
+# recording count, 703, which is what sets steps/epoch.
+FULL_SUBJECTS = 701
+FULL_RECORDINGS = 703
+FULL_ANCHORS = 101           # 2 s windows spanning ThePresent (202.5 s)
+
+# L-shape + diagonal, 11 cells. NOT the full 20-cell grid.
+#   S axis at full A ..... 5 cells (includes the shared corner)
+#   A axis at full S ..... 3 cells
+#   diagonal ............. 3 cells, to test separability of the two axes
+CELLS = [
+    (701, 101), (400, 101), (200, 101), (100, 101), (50, 101),   # vary S
+    (701, 50), (701, 25), (701, 13),                             # vary A
+    (400, 50), (200, 25), (100, 13),                             # diagonal
+]
+
+
+def build_job(subjects: int, anchors: int, partition: str,
+              time_limit: str, epochs: int) -> Job:
+    slug = f"e03_s{subjects}_a{anchors}"
+    exp_dir = f"{CKPT_ROOT}/{slug}"
+
+    # Patch the shared template inside the job, so the on-disk config is never
+    # mutated by concurrent runs.
+    patch = (
+        "from omegaconf import OmegaConf; "
+        f"c = OmegaConf.load('{exp_dir}/config.yaml'); "
+        f"c.loss.mode = '{ARM}'; "
+        f"c.loss.soft_alpha = {ALPHA}; "
+        f"c.loss.soft_tau_teacher = {TAU}; "
+        f"c.data.task = '{TASK}'; "
+        f"c.data.max_subjects = {subjects}; "
+        f"c.data.max_anchors = {anchors}; "
+        f"c.data.epoch_size = {FULL_RECORDINGS}; "
+        f"OmegaConf.save(c, '{exp_dir}/config.yaml')"
+    )
+    # The probe must see the FULL data, so its config snapshot clears the knobs.
+    probe_patch = (
+        "from omegaconf import OmegaConf; "
+        f"c = OmegaConf.load('{exp_dir}/config.yaml'); "
+        "c.data.max_subjects = None; "
+        "c.data.max_anchors = None; "
+        "c.data.epoch_size = None; "
+        f"OmegaConf.save(c, '{exp_dir}/config_probe.yaml')"
+    )
+    return Job(
+        name=slug,
+        cluster="delta",
+        repo_path=REPO,
+        partition=partition,
+        time_limit=time_limit,
+        command=(
+            f"mkdir -p {exp_dir} && "
+            f"cp config/clip_pretrain.yaml {exp_dir}/config.yaml && "
+            f"PYTHONPATH=. uv run --group eeg python -c \"{patch}\" && "
+            f"PYTHONPATH=. uv run --group eeg python -c \"{probe_patch}\" && "
+            "PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.clip_pretrain"
+            f" --fname={exp_dir}/config.yaml"
+            f" --optim.epochs={epochs}"
+            f" --meta.seed={SEED}"
+            f" --folder={exp_dir}"
+            " --logging.save_every=99999"
+            " --logging.wandb_group=e03_scaling"
+            " && "
+            "PYTHONPATH=. uv run --group eeg python"
+            " eb_jepa/evaluation/clip_probe/probe.py"
+            f" --checkpoint {exp_dir}/latest.pth.tar"
+            f" --config {exp_dir}/config_probe.yaml"
+            " --split val --cv-splits 5"
+            f" --output {EXP_DIR}/e03_probe_val_{slug}.json"
+        ),
+        venv="__none__",
+        branch="",
+        env_vars={
+            "WANDB_PROJECT": "eb_jepa",
+            "HBN_PREPROCESS_DIR": "/projects/bbnv/kkokate/hbn_preprocessed",
+        },
+    )
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--partition", default="gpuA40x4")
+    p.add_argument("--time-limit", default="02:00:00")
+    p.add_argument("--epochs", type=int, default=EPOCHS)
+    p.add_argument("--only", default=None,
+                   help="Run one cell, e.g. --only=703x101.")
+    p.add_argument("action", nargs="?", default="dry", choices=["dry", "submit"])
+    args = p.parse_args()
+
+    cells = CELLS
+    if args.only:
+        s, a = (int(v) for v in args.only.lower().split("x"))
+        cells = [(s, a)]
+
+    print(f"{len(cells)} cell(s), {args.epochs} ep each on {args.partition} "
+          f"[{args.time_limit}]\n")
+    print(f"  {'cell':<14}{'subjects':>10}{'anchors':>9}  steps")
+    for s, a in cells:
+        print(f"  {'s%dxa%d' % (s, a):<14}{s:>10}{a:>9}  "
+              f"{args.epochs * -(-FULL_RECORDINGS // 64)}")
+    print()
+
+    if args.action != "submit":
+        print(build_job(*cells[0], args.partition, args.time_limit,
+                        args.epochs).command)
+        print("\nDry run. Re-run with 'submit' to sbatch.")
+        return
+
+    for s, a in cells:
+        job = build_job(s, a, args.partition, args.time_limit, args.epochs)
+        print(f"submitted {job.name}: {job.submit()}")
+
+
+if __name__ == "__main__":
+    main()

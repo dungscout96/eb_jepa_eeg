@@ -1034,6 +1034,10 @@ class JEPAMovieDataset(HBNMovieDataset):
         recipe_target_kind: str = "shot_mean",
         recipe_mean_center: bool = True,
         recipe_require_shots: bool = True,
+        max_subjects: int | None = None,
+        max_anchors: int | None = None,
+        epoch_size: int | None = None,
+        subsample_seed: int = 0,
     ):
         super().__init__(
             split, window_size_seconds, task, cfg=cfg,
@@ -1275,6 +1279,13 @@ class JEPAMovieDataset(HBNMovieDataset):
         self._recording_tasks = filtered_tasks
         del self.labels  # labels are now in feature_recordings
 
+        # Data-scaling subsample (experiments/snr_scaling E0.3). Applied HERE,
+        # before probe labels and norm stats, so both derive from the reduced
+        # set -- a 50-subject run must not inherit 703-subject statistics.
+        self._apply_scaling_subsample(
+            max_subjects, max_anchors, epoch_size, subsample_seed
+        )
+
         # Derive binary probe labels from subject metadata (age / sex).
         # Falls back to all-NaN if metadata is not available; the sanity
         # check hook will then use luminance as a fallback label instead.
@@ -1416,8 +1427,7 @@ class JEPAMovieDataset(HBNMovieDataset):
         all_feats = torch.cat(self.feature_recordings, dim=0)
         return all_feats.median(0).values
 
-    def __len__(self):
-        return len(self._fif_paths)
+    # __len__ lives with the scaling knobs below -- it depends on epoch_size.
 
     def _load_clip(self, rec_idx, indices) -> torch.Tensor:
         """Read, normalize, and spatially project one clip from one recording.
@@ -1459,7 +1469,126 @@ class JEPAMovieDataset(HBNMovieDataset):
 
         return eeg
 
+    # ------------------------------------------------------------------
+    # Data-scaling subsample (experiments/snr_scaling E0.3)
+    # ------------------------------------------------------------------
+    # Every per-recording list that must stay index-aligned. Listed once, in
+    # one place, so adding a new per-recording attribute without filtering it
+    # fails loudly in _apply_scaling_subsample rather than silently pairing
+    # recording i's EEG with recording j's targets.
+    _PER_RECORDING_ATTRS = (
+        "_fif_paths",
+        "_crop_inds",
+        "_recording_metadata",
+        "_recording_tasks",
+        "feature_recordings",
+        "embedding_recordings",
+        "shot_id_recordings",
+        "scene_id_recordings",
+        "t_start_recordings",
+    )
+
+    def _apply_scaling_subsample(self, max_subjects, max_anchors,
+                                 epoch_size, seed):
+        """Restrict the training set along the (anchors x subjects) axes.
+
+        Three independent knobs, all no-ops when None:
+
+        ``max_subjects`` (S)
+            Keep S distinct *subjects*, not S recordings -- a subject with two
+            recordings must contribute both or neither, or the axis is
+            confounded by recordings-per-subject.
+
+        ``max_anchors`` (A)
+            Restrict which movie moments the model may ever see, chosen evenly
+            spaced over the movie so coverage stays uniform (a random subset
+            clumps). Anchors are selected as movie *times* and resolved to
+            per-recording window indices through ``t_start_recordings``, the
+            same value-join ``datasets/paired.py`` uses -- window index i is
+            not guaranteed to be the same movie moment in every recording.
+
+        ``epoch_size``
+            Decouples optimisation budget from data scale. ``__len__`` returns
+            this instead of the recording count, so steps/epoch is constant
+            across cells and the LR schedule (which is keyed to epochs) means
+            the same thing everywhere. Without it, holding gradient steps
+            constant would require scaling epochs as 703/S -- at S=50 that is
+            5624 epochs, and per-epoch overhead would dominate the run.
+        """
+        self._epoch_size = epoch_size
+        self._allowed_anchor_idx = None
+        if max_subjects is None and max_anchors is None and epoch_size is None:
+            return
+
+        rng = np.random.default_rng(seed)
+
+        if max_subjects is not None:
+            subjects = [m.get("subject") for m in self._recording_metadata]
+            uniq = sorted({s for s in subjects if s is not None})
+            if max_subjects < len(uniq):
+                keep = set(rng.choice(len(uniq), size=max_subjects,
+                                      replace=False).tolist())
+                keep_subjects = {uniq[i] for i in keep}
+                sel = [i for i, s in enumerate(subjects) if s in keep_subjects]
+                missing = [a for a in self._PER_RECORDING_ATTRS
+                           if not hasattr(self, a)]
+                if missing:
+                    raise RuntimeError(
+                        f"_PER_RECORDING_ATTRS lists absent attributes {missing}; "
+                        "subsampling would leave the dataset misaligned.")
+                n_before = len(self._fif_paths)
+                for attr in self._PER_RECORDING_ATTRS:
+                    cur = getattr(self, attr)
+                    if cur is None or len(cur) == 0:
+                        continue
+                    if len(cur) != n_before:
+                        raise RuntimeError(
+                            f"{attr} has length {len(cur)}, expected {n_before}; "
+                            "refusing to subsample a misaligned dataset.")
+                    setattr(self, attr, [cur[i] for i in sel])
+                logger.info(
+                    "Scaling subsample: %d -> %d subjects (%d -> %d recordings)",
+                    len(uniq), max_subjects, n_before, len(self._fif_paths))
+
+        if max_anchors is not None:
+            if not self.t_start_recordings:
+                raise RuntimeError(
+                    "max_anchors needs t_start_recordings to join anchors by "
+                    "movie time; it is empty.")
+            # Anchors live in movie time, shared across recordings. Round to ms
+            # so float noise cannot split one moment into two anchors.
+            times = sorted({int(round(float(t) * 1000))
+                            for ts in self.t_start_recordings
+                            for t in ts})
+            if max_anchors < len(times):
+                pick = np.linspace(0, len(times) - 1, max_anchors)
+                chosen = {times[int(round(p))] for p in pick}
+            else:
+                chosen = set(times)
+            self._allowed_anchor_idx = []
+            for ts in self.t_start_recordings:
+                keys = np.rint(np.asarray(ts, dtype=np.float64) * 1000).astype(np.int64)
+                idx = np.flatnonzero(np.isin(keys, list(chosen)))
+                if len(idx) < self.n_windows:
+                    raise RuntimeError(
+                        f"A recording has only {len(idx)} of the {len(chosen)} "
+                        f"selected anchors, fewer than n_windows="
+                        f"{self.n_windows}; lower n_windows or raise max_anchors.")
+                self._allowed_anchor_idx.append(idx)
+            logger.info(
+                "Scaling subsample: %d -> %d distinct movie anchors "
+                "(evenly spaced; items now sample %d windows from the allowed "
+                "set rather than a contiguous crop)",
+                len(times), len(chosen), self.n_windows)
+
+    def __len__(self):
+        return self._epoch_size or len(self._fif_paths)
+
     def __getitem__(self, idx):
+        # epoch_size decouples steps/epoch from the recording count, so an
+        # index past the end wraps; the crop is random, so repeats of one
+        # recording within an epoch still differ.
+        idx = idx % len(self._fif_paths)
         crop_inds = self._crop_inds[idx]
         feats = self.feature_recordings[idx]
         embeds = self.embedding_recordings[idx]
@@ -1468,8 +1597,17 @@ class JEPAMovieDataset(HBNMovieDataset):
         t_starts = self.t_start_recordings[idx] if self.t_start_recordings else None
         n = len(crop_inds)
         required = (self.n_windows - 1) * self.temporal_stride + 1
-        start = torch.randint(0, n - required + 1, (1,)).item()
-        indices = list(range(start, start + required, self.temporal_stride))
+        if self._allowed_anchor_idx is not None:
+            # Restricted-anchor mode: draw n_windows from the allowed set. The
+            # contiguous crop below cannot be reused -- a block starting at an
+            # allowed anchor would run through disallowed ones, so the model
+            # would see far more than max_anchors distinct moments.
+            allowed = self._allowed_anchor_idx[idx]
+            sel = torch.randperm(len(allowed))[:self.n_windows].numpy()
+            indices = np.sort(allowed[np.sort(sel)]).tolist()
+        else:
+            start = torch.randint(0, n - required + 1, (1,)).item()
+            indices = list(range(start, start + required, self.temporal_stride))
 
         eeg = self._load_clip(idx, indices)
 
