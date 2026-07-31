@@ -407,7 +407,15 @@ first guesses landing on one pool entry is not visible in Top-K.
 Job 20654647, R5 val, 293 subjects, 101 anchors, 20 draws per K, best
 from-scratch checkpoint (soft τ=0.05 seed 2026). Ridge heads fit on the full
 train split. Artifacts: [`k_averaging_val.json`](k_averaging_val.json), code
-[`k_averaging.py`](k_averaging.py).
+[`k_averaging.py`](k_averaging.py), figure
+[`k_averaging.png`](k_averaging.png) / [`.pdf`](k_averaging.pdf) via
+[`plot_k_averaging.py`](plot_k_averaging.py).
+
+![K-averaging curves](k_averaging.png)
+
+*Panel (a) tests SHAPE only: the prediction is anchored at the measured R(1),
+so K=1 agrees by construction. Panel (b)'s ceiling uses the E0.1 CorrCA
+reliability, which is the bound the probe actually lives under.*
 
 | K | R(K) measured | R(K) Spearman-Brown from measured R(1) | ratio | probe *r* embedding-space | probe *r* signal-space |
 |---:|---:|---:|---:|---:|---:|
@@ -617,6 +625,8 @@ Subject draws are seeded (`--seed`, default 0); the `n ≤ 16` rows are means ov
   Spearman-Brown tables, and CC_norm against the measured probe results.
 - `snr_scaling.png` / `.pdf` — ceiling vs K, and the (anchors × subjects)
   design space.
+- `k_averaging.png` / `.pdf` — E0.2 two-panel figure (Spearman-Brown
+  validation; probe *r* vs K, embedding- vs signal-space).
 - `aggregation_val_ThePresent.json`, `aggregation_test_ThePresent.json` — §2.6
   temporal / oracle-segment / n-subject curves at shot and scene level, plus the
   §2.7 modal-answer shares. Produced from the shared-space export, so the
@@ -625,7 +635,7 @@ Subject draws are seeded (`--seed`, default 0); the `n ≤ 16` rows are means ov
 **Code:**
 - [`measure_isc.py`](measure_isc.py) — the E0.1 measurement.
 - [`k_averaging.py`](k_averaging.py) + [`_submit_k_averaging.py`](_submit_k_averaging.py)
-  — E0.2.
+  + [`plot_k_averaging.py`](plot_k_averaging.py) — E0.2.
 - [`aggregation_curves.py`](aggregation_curves.py) — §2.6 / §2.7 curves.
   Depends on `demo/export_retrieval_npz.py` for *data* only; it imports nothing
   from `demo/`.
