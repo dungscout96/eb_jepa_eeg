@@ -1,20 +1,112 @@
 # snr_scaling — experiment plan
 
-**Paper thesis (revised from [paper/workshop_outline.md](../../paper/workshop_outline.md)):**
+**Paper thesis (revised 2026-07-30 after E0.1 and a source check of the
+decoding literature; supersedes [paper/workshop_outline.md](../../paper/workshop_outline.md)):**
 
-> Stimulus-locked EEG representation learning is **SNR-limited, not
-> objective-limited**, and the SNR is bought with **subjects, not parameters**.
-> Anchored by a frozen V-JEPA-2 encoder, we characterize the
-> (anchors × subjects) scaling law, show four cross-modal objectives already
-> sit at the single-trial ceiling, and show that the *objective determines how
-> efficiently subjects convert into SNR*.
+> EEG and MEG fail differently, and the difference dictates the strategy. On an
+> identical single-trial cross-subject pipeline, MEG reaches 41 % top-1 segment
+> retrieval and EEG reaches 5 % — an ~8× gap in **per-subject SNR**. But EEG's
+> disadvantage is exactly where MEG's practical ceiling lies: MEG cohorts are
+> tens of subjects, EEG cohorts are thousands. **The modality with the worse
+> per-subject SNR is the one that can buy SNR with subjects.** We measure the
+> cross-subject noise ceiling for stimulus-locked EEG, show four objectives
+> capture only ~half of it, and show that *the objective determines how
+> efficiently subjects convert into stimulus signal*.
 
-The headline quantity is a **subject-scaling exponent** `dr / d log S`, not an
-absolute *r*. That generalizes past HBN and is what makes this a scaling paper
-rather than another leaderboard entry.
+The headline quantity is a **subject-scaling exponent** `dr / d log S` compared
+*across objectives*, not an absolute *r*. See "Related work — the delta" below
+for why the exponent, not the curve, has to be the contribution.
 
 Calculator: [`scaling_calculator.py`](scaling_calculator.py) →
 [`snr_scaling.png`](snr_scaling.png).
+
+---
+
+## Why EEG vs MEG is the framing, not a caveat
+
+Verified against sources in
+[`RESULTS.md` §1.2b](RESULTS.md). Défossez et al. (2023) run one architecture,
+one contrastive objective, single-trial, cross-subject, over four naturalistic
+speech datasets spanning both modalities:
+
+| dataset | modality | top-1 | top-10 |
+|---|---|---:|---:|
+| Gwilliams | MEG | **41.3 %** | 70.7 % |
+| Schoffelen | MEG | 36.8 % | 67.5 % |
+| Brennan | **EEG** | **5.2 %** | 25.7 % |
+| Broderick | **EEG** | **5.0 %** | 17.7 % |
+
+This is the cleanest modality-controlled comparison in the literature: same
+model, same loss, same protocol, ~8× gap. **The widely-quoted "41 % out of
+1,000+ segments" is MEG.** Any claim that naturalistic neural decoding "works"
+is, on inspection, a claim about MEG.
+
+**The practical asymmetry is the whole argument.** MEG requires a magnetically
+shielded room and a multi-million-dollar cryogenic instrument; cohorts are tens
+of subjects and the modality does not scale to population studies, clinics, or
+anything wearable. EEG is cheap, portable, and already collected at population
+scale — HBN alone gives ~700 subjects on the same stimulus, and that is one
+dataset. So the two modalities sit at opposite corners of a trade:
+
+| | per-subject SNR | subjects obtainable |
+|---|---|---|
+| MEG | high (~8× EEG) | tens |
+| EEG | low | thousands |
+
+A method that converts *subjects* into *stimulus signal* is therefore worth far
+more to EEG than to MEG — MEG has little left to gain on the axis it is already
+good at, and cannot cheaply scale the axis it is weak on. **Cross-subject
+aggregation is the modality-appropriate strategy for EEG specifically**, and
+that is a stronger motivation than "EEG is noisy."
+
+This also reframes what a negative EEG result means. Our
+[v→e-at-chance retrieval finding](../clip_pretraining/soft_target_clip/RESULTS_jul7.md)
+looked anomalous; against Défossez's EEG numbers (~5 % top-1, near floor) it is
+the *expected* behaviour of single-trial EEG, and the anomaly would have been
+succeeding. Cite their EEG rows, not their headline.
+
+---
+
+## Related work — the delta, and the reviewer objection to pre-empt
+
+**Défossez et al. already publish a subject-scaling curve** (their Fig 3C):
+top-10 accuracy versus number of training participants, ~1 to ~96 subjects,
+rising with no clear saturation. Their subject-specific 1×1 conv is their
+single largest ablation (removing it costs ~24 points, 70.7 % → 47.0 %). They
+state it explicitly:
+
+> "not only does our subject-specific layer improve decoding performance, but
+> this performance increases with the amount of participants present in the
+> training set"
+
+**So "more subjects helps" is known and published.** If E1.1 is framed as a
+subject-scaling curve, it is a re-derivation on EEG of a published MEG result
+and a reviewer in this area will say so. What they do NOT do, verified by
+source check:
+
+- **No SNR or noise-ceiling framing.** "SNR", "noise ceiling", "averaging
+  across subjects" do not appear in that sense. Their curve has no ceiling on
+  its y-axis, so "how much of the achievable signal is captured" is unasked.
+- **No subjects-vs-data-per-subject comparison** at matched total data. The
+  exchange rate between the two currencies is untouched.
+- **No test-time aggregation across subjects.** All evaluation is per-subject
+  prediction; the K_test axis is absent.
+- **No inter-subject correlation or shared-response analysis.** The mechanism
+  we would claim — that a cross-subject target marginalises the fingerprint —
+  has no counterpart.
+- **The scaling curve is MEG-only.** Brennan was excluded from that analysis.
+
+**Therefore the contribution is the exponent COMPARED ACROSS OBJECTIVES, not
+the curve.** Défossez has one curve for one architecture. The claim we can make
+and they cannot is that *the training objective sets how efficiently subjects
+convert into stimulus signal* — with the falsifiable prediction that
+within-subject masked prediction has slope ≈ 0 or negative (more subjects means
+more fingerprint diversity to model) while a cross-subject target has positive
+slope tracking `sqrt(R(K))`.
+
+**Consequence for E1.1: the LeJEPA arm is load-bearing, not a courtesy
+baseline.** Without a second objective there is no exponent comparison and
+nothing survives the Fig 3C objection. Do not drop it to save compute.
 
 ---
 
@@ -167,12 +259,36 @@ matched gradient steps:
 
 Report the fitted slope `dr / d log S` per arm. The claim becomes *"the
 cross-subject target has a subject-scaling exponent of X vs Y for masked
-prediction"* — precise, novel, and portable to datasets we don't have.
+prediction"* — precise, and portable to datasets we don't have.
 
 Prediction to state in advance (falsifiable, which reviewers reward): masked
 prediction has slope ≈ 0 or negative, because more subjects means more
 fingerprint diversity to model; cross-subject has positive slope tracking
 `sqrt(R(K_train))`.
+
+**Do not drop the LeJEPA arm.** Défossez et al. Fig 3C already publishes a
+subject-scaling curve (MEG, ~1→96 subjects, rising, no saturation), so a single
+rising curve on EEG is a re-derivation, not a finding. The contribution is
+strictly the *difference in exponent between objectives*, which needs at least
+two arms. With only the cross-subject arm this experiment does not survive
+review — see "Related work — the delta" above.
+
+**Three things to report alongside the slopes**, each closing a specific gap
+that Fig 3C leaves open and that we can close:
+
+1. **Slopes against the measured ceiling**, i.e. plot `CC_norm` vs `S`, not raw
+   `r`. Their y-axis has no ceiling on it; ours does after E0.1. This converts
+   "more is better" into "how much of the attainable signal each objective
+   extracts per subject."
+2. **The extrapolated subject count to reach a target `CC_norm`.** If the
+   cross-subject exponent holds, state how many subjects each objective needs to
+   reach, say, `CC_norm = 0.8`. This is the number a practitioner planning an
+   EEG study actually wants, and it is the concrete form of the EEG-vs-MEG
+   argument: MEG cannot reach that S, EEG can.
+3. **An EEG-vs-MEG contextual row.** Défossez's Brennan/Broderick EEG numbers
+   (~5 % top-1) are the honest reference point for what single-trial EEG does
+   without cross-subject aggregation. Not a baseline we run — a citation that
+   sets the scale.
 
 ### E1.2 — K_train partner-averaging sweep
 Average the cross-subject target over K partners, K ∈ {1, 2, 4, 8, 16}. Overlay
@@ -231,18 +347,23 @@ within-subject repeats. Confirm the counts before plotting anything.
 
 | run | without it | with it |
 |---|---|---|
-| E0.1 | "*r*=0.15" invites "that's small" | "we are at 68% of a measured ceiling" |
+| **E0.1 ✅ done** | "*r*=0.15" invites "that's small" | **"48 % of a measured ceiling of 0.313"** |
 | E0.2 | Spearman-Brown is an assumption | a validated scaling law |
 | E0.3 | 4 objectives tie, unexplained | tie is *explained* by A=101 |
-| E1.1 | "cross-subject helps a bit" | a subject-scaling exponent |
+| E1.1 | a curve Défossez Fig 3C already published | an exponent **compared across objectives** |
 | E1.3 | mechanism is asserted | mechanism is measured |
 | E2.1 | jul10 table is a liability | jul10 table is the thesis |
 
-**Minimum viable paper: E0.1 + E0.2 + E0.3 + E2.1.** That is a complete
-scaling-law contribution using only the existing recipe and existing
-checkpoints — no new method required, and no risk from cross-subject JEPA
-failing to train. E1.x then upgrades it from a measurement paper to a
-measurement-plus-method paper.
+**Minimum viable paper: E0.1 + E0.2 + E0.3 + E2.1.** A complete scaling-law
+contribution using only the existing recipe and existing checkpoints — no new
+method, and no exposure to cross-subject JEPA failing to train. Framed on the
+EEG-vs-MEG asymmetry it stands alone: *the deployable modality is the one that
+fails single-trial, and the only axis it can scale is subjects; here is the
+ceiling, here is how far four objectives get, here is the exchange rate.*
 
-**Order:** E0.1 → E2.1 → E0.2 → E0.3 → E1.1 → E1.2/E1.3 → E2.3.
-E0.1 and E2.1 are cheap and gate the framing of everything downstream.
+E1.x upgrades it to measurement-plus-method — but **only if E1.1 keeps both
+objective arms**. A single rising curve is Fig 3C on EEG.
+
+**Order:** E2.1 → E0.2 → E0.3 → E1.1 → E1.2/E1.3 → E2.3.
+E0.1 is complete ([`RESULTS.md`](RESULTS.md)); E2.1 is cheap and gates whether
+the jul10 below-random table can be used at all.
