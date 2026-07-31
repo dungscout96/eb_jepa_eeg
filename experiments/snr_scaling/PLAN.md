@@ -10,8 +10,9 @@ decoding literature; supersedes [paper/workshop_outline.md](../../paper/workshop
 > tens of subjects, EEG cohorts are thousands. **The modality with the worse
 > per-subject SNR is the one that can buy SNR with subjects.** We measure the
 > cross-subject noise ceiling for stimulus-locked EEG, show four objectives
-> capture only ~half of it, and show that *the objective determines how
-> efficiently subjects convert into stimulus signal*.
+> already capture 83-88 % of it — so single-trial work is nearly exhausted —
+> and show that *the objective determines how efficiently subjects convert into
+> stimulus signal*.
 
 The headline quantity is a **subject-scaling exponent** `dr / d log S` compared
 *across objectives*, not an absolute *r*. See "Related work — the delta" below
@@ -120,7 +121,7 @@ ceiling on probe *r* for any encoder and any objective.**
 
 Three consequences, all load-bearing:
 
-**(a) MEASURED (E0.1, jobs run 2026-07-30): we are at ~half the ceiling.**
+**(a) MEASURED (E0.1 2026-07-30, corrected 2026-07-31): we are NEAR the ceiling.**
 `rho1` is no longer an assumption. Cross-validated CorrCA on R5 val
 (293 subjects, filters fit on 146 recordings and scored on the disjoint 147)
 gives a combined 5-component reliability of **0.098**, i.e. a K=1 ceiling of
@@ -131,23 +132,32 @@ gives a combined 5-component reliability of **0.098**, i.e. a K=1 ceiling of
 | CorrCA held-out per component | [0.002, **0.045**, 0.040, 0.012, 0.006] | [0.002, **0.014**, 0.002, 0.011, 0.002] |
 | max single component | 0.045 → ceiling 0.212 | 0.014 → ceiling 0.116 |
 | **combined 5-component** | **0.098 → ceiling 0.313** | 0.030 → ceiling 0.172 |
-| best from-scratch *r* = 0.1517 | **48% of ceiling** | 88% |
-| REVE warm-start *r* = 0.1715 | **55% of ceiling** | 99% |
+| best from-scratch, SAME split | *r* 0.2584 → **CC_norm 0.826** | *r* 0.1517 → **CC_norm 0.882** |
 
 **Use the val estimate.** The test estimate is downward-biased by fit-set
 size: CorrCA there is fit on only 54 recordings across 128 channels, so its
 filters generalise poorly. The ceiling is a property of the subject
 population, not of which split it was estimated on.
 
-**Verdict: the "already at the ceiling" hypothesis is FALSIFIED.** There is
-~2× single-trial headroom. But note 0.313 is itself a *lower* bound — only 5
-components were computed, and more would raise it.
+**Use the SAME split on both sides.** An earlier version of this table paired
+the *test* `r` (0.1517) with the *val* ceiling (0.313) and concluded 48 % of
+ceiling with ~2× headroom. That was a split mismatch. Paired correctly the two
+splits agree at **83–88 %**, and remaining single-trial headroom is only
+**~1.15–1.2×**. The error was caught by E0.2, whose K=1 point on val
+(*r* = 0.289) was far too high to be consistent with the 48 % figure.
 
-This *sharpens* rather than weakens the thesis. The claim is no longer "no
-headroom exists" but the more interesting **"~2× headroom demonstrably exists
-at K=1, and four independent objectives all fail to capture any of it"** —
-which is why the anchor-count argument in (c) is the real explanation for the
-saturation, not a ceiling effect.
+**Verdict: the checkpoints are NEAR the single-trial ceiling.** The
+four-objective tie is consistent with a ceiling effect after all. Two caveats
+keep this from being a proof: 0.313 is a *lower* bound (only 5 components), and
+no ceiling has been measured for DespicableMe, whose own plateau may still be
+anchor-count or teacher-quality limited.
+
+Consequence for the thesis: **single-trial objective work is close to
+exhausted, which makes cross-subject aggregation not merely the better lever
+but very nearly the only one.** E0.2 measures it at 2.6× (probe *r* 0.289 →
+0.742 from K=1 to K=128) against ~1.15–1.2× left single-trial. That is a
+cleaner argument than the previous "headroom exists and objectives can't reach
+it", and it does not depend on the anchor-count explanation.
 
 Two anomalies worth reporting in the paper, both robust across splits:
 
@@ -347,8 +357,8 @@ within-subject repeats. Confirm the counts before plotting anything.
 
 | run | without it | with it |
 |---|---|---|
-| **E0.1 ✅ done** | "*r*=0.15" invites "that's small" | **"48 % of a measured ceiling of 0.313"** |
-| E0.2 | Spearman-Brown is an assumption | a validated scaling law |
+| **E0.1 ✅ done** | "*r*=0.15" invites "that's small" | **"83–88 % of a measured ceiling"** |
+| **E0.2 ✅ done** | Spearman-Brown is an assumption | **validated to 3–20 %, erring conservatively; aggregation measured at 2.6×** |
 | E0.3 | 4 objectives tie, unexplained | tie is *explained* by A=101 |
 | E1.1 | a curve Défossez Fig 3C already published | an exponent **compared across objectives** |
 | E1.3 | mechanism is asserted | mechanism is measured |
@@ -364,6 +374,6 @@ ceiling, here is how far four objectives get, here is the exchange rate.*
 E1.x upgrades it to measurement-plus-method — but **only if E1.1 keeps both
 objective arms**. A single rising curve is Fig 3C on EEG.
 
-**Order:** E2.1 → E0.2 → E0.3 → E1.1 → E1.2/E1.3 → E2.3.
-E0.1 is complete ([`RESULTS.md`](RESULTS.md)); E2.1 is cheap and gates whether
-the jul10 below-random table can be used at all.
+**Order:** E2.1 → E0.3 → E1.1 → E1.2/E1.3 → E2.3.
+E0.1 and E0.2 are complete ([`RESULTS.md`](RESULTS.md)); E2.1 is cheap and
+gates whether the jul10 below-random table can be used at all.

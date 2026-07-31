@@ -16,13 +16,17 @@ the record of what has been measured. Commits `b4492fe`, `6dd992d`.
 1. **The single-trial ceiling on R5 val is *r* = 0.313.** Cross-validated
    CorrCA gives a combined 5-component reliability of `rho1 = 0.0982`; the
    Spearman-Brown / Schoppe ceiling is `sqrt(rho1) = 0.313`.
-2. **The best checkpoint sits at 48% of it** (Schoppe CC_norm = 0.484 for
-   from-scratch soft τ=0.05; 0.547 for REVE warm-start; 0.168 for random init).
-3. **"We are already at the ceiling" is FALSIFIED.** There is ~2× single-trial
-   headroom, and 0.313 is itself a lower bound — only 5 CorrCA components were
-   computed. The saturation of four objectives within ±0.003 Δr²
+2. **The best checkpoint sits at 83–88 % of it** — Schoppe CC_norm = **0.826**
+   on val (*r* = 0.2584 / 0.313) and **0.882** on test (*r* = 0.1517 / 0.172).
+   ⚠️ An earlier version of this file reported 0.484 by comparing the **test**
+   *r* against the **val** ceiling. That was a split mismatch; see §2.2.
+3. **Single-trial headroom is only ~1.15–1.2×, not ~2×.** Four objectives
+   tying within ±0.003 Δr²
    ([jul7 §4.1](../clip_pretraining/soft_target_clip/RESULTS_jul7.md)) is
-   therefore **not** a ceiling effect and needs a different explanation.
+   consistent with a genuine ceiling effect after all. The ceiling is still a
+   *lower* bound (only 5 CorrCA components), so "provably at ceiling" is not
+   established either — but the earlier claim that the ceiling hypothesis was
+   "falsified" rested on the mismatched comparison and is withdrawn.
 4. **Three independent estimators agree** to within ~0.005 across all bands —
    Sahani-Linden explainable variance, Hsu-style split-half, and mean pairwise
    ISC. The ceiling is a property of the data, not of one estimator.
@@ -182,18 +186,37 @@ a lower bound. Components are combined by SNR addition
 
 ### 2.2 Where the checkpoints sit
 
-Against the val ceiling of 0.313, using Schoppe CC_norm = CC_abs / CC_max.
-Observed *r* from [jul7 §4.3](../clip_pretraining/soft_target_clip/RESULTS_jul7.md):
+> ⚠️ **CORRECTED 2026-07-31.** The first version of this table compared **test**
+> Pearson *r* against the **val** ceiling and reported CC_norm ≈ 0.48. Those are
+> different splits and the comparison was invalid. The ceiling must be paired
+> with *r* from the same split. The error was caught by E0.2 (§2.8), whose K=1
+> point on val (*r* = 0.289) sits far above the 0.48 that a val ceiling of 0.313
+> would have implied.
 
-| checkpoint | test mean *r* | CC_norm | % of ceiling |
-|---|---:|---:|---:|
-| random init | 0.0527 | 0.168 | 17% |
-| fresh500 scene_clip | 0.1328 | 0.424 | 42% |
-| vanilla CLIP 400 ep | 0.1459 | 0.466 | 47% |
-| **soft τ=0.05 400 ep** | **0.1517** | **0.484** | **48%** |
-| **REVE warm-start** | **0.1715** | **0.547** | **55%** |
+Schoppe CC_norm = CC_abs / CC_max, **same split on both sides**. Observed *r*
+from the jul7 probe JSONs
+([`probe_results/`](../clip_pretraining/soft_target_clip/probe_results/)):
 
-**~2× headroom remains at K=1**, and this is a lower bound on the headroom
+| checkpoint | split | mean *r* | ceiling | CC_norm |
+|---|---|---:|---:|---:|
+| **soft τ=0.05 400 ep** | **val** | **0.2584** | 0.313 | **0.826** |
+| vanilla CLIP 400 ep | val | 0.2485 | 0.313 | 0.794 |
+| **soft τ=0.05 400 ep** | **test** | **0.1517** | 0.172 | **0.882** |
+| vanilla CLIP 400 ep | test | 0.1459 | 0.172 | 0.848 |
+| random init | test | 0.0527 | 0.172 | 0.306 |
+
+The two splits agree: the best checkpoint captures **83–88 %** of the
+attainable single-trial signal. Remaining single-trial headroom is
+**~1.15–1.2×**, not the ~2× previously claimed.
+
+`fresh500` and `reve_warmstart` are omitted rather than mis-paired — only test
+*r* is on record for them, and the test ceiling is itself downward-biased
+(§2.5), so their CC_norm would be an overestimate. Re-run their val probes
+before quoting a normalised number.
+
+**Caveat that cuts the other way:** 0.313 is a *lower* bound on the ceiling
+(only 5 CorrCA components were computed), so a higher true ceiling would push
+CC_norm back down. "Near ceiling" is the current best estimate, not a proof.
 since only 5 components were computed.
 
 ### 2.3 Three estimators agree
@@ -253,7 +276,8 @@ wherever they appear.
 | CorrCA fit / scored recordings | 146 / 147 | 54 / 54 |
 | combined reliability | 0.0982 | 0.0297 |
 | ceiling | 0.313 | 0.172 |
-| CC_norm, soft τ=0.05 | 0.484 | 0.880 |
+| mean *r*, soft τ=0.05 (same split) | 0.2584 | 0.1517 |
+| CC_norm, soft τ=0.05 (same split) | 0.826 | 0.882 |
 
 The test ceiling is **downward-biased by fit-set size**: CorrCA there estimates
 128-channel covariances from 54 recordings, so its filters generalise poorly
@@ -410,21 +434,79 @@ reported quantities are the max component and the SNR-additive combination.
 
 ## §4. What this means
 
-### 4.1 The saturation is not a ceiling effect
+### 2.8 E0.2 — the K-averaging curve, measured
 
-The strongest prior hypothesis — that four objectives tie because they all sit
-at the noise ceiling — is falsified. At 48% of ceiling there is roughly 2×
-single-trial headroom that vanilla CLIP, scene_clip, soft-target and
-CS-Aligner all fail to capture, despite spanning multi-positive masks,
-distillation and distributional alignment.
+Job 20654647, R5 val, 293 subjects, 101 anchors, 20 draws per K, best
+from-scratch checkpoint (soft τ=0.05 seed 2026). Ridge heads fit on the full
+train split. Artifacts: [`k_averaging_val.json`](k_averaging_val.json), code
+[`k_averaging.py`](k_averaging.py).
 
-This **sharpens** the thesis rather than weakening it. The claim becomes *"~2×
-headroom demonstrably exists and four independent objectives capture none of
-it"*, which points at a cause outside the loss function. The leading candidate
-is the anchor-count argument: ThePresent contains only **101 distinct 2 s
-stimulus anchors**, so 71 K training windows are `703 subjects × 101 moments`
-and the contrastive problem has ~101 classes. Subjects buy SNR per anchor and
-zero new anchors. See [`PLAN.md`](PLAN.md) §(c) and experiment E0.3.
+| K | R(K) measured | R(K) Spearman-Brown from measured R(1) | ratio | probe *r* embedding-space | probe *r* signal-space |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 0.0515 | 0.0515 (anchor) | — | 0.289 | 0.271 |
+| 2 | 0.1178 | 0.0980 | 1.20 | 0.387 | 0.337 |
+| 4 | 0.2087 | 0.1784 | 1.17 | 0.456 | 0.281 |
+| 8 | 0.3564 | 0.3029 | 1.18 | 0.541 | 0.347 |
+| 16 | 0.5148 | 0.4649 | 1.11 | 0.627 | 0.382 |
+| 32 | 0.6941 | 0.6347 | 1.09 | 0.692 | 0.434 |
+| 64 | 0.8152 | 0.7766 | 1.05 | 0.725 | 0.443 |
+| 128 | 0.9019 | 0.8742 | 1.03 | **0.742** | 0.490 |
+
+**(a) Spearman-Brown holds in shape, and errs conservatively.** Anchored at the
+measured single-subject reliability, the predicted curve tracks the measurement
+within 3–20 %, and the gap closes monotonically as K grows. Crucially the
+deviation is *upward* — measured reliability grows slightly **faster** than
+predicted — which is the opposite of the failure mode the test was designed to
+catch (correlated non-stimulus structure across subjects would have made
+aggregation saturate early). The cause of the small excess is not established.
+**The test-time aggregation argument survives.**
+
+**(b) Aggregation is a large, real lever.** Probe *r* rises 0.289 → 0.742, a
+**2.6× gain**, monotonically, with no sign of saturating by K=128. Compare with
+the ~1.15–1.2× of single-trial headroom left to objective work (§2.2). This is
+now the strongest quantitative support for the thesis.
+
+**(c) Aggregate AFTER the encoder, not before.** Embedding-space averaging beats
+signal-space at every K, and the gap widens with K (0.742 vs 0.490 at K=128).
+Signal-space is also **non-monotonic** — it drops from 0.337 at K=2 to 0.281 at
+K=4 before recovering — which a genuine SNR gain cannot do.
+
+The likely cause is distribution shift: the encoder was trained on
+single-recording inputs normalised per recording, and a K-subject average has
+noise variance shrunk by ~K, so its amplitude statistics are increasingly
+out-of-distribution as K grows. The encoder is therefore **strongly non-linear
+in the noise** — had it been linear the two curves would coincide.
+
+Two consequences. Practically, a deployed system pooling several recordings
+should encode each and average embeddings. Methodologically, **classical
+ERP-style signal averaging is the wrong aggregation point for a learned
+encoder**, which is not obvious a priori and is worth stating in the paper.
+
+### 4.1 The saturation IS consistent with a ceiling effect
+
+*(Reversed 2026-07-31. The previous text here claimed the ceiling hypothesis
+was falsified; that rested on the split mismatch corrected in §2.2.)*
+
+At **83–88 %** of the measured ceiling, the four-objective tie within ±0.003
+Δr² is what a ceiling effect looks like. Remaining single-trial headroom is
+~1.15–1.2×, which is the same order as the spread between the objectives
+themselves — so there is very little left for a loss function to win.
+
+Two things stop this from being a proof:
+
+- **The ceiling is a lower bound.** Only 5 CorrCA components were computed; more
+  would raise it and lower CC_norm. Computing more components is the cheapest
+  way to tighten this and is listed in §7.
+- **It does not explain the DM ceiling.** DespicableMe is pinned at ~+0.038 Δr²
+  regardless of loss, capacity or compute
+  ([jul7 §5.3](../clip_pretraining/soft_target_clip/RESULTS_jul7.md)), and no
+  ceiling has been measured for DM. That may still be an anchor-count or
+  teacher-quality effect.
+
+The anchor-count argument (ThePresent has only **101 distinct 2 s stimulus
+anchors**, so 71 K training windows are `703 subjects × 101 moments`) survives
+as an explanation for why *training* saturates, which is a different question
+from why *readout* saturates. E0.3 still separates them.
 
 ### 4.2 Aggregation beats objectives, by a lot
 
