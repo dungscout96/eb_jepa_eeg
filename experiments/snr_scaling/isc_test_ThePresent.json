@@ -822,5 +822,119 @@
         "100": 0.8682800037649753
       }
     }
+  },
+  "noise_ceiling": {
+    "observed_probe_r": {
+      "random_init": 0.0527,
+      "best_from_scratch_soft_tau0.05": 0.1517,
+      "reve_warmstart": 0.1715
+    },
+    "bands": {
+      "delta_theta": {
+        "sahani_linden_raw_best_channel": 0.020880435786657603,
+        "sahani_linden_raw_mean_over_channels": 0.0063915573237461965,
+        "sahani_linden_mean_over_channels": 0.017939067628272607,
+        "sahani_linden_best_channel": 0.03472795741085292,
+        "split_half_best_channel": 0.038256053271310084,
+        "best_channel_index": 72,
+        "cc_max_by_k": {
+          "1": 0.1863543866155367,
+          "2": 0.2590845564099562,
+          "5": 0.39046271554028433,
+          "10": 0.5143768617910315,
+          "20": 0.64687841109401,
+          "50": 0.8016937154077827,
+          "100": 0.8845912813669371
+        },
+        "cc_norm_at_k1": {
+          "random_init": 0.28279452368740915,
+          "best_from_scratch_soft_tau0.05": 0.8140404031001893,
+          "reve_warmstart": 0.9202895789827453
+        }
+      },
+      "alpha": {
+        "sahani_linden_raw_best_channel": 0.008545115645240416,
+        "sahani_linden_raw_mean_over_channels": 0.0038526745615076016,
+        "sahani_linden_mean_over_channels": 0.009290957027495134,
+        "sahani_linden_best_channel": 0.015760923977096733,
+        "split_half_best_channel": 0.015988827420471374,
+        "best_channel_index": 82,
+        "cc_max_by_k": {
+          "1": 0.12554251860265003,
+          "2": 0.17616112864952796,
+          "5": 0.27227030703510974,
+          "10": 0.3715237907386726,
+          "20": 0.4925210374817201,
+          "50": 0.6668206257078794,
+          "100": 0.7845899478016286
+        },
+        "cc_norm_at_k1": {
+          "random_init": 0.4197781005716383,
+          "best_from_scratch_soft_tau0.05": 1.2083555570534636,
+          "reve_warmstart": 1.3660710483498288
+        }
+      },
+      "beta": {
+        "sahani_linden_raw_best_channel": 0.0186407326927205,
+        "sahani_linden_raw_mean_over_channels": 0.013476976625619363,
+        "sahani_linden_mean_over_channels": 0.013569244739590636,
+        "sahani_linden_best_channel": 0.029979200078548433,
+        "split_half_best_channel": 0.03471111926868373,
+        "best_channel_index": 114,
+        "cc_max_by_k": {
+          "1": 0.17314502614441002,
+          "2": 0.2412741481196465,
+          "5": 0.3658492277142246,
+          "10": 0.48589247129217983,
+          "20": 0.6180588917860186,
+          "50": 0.7791770742363813,
+          "100": 0.8692154313799226
+        },
+        "cc_norm_at_k1": {
+          "random_init": 0.3043691243896665,
+          "best_from_scratch_soft_tau0.05": 0.8761441398465354,
+          "reve_warmstart": 0.9904991429379092
+        }
+      },
+      "broadband": {
+        "sahani_linden_raw_best_channel": 0.007434675686165587,
+        "sahani_linden_raw_mean_over_channels": 0.008774419744382214,
+        "sahani_linden_mean_over_channels": 0.01167561934293353,
+        "sahani_linden_best_channel": 0.018460694764262355,
+        "split_half_best_channel": 0.02151673357908336,
+        "best_channel_index": 72,
+        "cc_max_by_k": {
+          "1": 0.13587013933996814,
+          "2": 0.19039997284432408,
+          "5": 0.29318292435369236,
+          "10": 0.39787578659790457,
+          "20": 0.5228185833670743,
+          "50": 0.6961616452700807,
+          "100": 0.8080055798614968
+        },
+        "cc_norm_at_k1": {
+          "random_init": 0.38787036103743466,
+          "best_from_scratch_soft_tau0.05": 1.1165072821514013,
+          "reve_warmstart": 1.2622346663741946
+        }
+      }
+    },
+    "corrca_combined": {
+      "reliability": 0.029724927081026902,
+      "cc_max_by_k": {
+        "1": 0.17240918502512242,
+        "2": 0.240278428999788,
+        "5": 0.36445995801499714,
+        "10": 0.48426406632533736,
+        "20": 0.616381562770578,
+        "50": 0.7778307763162486,
+        "100": 0.8682800037649753
+      },
+      "cc_norm_at_k1": {
+        "random_init": 0.3056681695486286,
+        "best_from_scratch_soft_tau0.05": 0.8798835165185381,
+        "reve_warmstart": 0.9947265859125201
+      }
+    }
   }
 }

@@ -81,6 +81,7 @@ array -- ~2.3 GB for R6 (108 recordings), ~6 GB for R5 (293). Use
 import argparse
 import json
 import math
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -90,7 +91,18 @@ from eb_jepa.datasets.hbn import JEPAMovieDataset, _read_raw_windows
 from eb_jepa.logging import get_logger
 from eb_jepa.preprocessing.corrca import solve_corrca_eigenproblem
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import noise_ceiling  # noqa: E402  (sibling module, not an installed package)
+
 logger = get_logger(__name__)
+
+# Measured probe results this ceiling is meant to bound, from
+# RESULTS_jul7.md 3.4 / 4.3 (R6 test, mean Pearson r over 12 movie features).
+OBSERVED_PROBE_R = {
+    "random_init": 0.0527,
+    "best_from_scratch_soft_tau0.05": 0.1517,
+    "reve_warmstart": 0.1715,
+}
 
 # Bands. delta/theta is where experiments.md reports ISC 0.10-0.28; alpha is
 # where the variance is but ISC < 0.05. Broadband is the 1-40 Hz reference.
@@ -399,6 +411,78 @@ def analyse_corrca(x: np.ndarray, subjects: list[str], sfreq: float,
 
 # ---------------------------------------------------------------------------
 
+def analyse_noise_ceiling(x: np.ndarray, sfreq: float, corrca: dict,
+                          seed: int, n_splits: int = 50) -> dict:
+    """Sahani-Linden / split-half / Schoppe ceilings on the same data.
+
+    Independent of the pairwise-ISC route in ``analyse_waveform`` /
+    ``analyse_bands``: those estimate rho1 from correlations, these from a
+    variance decomposition. Agreement is the point -- see
+    ``noise_ceiling.py`` for why the subject axis stands in for repeated
+    trials, and what that means when citing the papers.
+    """
+    n_rec, n_anchors, n_chans, n_times = x.shape
+    out: dict = {"observed_probe_r": dict(OBSERVED_PROBE_R)}
+
+    # (1) Window-level band power -- the probe's unit of analysis.
+    power = band_log_power(x, sfreq)                       # [R, A, C, B]
+    per_band = {}
+    for bi, band in enumerate(BANDS):
+        frac, frac_std, rho_sh = [], [], []
+        for c in range(n_chans):
+            r = power[:, :, c, bi]                          # [R, A]
+            rz = noise_ceiling.standardize_rows(r)
+            frac.append(noise_ceiling.sahani_linden_power(r)["explainable_fraction"])
+            frac_std.append(
+                noise_ceiling.sahani_linden_power(rz)["explainable_fraction"])
+            rho_sh.append(
+                noise_ceiling.split_half_reliability(rz, n_splits, seed)["rho1_corrected"])
+        frac = np.asarray(frac)
+        frac_std, rho_sh = np.asarray(frac_std), np.asarray(rho_sh)
+        # Rank on the standardised estimate: the pipeline normalises per
+        # recording, so per-subject amplitude is not information the encoder
+        # can use, and the scale-invariant number is the relevant ceiling.
+        best = int(np.nanargmax(frac_std))
+        sl = noise_ceiling.sahani_linden_power(
+            noise_ceiling.standardize_rows(power[:, :, best, bi]))
+        per_band[band] = {
+            "sahani_linden_raw_best_channel": float(frac[best]),
+            "sahani_linden_raw_mean_over_channels": float(np.nanmean(frac)),
+            "sahani_linden_mean_over_channels": float(np.nanmean(frac_std)),
+            "sahani_linden_best_channel": float(frac_std[best]),
+            "split_half_best_channel": float(rho_sh[best]),
+            "best_channel_index": best,
+            "cc_max_by_k": {
+                str(k): noise_ceiling.cc_max(sl["SP"], sl["NP"], k)
+                for k in (1, 2, 5, 10, 20, 50, 100)
+            },
+            "cc_norm_at_k1": {
+                name: noise_ceiling.cc_norm(v, sl["SP"], sl["NP"], 1)
+                for name, v in OBSERVED_PROBE_R.items()
+            },
+        }
+    out["bands"] = per_band
+
+    # (2) Held-out CorrCA components -- the multivariate readout a ridge probe
+    #     on a 512-d embedding can actually exploit.
+    ho = corrca.get("held_out_waveform_isc") or []
+    if ho:
+        snr = sum(v / (1.0 - v) for v in ho if 0.0 < v < 1.0)
+        combined = snr / (1.0 + snr) if snr > 0 else float("nan")
+        out["corrca_combined"] = {
+            "reliability": float(combined),
+            "cc_max_by_k": {
+                str(k): ceiling(combined, k)
+                for k in (1, 2, 5, 10, 20, 50, 100)
+            },
+            "cc_norm_at_k1": {
+                name: (v / ceiling(combined, 1)) if combined > 0 else float("nan")
+                for name, v in OBSERVED_PROBE_R.items()
+            },
+        }
+    return out
+
+
 def spearman_brown_table(rho1_by_name: dict[str, float],
                          ks=(1, 2, 5, 10, 20, 50, 100)) -> dict:
     return {
@@ -421,6 +505,8 @@ def main() -> None:
                    help="Cap recordings to bound memory (~21 MB each at 2 s / 101 anchors).")
     p.add_argument("--n-components", type=int, default=5)
     p.add_argument("--seed", type=int, default=2025)
+    p.add_argument("--n-splits", type=int, default=50,
+                   help="Random splits for the Hsu-style split-half estimator.")
     p.add_argument("--min-channel-std-ratio", type=float, default=1e-6,
                    help="Drop channels whose median std is below this ratio of "
                         "the across-channel median (catches flat reference "
@@ -442,6 +528,8 @@ def main() -> None:
     bands = analyse_bands(x, sfreq)
     logger.info("CorrCA (cross-validated)...")
     corrca = analyse_corrca(x, subjects, sfreq, args.n_components, args.seed)
+    logger.info("Noise ceilings (Sahani-Linden / split-half / Schoppe)...")
+    ceilings = analyse_noise_ceiling(x, sfreq, corrca, args.seed, args.n_splits)
 
     # The headline rho1 candidates, in increasing order of what a probe can
     # exploit. The CorrCA held-out number is the one the paper should quote.
@@ -473,6 +561,7 @@ def main() -> None:
         "corrca": corrca,
         "rho1_candidates": rho1_by_name,
         "spearman_brown": spearman_brown_table(rho1_by_name),
+        "noise_ceiling": ceilings,
     }
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     Path(args.output).write_text(json.dumps(result, indent=2))
@@ -499,6 +588,30 @@ def main() -> None:
         print(f"  CorrCA held-out component ISC: "
               f"{[round(v, 4) for v in corrca['held_out_waveform_isc']]}")
         print("  (the optimism gap between these two is why the split exists)")
+
+    print("\n" + "-" * 70)
+    print("  Literature noise ceilings (subjects as the repeat axis)")
+    print("-" * 70)
+    print("  Best channel per band. SL(std) and split-half are scale-invariant")
+    print("  and should match the pairwise ISC above; SL(raw) is deflated by")
+    print("  between-subject amplitude heterogeneity.")
+    print(f"  {'band':<13}{'SL(raw)':>9}{'SL(std)':>9}{'split-half':>12}"
+          f"{'ISC':>9}{'CC_max K=1':>12}{'K=10':>8}")
+    for b, v in ceilings["bands"].items():
+        print(f"  {b:<13}{v['sahani_linden_raw_best_channel']:9.4f}"
+              f"{v['sahani_linden_best_channel']:9.4f}"
+              f"{v['split_half_best_channel']:12.4f}"
+              f"{bands[b]['max_channel_isc']:9.4f}"
+              f"{v['cc_max_by_k']['1']:12.3f}{v['cc_max_by_k']['10']:8.3f}")
+    cc = ceilings.get("corrca_combined")
+    if cc:
+        print(f"\n  CorrCA combined reliability {cc['reliability']:.4f} "
+              f"-> CC_max K=1 {cc['cc_max_by_k']['1']:.3f}, "
+              f"K=10 {cc['cc_max_by_k']['10']:.3f}, "
+              f"K=50 {cc['cc_max_by_k']['50']:.3f}")
+        print("  CC_norm at K=1 (1.0 = at the ceiling):")
+        for name, v in cc["cc_norm_at_k1"].items():
+            print(f"    {name:<34}{v:6.3f}")
     print(f"\nWrote {args.output}")
 
 
