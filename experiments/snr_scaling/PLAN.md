@@ -157,7 +157,7 @@ Two anomalies worth reporting in the paper, both robust across splits:
   top eigenvalue as an ISC is quoting an artifact.
 - **The delta/theta >> alpha split is confirmed but smaller than cited.**
   Measured best-channel δ/θ = 0.062 vs α = 0.029, a ratio of 2.1×.
-  `experiments.md:47-70` cites δ/θ ISC of 0.10-0.28 and α < 0.05; at 2 s
+  `experiments.md` § "Core Problem Identified" cites δ/θ ISC of 0.10-0.28 and α < 0.05; at 2 s
   window-level log power the true values are 2-5× lower. **Quote the measured
   numbers, not the cited ones.**
 
@@ -199,7 +199,7 @@ spaces:
   This is the right number, because a ridge probe on a 512-d embedding can
   exploit exactly this multivariate reliability, not the per-channel one,
 - **per band** (δ/θ, α, β) — the δ/θ ≫ α split *is* the mechanism from
-  [experiments.md:47-70](../../experiments.md#L47-L70) and should be shown, not
+  [experiments.md § "Core Problem Identified"](../../experiments.md#core-problem-identified) and should be shown, not
   asserted.
 
 Deliverable: the ceiling column of every table in the paper. Report `r/ceiling`

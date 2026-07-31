@@ -16,7 +16,7 @@ the shared stimulus response is not recoverable from a single trial.
 Predict subject B's target tokens from subject A's context at the same movie time.
 Because B is drawn independently of A, `E[z_B | context_A] = E[shared_stimulus(t) | context_A]`,
 so the subject fingerprint (~96% of variance) is marginalized out by construction.
-Proposed at `experiments.md:73` in April; built and run here.
+Proposed at `experiments.md § "Three proposed solutions"` in April; built and run here.
 
 Implementation: `CrossSubjectJEPA` (`eb_jepa/jepa.py`) is `MaskedJEPA` on a flattened
 `2B` batch with `torch.roll(targets, shifts=B, dims=0)` swapping the halves — symmetric

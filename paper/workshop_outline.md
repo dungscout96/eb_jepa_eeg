@@ -160,7 +160,7 @@ an SNR-limited rather than objective-limited regime.
 
 ## Page 3 — §5 Analysis: why (~0.5 p)
 
-**5.1 The SNR decomposition.** Source: [experiments.md:47-70](../experiments.md).
+**5.1 The SNR decomposition.** Source: [experiments.md § "Core Problem Identified"](../experiments.md#core-problem-identified).
 
 ```
 EEG(s,c,t) = stimulus_response(c,τ) + subject_fingerprint(c) + noise(c,t)

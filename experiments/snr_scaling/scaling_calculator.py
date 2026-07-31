@@ -88,7 +88,8 @@ def main() -> None:
     print("1. CEILING ON PROBE r WHEN AVERAGING K SUBJECTS AT THE SAME MOMENT")
     print("=" * 74)
     print("rho1 = single-trial inter-subject reliability (2 s resolution).")
-    print("0.02-0.05 broadband; 0.10-0.28 delta/theta (experiments.md:47-70).\n")
+    print("MEASURED on R5 val (see RESULTS.md): 0.032 broadband / 0.040 "
+          "delta-theta mean over channels; 0.098 multivariate (CorrCA).\n")
     header = "  rho1  " + "".join(f"{('K=' + str(k)):>8}" for k in ks)
     print(header)
     print("  " + "-" * (len(header) - 2))

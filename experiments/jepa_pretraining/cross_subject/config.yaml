@@ -6,7 +6,7 @@
 #     random_lejepa (untrained) 0.0515   <- the bar
 #     jepa_lejepa_single        0.0344   <- masked JEPA, this exact config
 #     jepa_laya_multi           0.0494   <- best trained arm
-# experiments.md:47-70 explains it: EEG = stimulus(~3 uV) + subject
+# experiments.md § "Core Problem Identified" explains it: EEG = stimulus(~3 uV) + subject
 # fingerprint(~30 uV) + noise(~50 uV), single-trial stimulus SNR ~ -24 dB, and
 # the fingerprint is ~96% of variance. Within-subject masked prediction is
 # *rationally* solved by modelling the fingerprint — which is anti-correlated
@@ -15,7 +15,7 @@
 # THE FIX. Because partner B is drawn independently of A,
 #     E[z_B | context_A] = E[shared_stimulus_response(t) | context_A]
 # so the fingerprint is marginalized out and the Bayes-optimal solution IS the
-# shared stimulus response. Proposed at experiments.md:73 in April, built now.
+# shared stimulus response. Proposed at experiments.md § "Three proposed solutions" in April, built now.
 #
 # COLLAPSE IS THE #1 RISK, AND SIGReg DOES NOT FULLY COVER IT. At -24 dB the MSE
 # difference between "recover the shared response" and "emit the constant mean"

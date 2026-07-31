@@ -28,7 +28,7 @@ the record of what has been measured. Commits `b4492fe`, `6dd992d`.
    ISC. The ceiling is a property of the data, not of one estimator.
 5. **δ/θ ≫ α is confirmed but 2–5× smaller than the repo has been citing.**
    Measured best-channel δ/θ = 0.062 vs α = 0.029 (2.1×);
-   [`experiments.md:47-70`](../../experiments.md#L47-L70) cites 0.10–0.28 vs
+   [`experiments.md` § "Core Problem Identified"](../../experiments.md#core-problem-identified) cites 0.10–0.28 vs
    <0.05. **Quote the measured numbers.**
 6. **Test-time subject aggregation is worth far more than any objective.**
    Ceiling rises 0.313 → 0.722 at K=10 → 0.919 at K=50. Single-trial work is
@@ -238,7 +238,7 @@ Window-level log power, mean over channels (best channel in parentheses):
 
 δ/θ exceeds α by 2.8× at the channel mean and 2.1× at the best channel,
 consistently across splits. This **confirms** the mechanism asserted in
-[`experiments.md:47-70`](../../experiments.md#L47-L70) — stimulus signal lives
+[`experiments.md` § "Core Problem Identified"](../../experiments.md#core-problem-identified) — stimulus signal lives
 in δ/θ, while α dominates variance but is subject-specific.
 
 **It also corrects the magnitude.** That file cites δ/θ ISC of 0.10–0.28 and

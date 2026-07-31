@@ -54,7 +54,7 @@ allowed to read. We report all three, because they bound different things.
     Per-channel, per-band log power computed *per 2 s window*, correlated
     across windows. This matches the probe's unit of analysis (one embedding
     per window) and separates the delta/theta vs alpha split that
-    ``experiments.md`` lines 47-70 asserts as the mechanism.
+    ``experiments.md`` § "Core Problem Identified" asserts as the mechanism.
 
 ``corrca``
     CorrCA finds the spatial filters that maximise across-subject
@@ -104,8 +104,11 @@ OBSERVED_PROBE_R = {
     "reve_warmstart": 0.1715,
 }
 
-# Bands. delta/theta is where experiments.md reports ISC 0.10-0.28; alpha is
-# where the variance is but ISC < 0.05. Broadband is the 1-40 Hz reference.
+# Bands. delta/theta carries the stimulus signal, alpha carries the variance
+# but is subject-specific. MEASURED on R5 val (RESULTS.md 2.4): delta/theta
+# 0.040 mean over channels, alpha 0.014 -- a 2.8x split. Broadband is the
+# 1-40 Hz reference. (experiments.md originally estimated 0.10-0.28 vs <0.05;
+# the ordering held, the magnitudes did not.)
 BANDS = {
     "delta_theta": (1.0, 8.0),
     "alpha": (8.0, 12.0),

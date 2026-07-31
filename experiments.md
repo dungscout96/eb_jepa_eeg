@@ -44,6 +44,41 @@ Reduced predictor internal dimension from 64 → 24 (ratio 0.375, matching V-JEP
 
 ## Core Problem Identified
 
+> ### ⚠️ CORRECTION (2026-07-31) — the numbers below were estimates, now measured
+>
+> The figures in this section were literature estimates written in April 2026,
+> before anything here was measured on HBN. They have since been measured
+> directly — see
+> [`experiments/snr_scaling/RESULTS.md`](experiments/snr_scaling/RESULTS.md).
+> **The qualitative claims survive; two of the magnitudes do not.**
+>
+> | claim below | measured (R5 val, 293 subjects, 2 s windows) | verdict |
+> |---|---|---|
+> | δ/θ ISC = 0.10–0.28 | **0.040** mean over channels, **0.062** best channel | **2.5–4.5× too high** |
+> | α ISC < 0.05 | **0.014** mean, **0.029** best channel | holds |
+> | stimulus SNR −24 dB (0.4 % of variance) | **−20 dB (0.96 %)** per channel; **−9.6 dB (9.8 %)** multivariate | see below |
+> | fingerprint ≈ 96 % of variance | ~99 % per channel; **~90 %** multivariate | readout-dependent |
+>
+> **The most important correction is the last two rows.** The −24 dB / 0.4 %
+> figure is a *per-channel* quantity. What bounds a multivariate probe — a
+> ridge on a 512-d embedding, which is what we actually train — is the
+> cross-validated CorrCA reliability of **0.098**, i.e. **−9.6 dB**, an order
+> of magnitude more signal than the per-channel number implies. Using the
+> per-channel figure to argue "single-trial decoding is at its theoretical
+> limit" understates the available signal ~10×, and the measured ceiling
+> (probe *r* = 0.313, with the best checkpoint at 48 % of it) shows single-trial
+> decoding is **not** at ceiling.
+>
+> The δ/θ ≫ α ordering — the actual mechanism this section argues for — is
+> confirmed: δ/θ exceeds α by 2.8× at the channel mean. Only the absolute
+> values were wrong.
+>
+> The cross-subject aggregation arithmetic below is sound and, with measured
+> values, more favourable than stated: at per-channel `rho1 = 0.0096`,
+> K = 660 gives **+8.1 dB**; at multivariate `rho1 = 0.098`, **+18.6 dB**.
+>
+> **When citing this section, cite the measured values, not the ones below.**
+
 ### Why the encoder learns subject identity, not stimulus content
 
 **Signal decomposition:**
@@ -53,7 +88,9 @@ EEG(s, c, t) = stimulus_response(c, τ) + subject_fingerprint(c) + noise(c, t)
 ```
 
 - Stimulus SNR per single trial: **-24 dB (0.4% of variance)**
+  — *superseded: −20 dB (0.96 %) per channel, −9.6 dB (9.8 %) multivariate*
 - Subject fingerprint explains **~96% of variance**
+  — *superseded: ~99 % per channel, ~90 % multivariate*
 - The masked prediction objective is rationally solved by learning subject patterns
 
 **Why spatial masking is trivial for EEG:**
@@ -62,12 +99,18 @@ EEG(s, c, t) = stimulus_response(c, τ) + subject_fingerprint(c) + noise(c, t)
 
 **Where stimulus signal lives:**
 - Delta/Theta (1-8 Hz): ISC = 0.10-0.28 (narrative, scene boundaries)
+  — *superseded: 0.040 mean over channels, 0.062 best channel*
 - Alpha (8-12 Hz): ISC < 0.05 (subject-specific, dominant power)
+  — *confirmed: 0.014 mean, 0.029 best channel*
 - The encoder is dominated by alpha because that's where the variance is
 
 **Theoretical limit of single-trial stimulus decoding:**
 - Movie ID 20-way: P(correct) ≈ 5.4% (we observe 5.6%) — at ceiling
+  — *not re-tested; but the "at ceiling" framing is wrong for the continuous
+    movie-feature probe, which reaches only 48 % of its measured ceiling*
 - Need cross-subject aggregation (√660 subjects ≈ 25.7× SNR boost → +4 dB) to detect stimulus
+  — *arithmetic sound; with measured values, +8.1 dB per channel / +18.6 dB
+    multivariate*
 
 ### Three proposed solutions (in priority order)
 1. **Cross-subject contrastive loss** — pull same-time-different-subject pairs together
