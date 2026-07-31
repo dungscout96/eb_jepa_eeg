@@ -33,7 +33,15 @@ the record of what has been measured. Commits `b4492fe`, `6dd992d`.
 6. **Test-time subject aggregation is worth far more than any objective.**
    Ceiling rises 0.313 → 0.722 at K=10 → 0.919 at K=50. Single-trial work is
    capped at ~2×; aggregation offers ~3×.
-7. Two artifacts found and fixed that would have corrupted the headline: a flat
+7. **Subjects buy SNR; seconds do not.** Measured directly on Top-K retrieval
+   (§2.6): scene Top-1 goes 0.217 → 0.571 with subject averaging, but pooling
+   more seconds *within* a subject gains ~0.015 and then degrades — and the
+   oracle-segment upper bound confirms that is the ceiling, not a blocking
+   artifact. This closes the free alternative to collecting subjects.
+8. **The retrieval metric hides a collapse** (§2.7): the model answers "scene 0"
+   — the black title card — for 40.6 % of test windows while it is correct 5.0 %
+   of the time. Report the modal-answer share alongside Top-K.
+9. Two artifacts found and fixed that would have corrupted the headline: a flat
    reference channel faking ISC ≈ 0.4, and CorrCA component 1 failing to
    generalise despite the largest in-sample eigenvalue.
 
@@ -72,11 +80,61 @@ That is the correct choice for bounding *stimulus* decoding — subject-specific
 structure is precisely what must not count — and it makes these estimators
 commensurable with ISC. But it means these are **cross-subject, not
 cross-trial, ceilings**, and they are consequently far lower than a
-within-subject repeated-trial ceiling. Trial-averaged image-decoding results
-(NICE / THINGS-EEG, Défossez et al., Benchetrit et al.) are **not comparable**
-to these numbers. This asymmetry is itself an argument for the paper: that
-literature buys SNR through repetition, which naturalistic continuous viewing
-does not afford.
+within-subject repeated-trial ceiling.
+
+### 1.2b Comparability to the neural-decoding literature — checked against sources
+
+An earlier draft of this file claimed that NICE/THINGS-EEG, Défossez et al.
+and Benchetrit et al. are all "trial-averaged image decoding" and therefore not
+comparable. **That was wrong for two of the three.** Verified against the
+papers:
+
+| work | modality | stimulus | repeats | averaged? | training |
+|---|---|---|---|---|---|
+| NICE / THINGS-EEG (Song et al.) | EEG | discrete images | 4 train / **80 test** | **Yes, explicitly** | **per-subject** |
+| Benchetrit et al. 2024 | MEG | discrete images | 12 test | **Both reported** | cross-subject |
+| Défossez et al. 2023 | MEG **and EEG** | continuous speech | none used | **No — single-trial** | cross-subject |
+
+- **NICE is genuinely trial-averaged and within-subject.** "We averaged all EEG
+  repetitions of one image to ensure the signal-to-noise ratio"; the test split
+  is 200 concepts × 1 image × **80 repetitions**. Averaging is load-bearing:
+  10 repeats give 9.9 % top-1, stabilising above 13.0 % only after ~25.
+  Subject-dependent training gives 13.8 % top-1 vs **6.2 % subject-independent**.
+  Not comparable to single-trial cross-subject HBN — the original claim holds
+  here.
+- **Benchetrit et al. report both.** THINGS-MEG test is 200 images × 12
+  repetitions, and Table 1 gives PixCorr 0.069 no-average, 0.079 per-trial
+  average, 0.088 per-subject average. Averaging helps modestly; the headline
+  does not depend on it. It is not comparable to our numbers chiefly because it
+  is **MEG** and event-related, not because of averaging.
+- **Défossez et al. is single-trial, and it is speech, not images.** "A 'sample'
+  is a 3 s window of brain recording with its associated speech
+  representation." No trial averaging. Trained across subjects with a
+  subject-specific 1×1 convolution. Listing it as trial-averaged image decoding
+  was wrong on both counts.
+
+**Défossez et al. is therefore the closest methodological analogue to this
+work** — cross-subject, single-trial, continuous naturalistic stimulus,
+contrastive retrieval — and its modality breakdown is directly relevant:
+
+| dataset | modality | top-1 | top-10 |
+|---|---|---:|---:|
+| Gwilliams | MEG | **41.3 %** | 70.7 % |
+| Schoffelen | MEG | 36.8 % | 67.5 % |
+| Brennan | **EEG** | **5.2 %** | 25.7 % |
+| Broderick | **EEG** | **5.0 %** | 17.7 % |
+
+The widely-quoted "41 % out of 1,000+ segments" is **MEG**. The same
+architecture, same objective, same single-trial protocol yields **~5 % top-1 on
+EEG** — an ~8× modality gap. That is independent evidence for the thesis here:
+the binding constraint is EEG SNR, not the training objective. It is a stronger
+argument than the averaging one, and unlike the averaging one it survives
+checking.
+
+The honest comparability statement is therefore: **NICE-style numbers are not
+comparable because they are trial-averaged and within-subject; MEG results are
+not comparable because MEG has far higher SNR than EEG; Défossez's EEG results
+ARE comparable in protocol, and they are low — consistent with our ceiling.**
 
 ### 1.3 Data and protocol
 
@@ -204,6 +262,112 @@ property of the subject population, not of the split it was estimated on — so
 **use the val estimate**. Expect a reviewer to notice both numbers; state this
 explicitly rather than reporting only one.
 
+### 2.6 Aggregation curves on the retrieval metric — subjects work, seconds do not
+
+§4.2's K_test argument rests on a Spearman-Brown *extrapolation* of the ceiling.
+This measures the aggregation effect directly on a downstream metric — e→v
+Top-K retrieval from
+[`scene_clip_from_checkpoint` §3.10](../clip_pretraining/scene_clip_from_checkpoint/RESULTS.md)
+— by pooling more EEG into the **query** while holding the candidate pool
+byte-identical. Same centroids, same N, so chance stays `K/N` and every row is
+comparable. Implementation:
+[`aggregation_curves.py`](aggregation_curves.py).
+
+Three regimes, in increasing order of what they assume:
+
+- **temporal-k** — average `k` consecutive windows within one recording,
+  non-overlapping, label = majority group of the block. Assumes nothing about
+  where shots or scenes begin: the honest "more seconds of EEG" curve.
+- **oracle-seg** — average every window of one (recording, group). Uses
+  ground-truth boundaries, so it is the *upper bound* on temporal-k, not a
+  deployable number.
+- **n-subjects** — average over `n` recordings for the same group (oracle
+  segment). One recording = one subject watching the film once.
+
+**VAL** (M = 29,593 windows, 293 recordings), e→v Top-1 / Top-5 / Top-10:
+
+| query | shot (N=49) | scene (N=35) |
+|---|---|---|
+| 1 window (2 s) — the §3.10 number | 0.167 / 0.439 / 0.586 | 0.217 / 0.526 / 0.675 |
+| 2 windows (4 s) | 0.183 / 0.469 / 0.635 | 0.232 / 0.568 / 0.716 |
+| 4 windows (8 s) | 0.176 / 0.469 / 0.627 | 0.241 / 0.580 / 0.732 |
+| 8 windows (16 s) | 0.183 / 0.385 / 0.534 | 0.208 / 0.503 / 0.666 |
+| 16 windows (32 s) | 0.207 / 0.298 / 0.419 | 0.159 / 0.512 / 0.676 |
+| **oracle segment** (upper bound on the above) | 0.159 / 0.484 / 0.641 | 0.230 / 0.604 / 0.741 |
+| 2 subjects | 0.212 / 0.676 / 0.833 | 0.284 / 0.764 / 0.881 |
+| 4 subjects | 0.258 / 0.757 / 0.902 | 0.356 / 0.884 / 0.946 |
+| 8 subjects | 0.303 / 0.869 / 0.961 | 0.429 / 0.949 / 0.993 |
+| 16 subjects | 0.321 / 0.929 / 0.996 | 0.503 / 0.990 / **1.000** |
+| all 293 subjects | 0.347 / **1.000** / **1.000** | **0.571** / **1.000** / **1.000** |
+
+TEST (M = 10,908, 108 recordings) has the same shape at lower absolute values:
+scene Top-1 0.149 → 0.159 (oracle segment) → 0.429 (all 108 subjects); shot
+Top-1 0.114 → 0.114 → 0.327.
+
+Two findings, with different status:
+
+1. **Subject aggregation: confirmatory.** Scene Top-1 nearly triples (0.217 →
+   0.571) and Top-5 saturates at 1.000 by ~16 subjects. This is §4.2's claim
+   reproduced on a second, independent metric, and it is *empirical* rather than
+   Spearman-Brown-extrapolated — so it partially discharges **E0.2**. Only
+   partially: it measures a downstream retrieval metric, not `rho1(K)` or
+   `r(K)`, so the extrapolation itself remains unvalidated on its own terms.
+
+2. **Temporal aggregation: new, and negative.** Pooling more seconds from *one*
+   subject buys almost nothing — k=2 gains ~0.015 Top-1, k=4 is flat, and
+   beyond that Top-5/Top-10 degrade. Critically the **oracle-segment row lands
+   at the k=2–4 value**, so this is not a failure of the blocking scheme: it is
+   the ceiling on any scheme that averages EEG within a segment.
+
+Finding 2 matters because it closes the cheapest imaginable alternative to
+collecting subjects. Every subject already contributes 203 s of EEG, so if
+seconds substituted for subjects the SNR would be free. They do not.
+
+**Why — and what is *not* evidence here.** The mechanism is that segments are
+short: mean shot 3.7 s (1.9 windows), mean scene 5.6 s (2.8 windows). That mean
+is **not independent evidence** for the anchor-count argument in §4.1 — with a
+fixed 203 s film it is forced arithmetically, `203 / 54 shots = 3.8 s`,
+`203 / 36 scenes = 5.6 s`. "Few anchors" and "short anchors" are one fact in two
+costumes. What *is* independent is the skew: median shot 2.9 s, median scene
+3.7 s, so **70 % of shots and 56 % of scenes contain two windows or fewer** —
+tighter than the mean implies. And the consequence itself had to be measured:
+a model with temporal context could have kept improving on longer input
+regardless of where labels fall, and it does not.
+
+The deeper reason is that the two axes are not the same operation. Averaging
+windows *within* a segment averages different stimulus content, blurring the
+thing being identified; averaging *across subjects at the same moment* averages
+the same content over independent noise. Only the second accumulates signal —
+which is exactly the `x_s(t) = g(t) + n_s(t)` model in
+[`PLAN.md`](PLAN.md), now observed end-to-end on a retrieval metric.
+
+**Caveats, in order of how badly they would bite.** The subject rows use
+ground-truth segment boundaries to decide what to average, as does oracle-seg —
+they answer "if you knew the boundaries". The subject rows have only `N` queries
+(35 or 49), one per group; `n ≤ 16` are means over 20 random draws and are
+stable, but the all-subjects row is a single draw, so read 1.000 as "no errors
+in 35 queries", not as a converged rate. A group's query and candidate are
+averaged over the same window set on their respective sides — no information
+crosses modalities, but the correspondence is maximally favourable. The k=16
+collapse is a labelling artifact, not a signal: a 32 s block spans several
+scenes, so its majority label is close to meaningless.
+
+### 2.7 The retrieval metric collapses onto one attractor
+
+Not an aggregation result, but it surfaced from the same runs and is invisible
+in the §3.10 tables. At the scene level the model names **scene 0 — the 10 s
+black title card — as its top-1 for 40.6 % of test windows and 31.6 % of val
+windows**, though scene 0 is the correct answer only 5.0 % of the time (uniform
+would be 2.9 %). Shot level is the same story on shot 0: 33.5 % test / 28.7 %
+val predicted vs 4.0 % true.
+
+Temporal aggregation makes it slightly **worse** (test scene 41 % → 48 % at
+k=16); subject aggregation reduces it but does not remove it (41 % → 26 % test,
+32 % → 31 % val). So it is not merely per-window noise — a systematic component
+survives averaging over 108 subjects. Anything that reports Top-K on this
+checkpoint should report the modal-answer share alongside it; a large share of
+first guesses landing on one pool entry is not visible in Top-K.
+
 ---
 
 ## §3. Two artifacts that would have corrupted the headline
@@ -271,6 +435,19 @@ approaching the K=1 ceiling. Any scaling law reported for this pipeline should
 be **2-D over (K_train, K_test)** — single-trial-only numbers understate the
 available effect by ~3×.
 
+§2.6 measures this end-to-end rather than extrapolating it: on Top-K retrieval,
+subject averaging takes scene Top-1 from 0.217 to 0.571 and saturates Top-5 at
+1.000 by ~16 subjects. The magnitude is consistent with the Spearman-Brown
+prediction above, on a metric that never enters the ceiling calculation.
+
+It also rules out the obvious cheap substitute. The aggregation axis has to be
+**subjects**, not time: pooling more seconds within one subject gains ~0.015
+Top-1 and then degrades, with the oracle-segment upper bound confirming that is
+a true ceiling. So "aggregation beats objectives" cannot be cashed in by simply
+using longer EEG windows on the subjects already collected — it requires
+subjects, which is what makes the (anchors × subjects) surface in §4.1 the
+right design space rather than an (anchors × seconds) one.
+
 ### 4.3 Report r/ceiling, not r
 
 `r = 0.15` invites "that is small." `CC_norm = 0.48` against a measured,
@@ -312,6 +489,23 @@ Analytic design calculator (no cluster needed):
 uv run --group eeg python experiments/snr_scaling/scaling_calculator.py
 ```
 
+Aggregation curves (§2.6, §2.7). Runs locally in seconds — it consumes the
+shared-space export rather than a checkpoint, so it needs no GPU and no cluster:
+
+```bash
+# Once, on Delta: write the shared-space export (see demo/README.md)
+python demo/_submit_export.py interactive
+
+# Then locally, per split:
+PYTHONPATH=. uv run --group eeg python \
+    experiments/snr_scaling/aggregation_curves.py \
+    --npz demo/data/demo_val.npz \
+    --output experiments/snr_scaling/aggregation_val_ThePresent.json
+```
+
+Subject draws are seeded (`--seed`, default 0); the `n ≤ 16` rows are means over
+20 draws and move by ~±0.02 across seeds, so quote them to two decimals.
+
 ---
 
 ## §6. Artifacts
@@ -322,9 +516,16 @@ uv run --group eeg python experiments/snr_scaling/scaling_calculator.py
   Spearman-Brown tables, and CC_norm against the measured probe results.
 - `snr_scaling.png` / `.pdf` — ceiling vs K, and the (anchors × subjects)
   design space.
+- `aggregation_val_ThePresent.json`, `aggregation_test_ThePresent.json` — §2.6
+  temporal / oracle-segment / n-subject curves at shot and scene level, plus the
+  §2.7 modal-answer shares. Produced from the shared-space export, so the
+  checkpoint provenance travels inside the file.
 
 **Code:**
 - [`measure_isc.py`](measure_isc.py) — the measurement.
+- [`aggregation_curves.py`](aggregation_curves.py) — §2.6 / §2.7 curves.
+  Depends on `demo/export_retrieval_npz.py` for *data* only; it imports nothing
+  from `demo/`.
 - [`noise_ceiling.py`](noise_ceiling.py) — Sahani-Linden, split-half, Schoppe.
 - [`scaling_calculator.py`](scaling_calculator.py) — analytic design calculator.
 - [`_submit_isc.py`](_submit_isc.py) — Delta submission.
@@ -339,7 +540,10 @@ uv run --group eeg python experiments/snr_scaling/scaling_calculator.py
 ## §7. Open
 
 - **E0.2** — empirical K-averaging curve, to validate the Spearman-Brown
-  extrapolation the K_test argument now leans on more heavily.
+  extrapolation the K_test argument now leans on more heavily. **Partially
+  addressed by §2.6**: the K curve is measured end-to-end on Top-K retrieval and
+  agrees in magnitude, but `rho1(K)` / `r(K)` themselves are still unmeasured,
+  which is what would validate the extrapolation on its own terms.
 - **E0.3** — the (anchors × subjects) scaling surface, now the leading
   explanation for the objective saturation.
 - **E2.1** — subject-trait probes on the LeJEPA / Laya / random checkpoints.
@@ -354,4 +558,5 @@ anchor-count explanation.
 
 ---
 
-*E0.1 of [`PLAN.md`](PLAN.md) is complete. Next: E0.2.*
+*E0.1 of [`PLAN.md`](PLAN.md) is complete. E0.2 is partially addressed by §2.6.
+Next: E0.2 proper (`rho1(K)`), then E0.3.*

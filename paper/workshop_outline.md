@@ -38,12 +38,23 @@ Four beats:
    at or below random init.
 4. **The reason and the fix.** One sentence each; forward-reference §5 and §6.
 
-**Positioning sentence to keep verbatim (this is the paper's hook):**
+**Positioning sentence (verified against the sources — see
+[RESULTS.md §1.2b](../experiments/snr_scaling/RESULTS.md)):**
 
-> Prior EEG↔stimulus decoding work (Défossez et al.; Benchetrit et al.;
-> NICE/THINGS-EEG) buys SNR through repeated trials averaged at test time and
-> within-subject training. Naturalistic continuous viewing affords neither. SNR
-> must instead be bought *inside the objective*, via cross-subject aggregation.
+> Where naturalistic EEG decoding has succeeded, it has bought SNR from
+> somewhere: NICE/THINGS-EEG averages 80 test repetitions per image and trains
+> per subject (13.8 % top-1 subject-dependent vs 6.2 % subject-independent);
+> Benchetrit et al. and the headline Défossez et al. results are MEG. Run
+> single-trial on EEG with a cross-subject model — Défossez's own EEG datasets —
+> the same architecture yields ~5 % top-1 against ~41 % on MEG. Continuous
+> naturalistic viewing affords neither repetition nor MEG, so SNR must be
+> bought *inside the objective*, via cross-subject aggregation.
+
+**Do NOT write "prior work is trial-averaged image decoding."** That was an
+earlier draft's claim and it is false for Défossez et al., which is
+single-trial and is speech, not images. The ~8× MEG-over-EEG gap on an
+otherwise identical pipeline is the stronger argument and it survives
+checking; the averaging argument only applies to NICE.
 
 **Related work, one compressed paragraph.** EEG FMs (above); neural decoding
 with contrastive losses; the modality gap (Liang et al. 2022) and
