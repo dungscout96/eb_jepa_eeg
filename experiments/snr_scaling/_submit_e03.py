@@ -60,6 +60,8 @@ FULL_ANCHORS = 101           # 2 s windows spanning ThePresent (202.5 s)
 #   S axis at full A ..... 5 cells (includes the shared corner)
 #   A axis at full S ..... 3 cells
 #   diagonal ............. 3 cells, to test separability of the two axes
+SUFFIX = ""
+
 CELLS = [
     (701, 101), (400, 101), (200, 101), (100, 101), (50, 101),   # vary S
     (701, 50), (701, 25), (701, 13),                             # vary A
@@ -68,8 +70,9 @@ CELLS = [
 
 
 def build_job(subjects: int, anchors: int, partition: str,
-              time_limit: str, epochs: int) -> Job:
-    slug = f"e03_s{subjects}_a{anchors}"
+              time_limit: str, epochs: int, save_every: int = 99999,
+              skip_probe: bool = False) -> Job:
+    slug = f"e03_s{subjects}_a{anchors}{SUFFIX}"
     exp_dir = f"{CKPT_ROOT}/{slug}"
 
     # Patch the shared template inside the job, so the on-disk config is never
@@ -111,15 +114,16 @@ def build_job(subjects: int, anchors: int, partition: str,
             f" --optim.epochs={epochs}"
             f" --meta.seed={SEED}"
             f" --folder={exp_dir}"
-            " --logging.save_every=99999"
+            f" --logging.save_every={save_every}"
             " --logging.wandb_group=e03_scaling"
-            " && "
-            "PYTHONPATH=. uv run --group eeg python"
-            " eb_jepa/evaluation/clip_probe/probe.py"
-            f" --checkpoint {exp_dir}/latest.pth.tar"
-            f" --config {exp_dir}/config_probe.yaml"
-            " --split val --cv-splits 5"
-            f" --output {EXP_DIR}/e03_probe_val_{slug}.json"
+            + ("" if skip_probe else (
+                " && "
+                "PYTHONPATH=. uv run --group eeg python"
+                " eb_jepa/evaluation/clip_probe/probe.py"
+                f" --checkpoint {exp_dir}/latest.pth.tar"
+                f" --config {exp_dir}/config_probe.yaml"
+                " --split val --cv-splits 5"
+                f" --output {EXP_DIR}/e03_probe_val_{slug}.json"))
         ),
         venv="__none__",
         branch="",
@@ -137,9 +141,22 @@ def main() -> None:
     p.add_argument("--epochs", type=int, default=EPOCHS)
     p.add_argument("--only", default=None,
                    help="Run one cell, e.g. --only=703x101.")
+    p.add_argument("--save-every", type=int, default=99999,
+                   help="Periodic epoch_N.pth.tar checkpoints. 99999 keeps only "
+                        "latest.pth.tar. Set ~25 for the early-stopped protocol "
+                        "-- without intermediate checkpoints there is nothing to "
+                        "early-stop TO (see RESULTS.md 2.10).")
+    p.add_argument("--skip-probe", action="store_true",
+                   help="Train only. Under the early-stopped protocol the probe "
+                        "runs later, on the selected checkpoint, not on latest.")
+    p.add_argument("--suffix", default="",
+                   help="Appended to the cell slug, so a re-run does not "
+                        "overwrite the endpoint-protocol results.")
     p.add_argument("action", nargs="?", default="dry", choices=["dry", "submit"])
     args = p.parse_args()
 
+    global SUFFIX
+    SUFFIX = args.suffix
     cells = CELLS
     if args.only:
         s, a = (int(v) for v in args.only.lower().split("x"))
@@ -155,12 +172,13 @@ def main() -> None:
 
     if args.action != "submit":
         print(build_job(*cells[0], args.partition, args.time_limit,
-                        args.epochs).command)
+                        args.epochs, args.save_every, args.skip_probe).command)
         print("\nDry run. Re-run with 'submit' to sbatch.")
         return
 
     for s, a in cells:
-        job = build_job(s, a, args.partition, args.time_limit, args.epochs)
+        job = build_job(s, a, args.partition, args.time_limit, args.epochs,
+                        args.save_every, args.skip_probe)
         print(f"submitted {job.name}: {job.submit()}")
 
 

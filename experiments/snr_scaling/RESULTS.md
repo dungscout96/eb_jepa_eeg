@@ -58,14 +58,19 @@ the record of what has been measured. Commits `b4492fe`, `6dd992d`, `fdf0b3b`.
    a 3 % difference — and the δ/θ-over-α ratio replicates at 3.06 vs 2.84. The
    cohorts are 98.9 % shared, so stimulus is the only thing varying. Say
    "replicates across movies within HBN," not "replicates."
-11. **E0.3 ran; the thesis survived its own falsification test** (§2.10). Across
+11. ⚠️ **E0.3 ran, but its exponents are PROVISIONAL** (§2.10). Every cell
+   overfits, worse with less data (val AUC drops 15 % at S=701 vs 31 % at S=50,
+   40 % at A=13), which is the exact bias that inflates a scaling exponent. The
+   *ordering* below holds at each cell's peak; the magnitudes do not. Re-running
+   early-stopped. Original endpoint-based text follows:
+12. **E0.3 ran; the thesis survived its own falsification test** (§2.10). Across
    11 step-matched cells, Δr² scales with subjects (local exponent **+0.441** at
    the operating point, still climbing at S=701) and saturates in anchors
    (**+0.096** over A=50→101) — a **4.6× ratio**. Model-free version: at a
    matched (subjects × anchors) budget, subject-heavy beats anchor-heavy **4/4,
    median 1.34×**, twice while using *fewer* total pairs. Caveat: n=1 seed, and
    the A saturation step is only ~3.4σ against jul7's seed noise.
-12. Two artifacts found and fixed that would have corrupted the headline: a flat
+13. Two artifacts found and fixed that would have corrupted the headline: a flat
    reference channel faking ISC ≈ 0.4, and CorrCA component 1 failing to
    generalise despite the largest in-sample eigenvalue — the latter now known to
    be **rank-unstable across movies** (§2.9), which is a stronger reason to avoid
@@ -538,7 +543,52 @@ rank of the bad component is **not stable across stimuli**, and any statistic
 keyed to a fixed rank would be movie-dependent. The max-component and
 SNR-combined statistics used throughout are unaffected.
 
-### 2.10 E0.3 — the (anchors × subjects) surface. The thesis survives.
+### 2.10 E0.3 — the (anchors × subjects) surface. ⚠️ PROVISIONAL
+
+> ## ⚠️ DO NOT QUOTE THE EXPONENTS IN THIS SECTION YET
+>
+> **Every cell overfits, and the amount of overfitting is anticorrelated with
+> data size — the exact bias that inflates a scaling exponent.** Discovered
+> 2026-08-02 by pulling the per-epoch `val/clip_scene_auc` diagnostic out of the
+> offline wandb files.
+>
+> | cell | best | final | best epoch | drop |
+> |---|---:|---:|---:|---:|
+> | S=50 | 0.881 | 0.605 | 284 | **31.3 %** |
+> | S=100 | 0.900 | 0.678 | 235 | 24.6 % |
+> | S=200 | 0.917 | 0.698 | 294 | 23.9 % |
+> | S=400 | 0.929 | 0.773 | 294 | 16.7 % |
+> | S=701 | 0.944 | 0.802 | 245 | **15.1 %** |
+> | A=13 | 0.865 | 0.522 | 328 | **39.6 %** |
+> | A=25 | 0.866 | 0.590 | 349 | 31.9 % |
+> | A=50 | 0.912 | 0.791 | 294 | 13.3 % |
+>
+> Every cell peaks at epoch ~235–350 and then degrades, monotonically worse with
+> less data. Corroborated by final train loss: **0.68** at S=50 and **0.28** at
+> A=13 against **2.65** at full data — the small cells drove training loss into
+> the floor by memorising.
+>
+> The effect is large. At its peak S=50 reaches **93 %** of S=701; at the
+> endpoint measured below, only **75 %**. On the anchor axis, 92 % at peak vs
+> **65 %** at the end.
+>
+> **What survives:** the ordering. Both axes still increase monotonically at
+> peak. **What does not:** the magnitudes. The "+0.441 vs +0.096, 4.6×" claim
+> below is measured at a fixed 4400-step budget, which the scaling literature
+> (Hestness 2017; Kaplan 2020) treats as invalid for cross-data-scale
+> comparison precisely because the optimal stopping point is a function of
+> dataset size. On this saturating AUC metric the peak-epoch A slope is actually
+> the *larger* of the two.
+>
+> Two things stop this being a straight retraction: `val/clip_scene_auc` is an
+> in-loop diagnostic, not the probe Δr² the surface is built on, so it does not
+> transfer number-for-number; and no intermediate checkpoints exist to re-probe,
+> because `save_every=99999` was set to avoid the earlier quota incident.
+>
+> **Fix in flight:** re-run all 11 cells with periodic checkpoints, select each
+> cell's best epoch by the in-loop val diagnostic, and probe that checkpoint —
+> the standard early-stopped protocol. Numbers below will be replaced.
+
 
 11 cells, L-shape plus diagonal, retraining the jul7 recipe (TP-only
 `soft_target_clip`, α=0.5, τ=0.05, seed 2026). **Every cell runs exactly 4400
