@@ -1,0 +1,97 @@
+{
+  "random_baseline": true,
+  "eval_split": "test",
+  "n_train_recordings": 701,
+  "n_test_recordings": 108,
+  "n_train_windows": 70801,
+  "n_test_windows": 10908,
+  "encoder_dim": 512,
+  "features": {
+    "luminance_mean": {
+      "r2": -0.06380128860473633,
+      "pearson_r": 0.06948336213827133,
+      "alpha": 31.622776601683793,
+      "n_train": 70801,
+      "n_test": 10908
+    },
+    "contrast_rms": {
+      "r2": -0.06651270389556885,
+      "pearson_r": 0.0566742904484272,
+      "alpha": 31.622776601683793,
+      "n_train": 70801,
+      "n_test": 10908
+    },
+    "edge_density": {
+      "r2": -0.03199875354766846,
+      "pearson_r": 0.02648734301328659,
+      "alpha": 100.0,
+      "n_train": 70801,
+      "n_test": 10908
+    },
+    "saturation_mean": {
+      "r2": -0.06739819049835205,
+      "pearson_r": 0.04611023887991905,
+      "alpha": 100.0,
+      "n_train": 70801,
+      "n_test": 10908
+    },
+    "entropy": {
+      "r2": -0.0953989028930664,
+      "pearson_r": 0.0644848570227623,
+      "alpha": 100.0,
+      "n_train": 70801,
+      "n_test": 10908
+    },
+    "motion_energy": {
+      "r2": -0.07976663112640381,
+      "pearson_r": 0.05542951449751854,
+      "alpha": 31.622776601683793,
+      "n_train": 70801,
+      "n_test": 10908
+    },
+    "n_faces": {
+      "r2": -0.027787327766418457,
+      "pearson_r": 0.06716573238372803,
+      "alpha": 31.622776601683793,
+      "n_train": 70801,
+      "n_test": 10908
+    },
+    "face_area_frac": {
+      "r2": -0.07951033115386963,
+      "pearson_r": 0.042962297797203064,
+      "alpha": 100.0,
+      "n_train": 70801,
+      "n_test": 10908
+    },
+    "depth_mean": {
+      "r2": -0.07408797740936279,
+      "pearson_r": 0.025422638282179832,
+      "alpha": 100.0,
+      "n_train": 70801,
+      "n_test": 10908
+    },
+    "scene_natural_score": {
+      "r2": -0.019840002059936523,
+      "pearson_r": 0.07965422421693802,
+      "alpha": 31.622776601683793,
+      "n_train": 70801,
+      "n_test": 10908
+    },
+    "position_in_movie": {
+      "r2": -0.07750368118286133,
+      "pearson_r": 0.056891005486249924,
+      "alpha": 31.622776601683793,
+      "n_train": 70801,
+      "n_test": 10908
+    },
+    "narrative_event_score": {
+      "r2": -0.05621910095214844,
+      "pearson_r": 0.027152763679623604,
+      "alpha": 100.0,
+      "n_train": 70801,
+      "n_test": 10908
+    }
+  },
+  "seed": 42,
+  "bootstrap_iters": 0
+}
