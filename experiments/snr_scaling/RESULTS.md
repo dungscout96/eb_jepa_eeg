@@ -58,7 +58,14 @@ the record of what has been measured. Commits `b4492fe`, `6dd992d`, `fdf0b3b`.
    a 3 % difference — and the δ/θ-over-α ratio replicates at 3.06 vs 2.84. The
    cohorts are 98.9 % shared, so stimulus is the only thing varying. Say
    "replicates across movies within HBN," not "replicates."
-11. Two artifacts found and fixed that would have corrupted the headline: a flat
+11. **E0.3 ran; the thesis survived its own falsification test** (§2.10). Across
+   11 step-matched cells, Δr² scales with subjects (local exponent **+0.441** at
+   the operating point, still climbing at S=701) and saturates in anchors
+   (**+0.096** over A=50→101) — a **4.6× ratio**. Model-free version: at a
+   matched (subjects × anchors) budget, subject-heavy beats anchor-heavy **4/4,
+   median 1.34×**, twice while using *fewer* total pairs. Caveat: n=1 seed, and
+   the A saturation step is only ~3.4σ against jul7's seed noise.
+12. Two artifacts found and fixed that would have corrupted the headline: a flat
    reference channel faking ISC ≈ 0.4, and CorrCA component 1 failing to
    generalise despite the largest in-sample eigenvalue — the latter now known to
    be **rank-unstable across movies** (§2.9), which is a stronger reason to avoid
@@ -531,6 +538,73 @@ rank of the bad component is **not stable across stimuli**, and any statistic
 keyed to a fixed rank would be movie-dependent. The max-component and
 SNR-combined statistics used throughout are unaffected.
 
+### 2.10 E0.3 — the (anchors × subjects) surface. The thesis survives.
+
+11 cells, L-shape plus diagonal, retraining the jul7 recipe (TP-only
+`soft_target_clip`, α=0.5, τ=0.05, seed 2026). **Every cell runs exactly 4400
+gradient steps** — `data.epoch_size=703` fixes steps/epoch at 11 regardless of
+how many subjects survive, so data scale is never confounded with optimisation
+budget. **Every cell is evaluated on the identical full val set** (293
+recordings, 29 593 windows), verified in [`analyse_e03.py`](analyse_e03.py)
+rather than assumed.
+
+Metric is **Δr² above a random encoder of identical shape** (measured:
+0.01413). Raw r² carries a large constant any encoder attains, and a constant
+offset flattens a log-log slope toward zero — fitting on raw r² would understate
+both axes, and unequally.
+
+| S (anchors=101) | Δr² | local exp. |   | A (subjects=701) | Δr² | local exp. |
+|---:|---:|---:|---|---:|---:|---:|
+| 50 | 0.0083 | — |   | 13 | 0.0239 | — |
+| 100 | 0.0177 | +1.089 |   | 25 | 0.0331 | +0.499 |
+| 200 | 0.0294 | +0.735 |   | 50 | 0.0483 | +0.548 |
+| 400 | 0.0404 | +0.457 |   | 101 | 0.0517 | **+0.096** |
+| 701 | 0.0517 | **+0.441** |   | | | |
+
+**Fitted exponents: `S` +0.676, `A` +0.393.** But the marginal fits average over
+the cheap early gains and understate the contrast. What matters is the slope
+**at the operating point**:
+
+> **S: +0.441 (400→701). A: +0.096 (50→101). A ratio of 4.6×.**
+
+`A`'s exponent collapses from ~+0.5 to +0.096 in its last doubling — anchors are
+saturating. `S`'s barely moves (+0.457 → +0.441) and is still climbing at 701,
+the largest cohort available. This is the prediction PLAN.md registered in
+advance: ***r* scales with `S` and saturates in `A`.** The thesis survives the
+test built to falsify it.
+
+**The cleanest statement needs no fitted model.** Hold the (subjects × anchors)
+budget roughly fixed and ask which axis to spend it on:
+
+| subject-heavy | pairs | Δr² | anchor-heavy | pairs | Δr² | gain |
+|---|---:|---:|---|---:|---:|---:|
+| S200 A25 | 5 000 | 0.0157 | S50 A101 | 5 050 | 0.0083 | **1.89×** |
+| S701 A13 | 9 113 | 0.0239 | S100 A101 | 10 100 | 0.0177 | **1.35×** |
+| S400 A50 | 20 000 | 0.0390 | S200 A101 | 20 200 | 0.0294 | **1.33×** |
+| S701 A50 | 35 050 | 0.0483 | S400 A101 | 40 400 | 0.0404 | **1.20×** |
+
+**Subject-heavy wins 4/4, median 1.34×** — twice with *fewer* total pairs than
+the anchor-heavy arm it beats. At a fixed data budget, spend it on subjects.
+
+**The axes are not cleanly separable.** A multiplicative `Δr² ~ S^0.676 · A^0.393`
+anchored at the corner under-predicts every diagonal cell by 23–45 %, so
+shrinking both axes hurts *less* than the product model says. The two partially
+substitute; a design formula that treats them as independent will be
+pessimistic.
+
+**Caveat that bounds the strongest claim: n=1 seed per cell.** jul7 measured
+seed noise at σ ≈ 0.0010 in Δr² (3-seed std, §3.2 there). The S-axis steps are
+0.009–0.012, i.e. 9–12σ, and safe. But the load-bearing **A=50→101 step is
+0.0034, only ~3.4σ** — enough to trust the direction, not enough to quote the
++0.096 exponent to three digits. Replicating just the A=50 and A=101 cells at
+3 seeds would firm up the one number the argument leans on; that is 6 runs,
+~3 GPU-hours.
+
+Two further bounds: this is one movie and one recipe, and `A ≤ 101` is capped by
+ThePresent's length, so the surface cannot show what happens past 101 in
+distribution. §2.9's shared-cohort finding gives the out-of-distribution
+extension (jul2: +84 % anchors made TP *worse*), which points the same way.
+
 ## §3. Two artifacts that would have corrupted the headline
 
 ### 3.1 A flat reference channel faking ISC ≈ 0.4
@@ -729,15 +803,11 @@ Subject draws are seeded (`--seed`, default 0); the `n ≤ 16` rows are means ov
   Spearman-Brown validated to 3–20 % and erring conservatively. §2.6 had
   partially addressed it on the retrieval metric; §2.8 closes it on the probe
   and on the extrapolation's own terms.
-- **E0.3** — the (anchors × subjects) scaling surface. Still worth running, but
-  demoted: it was the leading explanation for the objective saturation when that
-  saturation looked like unclaimed headroom. Now that the checkpoints measure at
-  83–88 % of ceiling (§2.2), a ceiling effect is the simpler explanation and
-  E0.3 answers a different question — whether *training* is anchor-limited,
-  which is separate from whether *readout* is ceiling-limited. **Partly
-  pre-answered:** jul2 multi-movie is a near-clean OOD anchor point (+84 % `A`,
-  +7 % `S`) and adding anchors made TP *worse*; the within-TP `A` sweep is what
-  remains. See E0.3 in [`PLAN.md`](PLAN.md).
+- ~~**E0.3**~~ — **done, §2.10.** The surface scales in `S` and saturates in
+  `A`, 4.6x apart at the operating point, and subject-heavy wins every
+  iso-budget comparison. **Remaining:** 3-seed replicates of the A=50 and A=101
+  cells (6 runs, ~3 GPU-h) — that one step carries the saturation claim at only
+  ~3.4 sigma. A test-split confirmation would also be cheap.
 - **E2.1** — subject-trait probes on the LeJEPA / Laya / random checkpoints.
 - More than 5 CorrCA components, to tighten the ceiling from below.
 - ~~DespicableMe ceiling~~ — **done, §2.9.** A ceiling for the *multi-movie
