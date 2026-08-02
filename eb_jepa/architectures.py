@@ -596,6 +596,45 @@ class _ResidualAdd(nn.Module):
         return self.fn(x) + x
 
 
+class CrossModalMLP(nn.Module):
+    """MJEPA's cross-modal predictor: a "simple 3-layer MLP" on pooled features.
+
+    MJEPA (arXiv:2606.25225) predicts one modality's mean-pooled last-layer
+    features from the other's with an L1 loss, using a small MLP rather than the
+    deep transformer predictor it uses for the intra-modal term. The asymmetry
+    is deliberate in the paper: low-level features are modality-specific, so
+    cross-modal prediction operates only on high-level pooled semantics.
+
+    Uses LayerNorm, deliberately NOT the existing ``Projector`` in this module,
+    which is built on ``BatchNorm1d``. BatchNorm couples samples across the batch
+    and silently standardizes its input — both of which would contaminate the
+    collapse diagnostics (a collapsed encoder would be partly rescued by the
+    normalizer, hiding the failure this objective most needs to detect).
+
+    Args:
+        in_dim: input feature dim.
+        hidden_dim: width of the hidden layers.
+        out_dim: output feature dim (the target's dim).
+        depth: number of Linear layers. ``depth=3`` is MJEPA's setting.
+    """
+
+    def __init__(self, in_dim: int, hidden_dim: int, out_dim: int, depth: int = 3):
+        super().__init__()
+        if depth < 1:
+            raise ValueError(f"depth must be >= 1, got {depth}")
+        layers: list[nn.Module] = []
+        d = in_dim
+        for _ in range(depth - 1):
+            layers += [nn.Linear(d, hidden_dim), nn.GELU(), nn.LayerNorm(hidden_dim)]
+            d = hidden_dim
+        layers.append(nn.Linear(d, out_dim))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """[N, in_dim] -> [N, out_dim]."""
+        return self.net(x)
+
+
 class MovieCLIPHead(nn.Module):
     """Two-tower projection head for CLIP-style EEG ↔ V-JEPA-2 InfoNCE.
 

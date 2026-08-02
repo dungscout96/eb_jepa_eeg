@@ -1,0 +1,169 @@
+# MJEPA-adapted: masked EEG prediction + cross-modal L1 regression to V-JEPA-2.
+#
+# Adapts MJEPA (Teotia et al., arXiv:2606.25225) to EEG <-> movie. See
+# eb_jepa/mjepa.py for the full derivation; the short version:
+#
+# WHY. Every cross-modal objective in this repo is contrastive (clip.py is
+# entirely cross_entropy / logsumexp), and experiments/snr_scaling/PLAN.md
+# diagnoses the consequence: ThePresent is 203.3 s = only 101 distinct 2 s
+# anchors, so "the InfoNCE problem has ~101 classes... almost certainly why
+# every objective saturates at the same place" -- 14 contrastive configs all
+# land in delta-r^2 [+0.041, +0.043]. MJEPA's cross-modal term is an L1
+# REGRESSION to a continuous 1408-d target, which has no class-count ceiling.
+#
+# THE THREE TERMS:
+#   L_e2e = masked EEG token prediction          (the existing MaskedJEPA path)
+#   L_e2v = || mlp_ev(pool(z_eeg)) - sg(vjepa2) ||_1
+#   L_v2e = || mlp_ve(vjepa2) - sg(pool(z_eeg)) ||_1
+#   total = lambda_intra * L_e2e (+ anti_collapse) + L_e2v + L_v2e
+#
+# PASS/FAIL LINE. Targets are per-dim standardized, so "predict the mean"
+# scores a KNOWN floor: ~0.711 for the V-JEPA-2 side (measured on ThePresent
+# shot-means), ~0.798 for a Gaussian. **An ev_loss converged at its floor means
+# the model learned nothing.** The trustworthy signal is ev_gap (matched vs
+# shuffled target) -- it must be > 0 and GROWING. Watch from step 1:
+#   1. ev_gap > 0 and increasing        (0 at init by construction)
+#   2. pooled_pr >> 1                   (-> 1 is rank collapse)
+#   3. pooled_var_raw stable            (-> 0 is total collapse)
+# All three are in the tqdm postfix as ev / evgap / pr.
+#
+# KNOWN LIMITATION OF THE ADAPTED SCOPE: L_v2e gives the encoder NO gradient.
+# The movie side is frozen data rather than a second stream through a shared
+# encoder, so with sg on the EEG target this term trains only mlp_ve. It is kept
+# because it is a free, unambiguous collapse detector. Do not read it as a
+# second training signal.
+#
+# ENCODER SHAPE IS REVE-BASE and must stay bit-identical to
+# config/clip_pretrain_from_reve.yaml, so that (a) the warm-start arm loads, and
+# (b) from-scratch vs warm-start is single-variable. Caveat to state plainly:
+# at patch_size=200 / ws=2s there are only P=2 patches per channel, so the
+# masked term degenerates toward channel-masking. That is a real caveat on the
+# lambda>0 arms, not on lambda=0 (which skips masking entirely).
+#
+# Invoke via _submit.py. Smoke locally:
+#   PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.jepa_pretrain \
+#     --fname=experiments/mjepa/config.yaml --optim.epochs=1 \
+#     --data.batch_size=4 --logging.log_wandb=false
+
+meta:
+  seed: 2025
+  device: auto
+  # Path to the REVE->EET-converted .pth.tar for the warm-start arms; null =
+  # from scratch. Patched per-run by _submit.py. The trainer now HARD-FAILS if
+  # this loads 0 tensors or leaves backbone weights uninitialized, rather than
+  # silently training from scratch.
+  encoder_init_from: null
+
+data:
+  batch_size: 64            # pooled SIGReg N = batch_size * n_windows = 64.
+                            # NOTE this MATCHES the cross-subject run that
+                            # produced this session's results (which used bs=32
+                            # x 2 rows = N=64); cross-subject's bs=64 arm OOM'd
+                            # and its ceiling on H200 is N~68. MJEPA is
+                            # single-stream and much cheaper, so bs=128 (N=128,
+                            # lejepa_reve's committed value) is reachable --
+                            # confirm against the smoke run's measured memory.
+  num_workers: 8
+  task: ThePresent
+  n_windows: 1
+  window_size_seconds: 2
+  temporal_stride: 1
+  preprocessed: true
+  preprocessed_dir: null
+  norm_mode: per_recording
+  add_envelope: false
+  corrca_filters: null
+  annotation_duration_tolerance_s: 1.0
+  max_recording_overshoot_s: 60.0
+
+model:
+  # REVE-base shape — must match config/clip_pretrain_from_reve.yaml exactly.
+  encoder_embed_dim: 512
+  encoder_depth: 22
+  encoder_heads: 8
+  encoder_head_dim: 64
+  patch_size: 200
+  patch_overlap: 20
+  freqs: 4                  # 4^4 = 256 >= embed_dim/2 = 256
+  mlp_dim_ratio: 2.66
+  predictor_depth: 2
+  predictor_embed_dim: null
+
+masking:
+  # Only consumed when lambda_intra > 0.
+  n_pred_masks_short: 2
+  n_pred_masks_long: 2
+  short_channel_scale: [0.08, 0.15]
+  short_patch_scale: [0.3, 0.6]
+  long_channel_scale: [0.15, 0.35]
+  long_patch_scale: [0.5, 1.0]
+  min_context_fraction: 0.15
+
+loss:
+  objective: mjepa
+  # MUST be 'none' when lambda_intra == 0 (enforced in build_jepa): with no
+  # masked term there is nothing to regularize, and L_e2v regresses to a FIXED
+  # external target the model cannot influence -- so there is no collapse
+  # attractor and a constant encoder is underfitting, not an optimum.
+  anti_collapse: none
+  sigreg:
+    num_slices: 1024
+    coeff: 0.05
+    ep_t_range: 5.0
+    ep_n_points: 17
+  pred_loss_type: smooth_l1   # intra term; 'l1' is the MJEPA-faithful ablation
+
+  mjepa:
+    lambda_intra: 0.0       # THE SWEEP: {0, 0.5, 1.0}. 0 = pure cross-modal
+                            # regression (the clean hypothesis test, and the
+                            # arm to run first); 1.0 = MJEPA's unweighted sum.
+    cross_loss_type: l1     # MJEPA uses L1
+    predictor_hidden: 2048
+    predictor_depth: 3      # "simple 3-layer MLP" per the paper
+    cross_source: auto      # auto -> 'full' at lambda=0, 'context' above it.
+                            # NEVER sourced from anti_collapse targets: 3 of the
+                            # 4 strategies wrap those in no_grad, which would
+                            # silently zero the cross-modal gradient.
+    ve_enabled: true
+    ve_stopgrad: true       # false turns v->e into a BYOL-style objective whose
+                            # optimum is both sides constant -> then
+                            # anti_collapse is REQUIRED.
+    standardize_targets: true
+    standardizer_momentum: 0.01
+    # Dataset recipe knobs (mirror clip_pretrain.py).
+    target_kind: shot_mean
+    mean_center: true
+    require_shots: true
+
+optim:
+  optimizer: adamw
+  weight_decay: 0.05        # the record recipe; biases/norms are now excluded
+  epochs: 300               # 300 for warm-start. Do NOT extend to 1000 --
+                            # measured +0.198 at 300 ep vs +0.110 at 999 ep.
+  lr: 1.0e-4                # warm-start: 1e-4 or 3e-4. NEVER 1e-5 (that was the
+                            # stale under-trained run). From-scratch: 5e-4.
+  lr_min: 1.0e-6
+  warmup_epochs: 10
+
+logging:
+  log_wandb: true
+  wandb_group: mjepa
+  log_every: 1
+  save_every: 50
+  tqdm_silent: false
+
+eval:
+  # OFF deliberately: probe_eval costs 35-45 min (n_passes=20 x ~22k unbatched
+  # clip encodes) and a timeout late in a long H200 job is expensive to requeue.
+  # Run the clip_probe suite as separate A40 jobs instead -- that is also the
+  # protocol probe_results_jul10 used, so numbers stay comparable.
+  auto_run: false
+  n_passes: 20
+  probe_seed: 42
+  n_bootstrap: 2000
+  feature_names:
+    - contrast_rms
+    - luminance_mean
+    - position_in_movie
+    - narrative_event_score
+  visual_processing_delay_s: 0.0

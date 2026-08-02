@@ -276,8 +276,8 @@ class MaskedJEPA(nn.Module):
         """Prediction loss named by ``pred_loss_type``.
 
         ``l1`` exists for MJEPA fidelity (arXiv:2606.25225 uses an L1 latent
-        prediction loss); ``mse`` and ``smooth_l1`` are the pre-existing options
-        and ``mse`` remains the default for backward compatibility.
+        prediction loss); ``mse`` and ``smooth_l1`` predate it, and ``mse``
+        stays the fallback so existing configs are unaffected.
         """
         if self.pred_loss_type == "smooth_l1":
             return F.smooth_l1_loss(pred, target)
@@ -470,10 +470,9 @@ class CrossSubjectJEPA(MaskedJEPA):
         self.within_subject_weight = within_subject_weight
         self.diagnostic_every = diagnostic_every
 
-    def _criterion(self, pred, target):
-        if self.pred_loss_type == "smooth_l1":
-            return F.smooth_l1_loss(pred, target)
-        return F.mse_loss(pred, target)
+    #: Alias kept so the diagnostics below read as "criterion"; the dispatch
+    #: (including the ``l1`` branch) lives once on MaskedJEPA.
+    _criterion = MaskedJEPA._pred_criterion
 
     def forward(self, eeg_pair: torch.Tensor,
                 global_step: int = 0) -> tuple[torch.Tensor, dict]:
