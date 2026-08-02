@@ -499,6 +499,40 @@ there.
 JSONs: [`probe_results/retrieval_warmstart_lr3e4_retrain_jul22_ep299_val.json`](probe_results/retrieval_warmstart_lr3e4_retrain_jul22_ep299_val.json),
 [`probe_results/retrieval_warmstart_lr3e4_retrain_jul22_ep299_test.json`](probe_results/retrieval_warmstart_lr3e4_retrain_jul22_ep299_test.json).
 
+**These are single-trial numbers — read them that way.** Each EEG anchor is one
+2 s window encoded in isolation (`n_windows: 1`; the encoder sees no
+neighbouring windows), so the table is *one 2 s window from one subject* against
+N visual centroids. "Shot" and "scene" describe the **candidate** pool, not the
+query: the pool entry is the L2-normalized centroid of the paired V-JEPA-2
+vectors for that group. Aggregation on the query side is measured separately in
+[`snr_scaling` §2.6](../../snr_scaling/RESULTS.md) — briefly, averaging across
+**subjects** takes val scene Top-1 from 0.217 to 0.571, while averaging more
+**seconds** within one subject gains ~0.015 and then degrades.
+
+On comparability to published retrieval numbers, follow
+[`snr_scaling` §1.2b](../../snr_scaling/RESULTS.md), which checked this against
+the sources: NICE/THINGS-EEG is trial-averaged *and* within-subject, so it is
+not comparable; MEG results are not comparable to EEG at all. Défossez et al.'s
+**EEG** numbers are the right protocol analogue — cross-subject, single-trial,
+continuous stimulus — and they sit at ~5 % Top-1. Even there the pools differ by
+more than an order of magnitude (49 shots / 35 scenes here vs 1,000+ segments),
+so compare the ×chance column, never the raw percentage.
+
+**Top-K hides a collapse.** At the scene level this checkpoint answers
+"scene 0" — the 10 s black title card — for **40.6 % of test windows** and
+31.6 % of val windows, though scene 0 is correct only 5.0 % of the time
+(uniform: 2.9 %). Shot level behaves the same on shot 0 (33.5 % test / 28.7 %
+val predicted vs 4.0 % true). A large share of first guesses is landing on one
+pool entry, and no Top-K figure above reveals that. Quote the modal-answer share
+alongside Top-K; measured by
+[`snr_scaling/aggregation_curves.py`](../../snr_scaling/aggregation_curves.py),
+detail in [`snr_scaling` §2.7](../../snr_scaling/RESULTS.md).
+
+A qualitative view of this section — the retrieved video frames next to the EEG
+window that produced them — is in [`demo/`](../../../demo/README.md), which
+rebuilds the numbers above from the exported embeddings and refuses to render if
+they do not reproduce the committed JSONs.
+
 ---
 
 ## §4. Why this works (theoretical reading)
