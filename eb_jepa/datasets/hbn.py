@@ -68,6 +68,28 @@ else:
         "test": {"R6": "ds005510"},  # 134 subjects
     }
 
+# Every known HBN release -> OpenNeuro accession. Kept SEPARATE from
+# SPLIT_RELEASES on purpose: which releases exist is a fact about OpenNeuro,
+# while which releases a split uses is an experimental choice. Preprocessing a
+# new release must not require first declaring it part of a split, or the
+# training code would start looking for data that has not been built yet.
+#
+# Verified against each dataset's S3 dataset_description.json, including the
+# gap: R9 is ds005514 because ds005513 does not exist.
+ALL_RELEASES = {
+    "R1": "ds005505",
+    "R2": "ds005506",
+    "R3": "ds005507",
+    "R4": "ds005508",
+    "R5": "ds005509",
+    "R6": "ds005510",
+    "R7": "ds005511",
+    "R8": "ds005512",
+    "R9": "ds005514",   # ds005513 does not exist
+    "R10": "ds005515",
+    "R11": "ds005516",
+}
+
 DEFAULT_TASK = "ThePresent"
 
 # Default tolerances & thresholds (overridable via dataset constructor)
@@ -199,13 +221,19 @@ def reject_recording(
 
 
 def _release_to_dataset_id(release: str) -> str:
-    """Look up the OpenNeuro dataset ID for a given release key."""
+    """Look up the OpenNeuro dataset ID for a given release key.
+
+    Consults ALL_RELEASES, not SPLIT_RELEASES, so a release can be downloaded
+    and preprocessed before any split has been wired to use it. SPLIT_RELEASES
+    is still checked first so a split-local override wins.
+    """
     for split_releases in SPLIT_RELEASES.values():
         if release in split_releases:
             return split_releases[release]
+    if release in ALL_RELEASES:
+        return ALL_RELEASES[release]
     raise ValueError(
-        f"Unknown release '{release}'. Known releases: "
-        f"{[r for splits in SPLIT_RELEASES.values() for r in splits]}"
+        f"Unknown release '{release}'. Known releases: {sorted(ALL_RELEASES)}"
     )
 
 
@@ -277,21 +305,40 @@ def _load_participants_metadata(
     return subject_meta
 
 
-def load_or_download(release, task=DEFAULT_TASK):
+def load_or_download(release, task=DEFAULT_TASK, source: str = "auto"):
     """Load an EEGDashDataset from cache, downloading if necessary.
 
     Filters to the specified *task* so only matching recordings are returned.
+
+    Args:
+        source: ``"eegdash"`` forces the eegdash API, ``"s3"`` forces the
+            direct-from-OpenNeuro path, ``"auto"`` (default) tries eegdash and
+            falls back to S3 when it is unreachable. eegdash routes through
+            ``data.eegdash.org``, which is a separate service from the S3
+            bucket and has gone down independently of it; the fallback keeps
+            preprocessing working through that. Override with
+            ``HBN_DOWNLOAD_SOURCE``.
     """
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-
     dataset_id = _release_to_dataset_id(release)
-    dataset = EEGDashDataset(
-        cache_dir=DATA_DIR,
-        dataset=dataset_id,
-        task=task,
-    )
+    source = os.environ.get("HBN_DOWNLOAD_SOURCE", source)
 
-    return dataset
+    if source not in {"auto", "eegdash", "s3"}:
+        raise ValueError(f"source must be auto/eegdash/s3, got {source!r}")
+
+    if source != "s3":
+        try:
+            return EEGDashDataset(cache_dir=DATA_DIR, dataset=dataset_id, task=task)
+        except Exception as exc:  # noqa: BLE001 -- surfaces as many error types
+            if source == "eegdash":
+                raise
+            logger.warning(
+                "eegdash lookup for %s/%s failed (%s: %s); falling back to "
+                "OpenNeuro S3.", dataset_id, task, type(exc).__name__, exc)
+
+    from eb_jepa.datasets.openneuro_s3 import load_from_s3
+
+    return load_from_s3(release, task, DATA_DIR)
 
 
 # Default directory for preprocessed data (override via HBN_PREPROCESS_DIR env var).
