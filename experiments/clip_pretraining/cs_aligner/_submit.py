@@ -81,7 +81,7 @@ def build_job(
         split_png = "split_modality.png"
     plot_split = (
         "PYTHONPATH=. uv run --group eeg python"
-        f" {EXP_DIR}/plot_split_modality.py"
+        " -m eb_jepa.evaluation.visualization.plot_split_modality"
         f" --npz {npz_path}"
         f" --output {EXP_DIR}/{split_png}"
         f' --title "{label_b} — per-modality t-SNE"'
