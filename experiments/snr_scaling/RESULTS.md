@@ -586,6 +586,16 @@ budget roughly fixed and ask which axis to spend it on:
 **Subject-heavy wins 4/4, median 1.34×** — twice with *fewer* total pairs than
 the anchor-heavy arm it beats. At a fixed data budget, spend it on subjects.
 
+![E0.3 scaling surface](e03_scaling.png)
+
+*(a) plots Δr² **relative to each axis's own full-data value** — absolute Δr²
+would put anchors above subjects everywhere (at A=13 the model still has all 701
+subjects) and a reader would take the higher line for the better axis. The claim
+is about slope, so the level is normalised away; both curves therefore reach 1.0
+by construction and only the shapes are comparable. Error bars are jul7's
+seed noise, not a within-run error. (b) is model-free. Produced by
+[`plot_e03.py`](plot_e03.py).*
+
 **The axes are not cleanly separable.** A multiplicative `Δr² ~ S^0.676 · A^0.393`
 anchored at the corner under-predicts every diagonal cell by 23–45 %, so
 shrinking both axes hurts *less* than the product model says. The two partially
@@ -771,6 +781,10 @@ Subject draws are seeded (`--seed`, default 0); the `n ≤ 16` rows are means ov
   design space.
 - `k_averaging.png` / `.pdf` — E0.2 two-panel figure (Spearman-Brown
   validation; probe *r* vs K, embedding- vs signal-space).
+- `e03_probe_val_e03_s*_a*.json` (11 cells) + `e03_probe_val_random.json` — E0.3
+  raw probes. `e03_surface.json` — fitted exponents, corner slopes, iso-budget.
+- `e03_scaling.png` / `.pdf` — E0.3 two-panel figure (normalised slope contrast;
+  iso-budget dumbbell).
 - `aggregation_val_ThePresent.json`, `aggregation_test_ThePresent.json` — §2.6
   temporal / oracle-segment / n-subject curves at shot and scene level, plus the
   §2.7 modal-answer shares. Produced from the shared-space export, so the
@@ -780,6 +794,9 @@ Subject draws are seeded (`--seed`, default 0); the `n ≤ 16` rows are means ov
 - [`measure_isc.py`](measure_isc.py) — the E0.1 measurement.
 - [`k_averaging.py`](k_averaging.py) + [`_submit_k_averaging.py`](_submit_k_averaging.py)
   + [`plot_k_averaging.py`](plot_k_averaging.py) — E0.2.
+- [`_submit_e03.py`](_submit_e03.py) + [`analyse_e03.py`](analyse_e03.py)
+  + [`plot_e03.py`](plot_e03.py) — E0.3. Subsampling knobs live in
+  `JEPAMovieDataset`; see [`tests/unit/test_scaling_subsample.py`](../../tests/unit/test_scaling_subsample.py) (15).
 - [`aggregation_curves.py`](aggregation_curves.py) — §2.6 / §2.7 curves.
   Depends on `demo/export_retrieval_npz.py` for *data* only; it imports nothing
   from `demo/`.
