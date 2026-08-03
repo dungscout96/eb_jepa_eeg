@@ -215,3 +215,89 @@ def test_axes_compose_independently():
     assert len(ds._allowed_anchor_idx) == 6
     assert all(len(a) == 12 for a in ds._allowed_anchor_idx)
     assert len(ds) == 200
+
+
+# ------------------------------------- epoch_size smaller than the cohort
+
+
+def _index_sampler(ds, n_draws, seed=0):
+    """Indices __getitem__ actually resolves to, mimicking the DataLoader:
+    it only ever emits indices in [0, len(ds))."""
+    torch.manual_seed(seed)
+    n_rec = len(ds._fif_paths)
+    seen = []
+    for i in range(n_draws):
+        idx = i % len(ds)
+        if ds._epoch_size is not None and ds._epoch_size < n_rec:
+            idx = int(torch.randint(0, n_rec, (1,)).item())
+        else:
+            idx = idx % n_rec
+        seen.append(idx)
+    return seen
+
+
+def test_epoch_size_smaller_than_cohort_still_reaches_every_recording():
+    """The E0.3 extension needs epoch_size=703 with 1863 recordings, to hold
+    steps matched at 4400. Plain `idx % n` is the IDENTITY there -- __len__
+    reports 703 so the DataLoader never emits an index above 702, and
+    recordings 703..1862 would never be sampled. That silently turns an S=1863
+    cell into an S=703 one that still looks like a valid data point."""
+    ds = _fake(n_rec=50, n_win=20, n_windows=2)
+    ds._apply_scaling_subsample(None, None, 10, seed=0)
+    assert len(ds) == 10 and len(ds._fif_paths) == 50
+    seen = set(_index_sampler(ds, 4000))
+    assert len(seen) == 50, f"only {len(seen)}/50 recordings ever sampled"
+
+
+def test_epoch_size_at_least_cohort_keeps_exact_wrapping():
+    """The case E0.3 actually ran must not change: with epoch_size == n_rec,
+    an epoch covers each recording exactly once."""
+    ds = _fake(n_rec=20, n_win=20, n_windows=2)
+    ds._apply_scaling_subsample(None, None, 20, seed=0)
+    seen = _index_sampler(ds, 20)
+    assert sorted(seen) == list(range(20))
+
+
+def test_epoch_size_multiple_of_cohort_repeats_uniformly():
+    ds = _fake(n_rec=10, n_win=20, n_windows=2)
+    ds._apply_scaling_subsample(None, None, 30, seed=0)
+    from collections import Counter
+    counts = Counter(_index_sampler(ds, 30))
+    assert set(counts) == set(range(10))
+    assert set(counts.values()) == {3}
+
+
+def test_getitem_itself_reaches_every_recording_when_epoch_size_is_smaller():
+    """Drives the REAL __getitem__ rather than a re-implementation of its index
+    logic -- a mimicking test would keep passing if the production code drifted.
+    _load_clip is stubbed because the fake paths have no FIFs behind them."""
+    ds = _fake(n_rec=40, n_win=12, n_windows=2)
+    ds._apply_scaling_subsample(None, None, 8, seed=0)
+    assert len(ds) == 8 and len(ds._fif_paths) == 40
+
+    used = []
+
+    def _spy(rec_idx, indices):
+        used.append(rec_idx)
+        return torch.zeros(len(indices), 4, 10)
+
+    ds._load_clip = _spy
+    torch.manual_seed(0)
+    for i in range(3000):
+        ds[i % len(ds)]            # exactly what a DataLoader can emit
+
+    assert max(used) >= 8, (
+        "no recording at or beyond epoch_size was ever loaded -- the "
+        "S=1863-with-epoch_size=703 cell would silently be an S=703 cell")
+    assert len(set(used)) == 40, f"only {len(set(used))}/40 recordings loaded"
+
+
+def test_getitem_covers_each_recording_once_when_epoch_size_equals_cohort():
+    """The configuration E0.3 actually ran must be unchanged: exact coverage."""
+    ds = _fake(n_rec=12, n_win=12, n_windows=2)
+    ds._apply_scaling_subsample(None, None, 12, seed=0)
+    used = []
+    ds._load_clip = lambda r, i: (used.append(r), torch.zeros(len(i), 4, 10))[1]
+    for i in range(12):
+        ds[i]
+    assert sorted(used) == list(range(12))

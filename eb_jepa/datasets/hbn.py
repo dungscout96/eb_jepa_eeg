@@ -1656,10 +1656,23 @@ class JEPAMovieDataset(HBNMovieDataset):
         return self._epoch_size or len(self._fif_paths)
 
     def __getitem__(self, idx):
-        # epoch_size decouples steps/epoch from the recording count, so an
-        # index past the end wraps; the crop is random, so repeats of one
-        # recording within an epoch still differ.
-        idx = idx % len(self._fif_paths)
+        # epoch_size decouples steps/epoch from the recording count.
+        #
+        # epoch_size >= n_recordings: wrap. Each recording is drawn
+        #   ceil(epoch_size / n) times per epoch, and the random crop below
+        #   makes repeats different samples.
+        # epoch_size <  n_recordings: wrapping would be WRONG. __len__ reports
+        #   epoch_size, so the DataLoader only ever emits indices in
+        #   [0, epoch_size) and `idx % n` is the identity -- recordings
+        #   [epoch_size, n) would never be sampled at all, silently turning an
+        #   S=1863 cell into an S=703 one that still looks valid. Draw
+        #   uniformly instead, so an epoch is a random window over the whole
+        #   cohort and coverage is uniform across epochs.
+        n_rec = len(self._fif_paths)
+        if self._epoch_size is not None and self._epoch_size < n_rec:
+            idx = int(torch.randint(0, n_rec, (1,)).item())
+        else:
+            idx = idx % n_rec
         crop_inds = self._crop_inds[idx]
         feats = self.feature_recordings[idx]
         embeds = self.embedding_recordings[idx]
