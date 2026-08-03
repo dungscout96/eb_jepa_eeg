@@ -73,6 +73,15 @@ EXTENDED_CELLS = [
     (1000, 101), (1400, 101), (1863, 101),
 ]
 
+# Nested + replicated S axis (RESULTS.md 2.11). Subject draws now nest by
+# construction, so a curve measures ADDED subjects; repeating each S under
+# several data.subsample_seed values measures the between-draw variance that
+# made the first extension unreadable. S=1863 is the whole pool -- there is only
+# one possible draw -- so it gets a single cell rather than three identical ones.
+NESTED_S = [400, 701, 1000, 1400]
+NESTED_DRAW_SEEDS = [11, 22, 33]
+FULL_POOL_S = 1863
+
 CELLS = [
     (701, 101), (400, 101), (200, 101), (100, 101), (50, 101),   # vary S
     (701, 50), (701, 25), (701, 13),                             # vary A
@@ -82,8 +91,11 @@ CELLS = [
 
 def build_job(subjects: int, anchors: int, partition: str,
               time_limit: str, epochs: int, save_every: int = 99999,
-              skip_probe: bool = False, extended: bool = False) -> Job:
+              skip_probe: bool = False, extended: bool = False,
+              draw_seed: int | None = None) -> Job:
     slug = f"e03_s{subjects}_a{anchors}{SUFFIX}"
+    if draw_seed is not None:
+        slug += f"_d{draw_seed}"
     exp_dir = f"{CKPT_ROOT}/{slug}"
 
     # Patch the shared template inside the job, so the on-disk config is never
@@ -98,7 +110,8 @@ def build_job(subjects: int, anchors: int, partition: str,
         f"c.data.max_subjects = {subjects}; "
         f"c.data.max_anchors = {anchors}; "
         f"c.data.epoch_size = {FULL_RECORDINGS}; "
-        f"OmegaConf.save(c, '{exp_dir}/config.yaml')"
+        + (f"c.data.subsample_seed = {draw_seed}; " if draw_seed is not None else "")
+        + f"OmegaConf.save(c, '{exp_dir}/config.yaml')"
     )
     # The probe must see the FULL data, so its config snapshot clears the knobs.
     probe_patch = (
@@ -167,6 +180,9 @@ def main() -> None:
     p.add_argument("--skip-probe", action="store_true",
                    help="Train only. Under the early-stopped protocol the probe "
                         "runs later, on the selected checkpoint, not on latest.")
+    p.add_argument("--nested-draws", action="store_true",
+                   help="Nested + replicated S axis: NESTED_S x NESTED_DRAW_SEEDS "
+                        "plus a single full-pool cell. Implies --extended.")
     p.add_argument("--extended", action="store_true",
                    help="Run the extended-cohort S axis: enables R7-R10 via "
                         "HBN_TRAIN_RELEASES, points HBN_PREPROCESS_DIR at the "
@@ -179,29 +195,37 @@ def main() -> None:
 
     global SUFFIX
     SUFFIX = args.suffix
-    cells = EXTENDED_CELLS if args.extended else CELLS
+    if args.nested_draws:
+        args.extended = True
+        cells = [(s_, 101, d) for s_ in NESTED_S for d in NESTED_DRAW_SEEDS]
+        cells.append((FULL_POOL_S, 101, None))     # whole pool: one draw only
+    else:
+        cells = [(s_, a_, None)
+                 for s_, a_ in (EXTENDED_CELLS if args.extended else CELLS)]
     if args.only:
-        s, a = (int(v) for v in args.only.lower().split("x"))
-        cells = [(s, a)]
+        s_, a_ = (int(v) for v in args.only.lower().split("x"))
+        cells = [(s_, a_, None)]
 
     print(f"{len(cells)} cell(s), {args.epochs} ep each on {args.partition} "
           f"[{args.time_limit}]\n")
-    print(f"  {'cell':<14}{'subjects':>10}{'anchors':>9}  steps")
-    for s, a in cells:
-        print(f"  {'s%dxa%d' % (s, a):<14}{s:>10}{a:>9}  "
+    print(f"  {'cell':<20}{'subjects':>10}{'anchors':>9}{'draw':>7}  steps")
+    for s_, a_, d in cells:
+        tag = f"s{s_}xa{a_}" + (f"_d{d}" if d is not None else "")
+        print(f"  {tag:<20}{s_:>10}{a_:>9}{str(d or '-'):>7}  "
               f"{args.epochs * -(-FULL_RECORDINGS // 64)}")
     print()
 
     if args.action != "submit":
-        print(build_job(*cells[0], args.partition, args.time_limit,
+        s_, a_, d = cells[0]
+        print(build_job(s_, a_, args.partition, args.time_limit,
                         args.epochs, args.save_every, args.skip_probe,
-                        args.extended).command)
+                        args.extended, d).command)
         print("\nDry run. Re-run with 'submit' to sbatch.")
         return
 
-    for s, a in cells:
-        job = build_job(s, a, args.partition, args.time_limit, args.epochs,
-                        args.save_every, args.skip_probe, args.extended)
+    for s_, a_, d in cells:
+        job = build_job(s_, a_, args.partition, args.time_limit, args.epochs,
+                        args.save_every, args.skip_probe, args.extended, d)
         print(f"submitted {job.name}: {job.submit()}")
 
 

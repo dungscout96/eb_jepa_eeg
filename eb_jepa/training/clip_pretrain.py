@@ -272,7 +272,14 @@ def run(
         max_subjects=max_subjects,
         max_anchors=max_anchors,
         epoch_size=epoch_size,
-        subsample_seed=cfg.meta.seed,
+        # Which subjects are drawn, kept SEPARATE from model init / batch order
+        # (meta.seed). Repeating a cell with the same meta.seed and a different
+        # data.subsample_seed isolates between-DRAW variance -- how much the
+        # score depends on WHICH subjects you happened to get -- from seed
+        # variance. Conflating the two would make "3 draws per S" measure both
+        # at once and neither cleanly. Defaults to meta.seed, so every existing
+        # config is unchanged.
+        subsample_seed=int(cfg.data.get("subsample_seed", cfg.meta.seed)),
     )
     if max_subjects or max_anchors or epoch_size:
         logger.info(
