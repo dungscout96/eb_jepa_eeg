@@ -656,6 +656,66 @@ ThePresent's length, so the surface cannot show what happens past 101 in
 distribution. §2.9's shared-cohort finding gives the out-of-distribution
 extension (jul2: +84 % anchors made TP *worse*), which points the same way.
 
+### 2.11 E0.3 extension to 1863 subjects — the calibration failed, and that is the result
+
+R7–R10 (preprocessed 2026-08-02) take the ThePresent train pool from 703
+recordings to **1863**. Five cells were run early-stopped from the start, all at
+4400 steps: S ∈ {400, 701, 1000, 1400, 1863} at A=101. **S=400 and S=701 were
+re-runs, drawn from the new 1863 pool, purely as calibration** — the original
+cells at those S drew from R1–R4 only, and appending new points to the old curve
+is only legitimate if the two pools behave the same at matched S.
+
+**They do not.**
+
+| S | Δr² (R1–R4 pool) | Δr² (1863 pool) | ratio |
+|---:|---:|---:|---:|
+| 400 | 0.04108 | 0.03496 | **0.851** |
+| 701 | 0.04806 | 0.04403 | **0.916** |
+
+At matched subject count, subjects drawn from the extended pool are worth
+**8–15 % less**. R7–R10 are not interchangeable with R1–R4. **The two segments
+cannot be plotted as one curve**, and the calibration points are what caught it:
+without them, appending S=1000 (0.03838) to the old S=701 (0.04806) would have
+shown a 20 % collapse and invited the conclusion that subject scaling reverses
+past 701. That conclusion would have been an artifact of pool composition.
+
+**Within the extended pool, scaling above 701 is flat to slightly negative:**
+
+| S | 400 | 701 | 1000 | 1400 | 1863 |
+|---|---:|---:|---:|---:|---:|
+| Δr² | 0.03496 | 0.04403 | 0.03838 | 0.04107 | 0.04233 |
+
+701 → 1863 is a **2.66× increase in subjects for Δr² 0.04403 → 0.04233**, i.e.
+slightly *down*. Taken at face value that says the subject axis saturates
+somewhere near 700 — which would materially weaken the paper's thesis.
+
+**Do not take it at face value yet, for a reason that also affects §2.10.**
+The subsample draws are **not nested**. Each cell calls
+`rng.choice(n, size=S, replace=False)` with the same seed but a different size,
+which does not produce a prefix relationship: measured directly, **S=701 and
+S=1000 share only 371 of 701 subjects (53 %)**. Consecutive points on the
+"curve" are therefore largely *different cohorts*, not a growing one, so each
+point carries between-draw variance on top of seed variance. The non-monotonic
+dip at S=1000 (−0.0057, ~5.7× jul7's seed σ) is far more consistent with an
+unlucky draw than with a real effect — and if draw variance is that large, the
+701 → 1863 flatness cannot be separated from it either.
+
+**Honest status: whether the subject axis saturates above ~700 is unresolved.**
+What survives untouched is the comparison that never depended on these
+exponents — subject-heavy beats anchor-heavy 4/4 at matched budget, under both
+protocols (§2.10).
+
+**What would settle it**, in order of value:
+1. **Nested draws** — one permutation per seed, take the first S. Then S=1000 is
+   a strict superset of S=701 and the curve measures added subjects rather than
+   a different cohort. Implemented as of this commit; the recorded cells above
+   predate it.
+2. **Several draws per S**, to measure the between-draw variance directly rather
+   than inferring it.
+3. **Pool-stratified cells** — R1–R4-only at every S up to 703, and R7–R10-only,
+   to characterise *why* the new releases are worth less rather than only that
+   they are.
+
 ## §3. Two artifacts that would have corrupted the headline
 
 ### 3.1 A flat reference channel faking ISC ≈ 0.4

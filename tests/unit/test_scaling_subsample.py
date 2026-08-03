@@ -301,3 +301,31 @@ def test_getitem_covers_each_recording_once_when_epoch_size_equals_cohort():
     for i in range(12):
         ds[i]
     assert sorted(used) == list(range(12))
+
+
+def test_subject_draws_are_nested_across_S():
+    """A scaling curve must measure ADDED subjects, not a different cohort at
+    every point. rng.choice(n, size=S) does not nest: on the real 1863-subject
+    pool, S=701 and S=1000 shared only 371 of 701 subjects (53%), so each point
+    carried between-draw variance. Permute once, take the first S."""
+    def cohort(k):
+        ds = _fake(n_rec=200, n_win=12, n_windows=2)
+        ds._apply_scaling_subsample(k, None, None, seed=2026)
+        return {m["subject"] for m in ds._recording_metadata}
+
+    small, mid, large = cohort(20), cohort(50), cohort(120)
+    assert small < mid < large, "cohorts are not nested"
+    assert len(small) == 20 and len(mid) == 50 and len(large) == 120
+
+
+def test_nesting_still_depends_on_the_seed():
+    """Nesting must not collapse into 'always the first N subjects' -- a
+    different seed must give a different (still nested) cohort."""
+    def cohort(k, seed):
+        ds = _fake(n_rec=100, n_win=12, n_windows=2)
+        ds._apply_scaling_subsample(k, None, None, seed=seed)
+        return {m["subject"] for m in ds._recording_metadata}
+
+    a, b = cohort(30, 1), cohort(30, 2)
+    assert a != b
+    assert a < cohort(60, 1) and b < cohort(60, 2)

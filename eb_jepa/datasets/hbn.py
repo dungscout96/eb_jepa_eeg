@@ -1597,9 +1597,20 @@ class JEPAMovieDataset(HBNMovieDataset):
             subjects = [m.get("subject") for m in self._recording_metadata]
             uniq = sorted({s for s in subjects if s is not None})
             if max_subjects < len(uniq):
-                keep = set(rng.choice(len(uniq), size=max_subjects,
-                                      replace=False).tolist())
-                keep_subjects = {uniq[i] for i in keep}
+                # NESTED by construction: permute once, take the first S. With
+                # a shared seed this makes the S=1000 cohort a strict superset
+                # of the S=701 one, so a scaling curve measures *added*
+                # subjects.
+                #
+                # The previous `rng.choice(n, size=S)` did NOT nest -- same seed,
+                # different size, different subset. Measured on the real cohort,
+                # S=701 and S=1000 shared only 371 of 701 subjects (53 %), so
+                # consecutive points on the curve were largely different
+                # cohorts and every comparison carried between-draw variance.
+                # See RESULTS.md 2.11; cells recorded before this change have
+                # that variance baked in.
+                perm = rng.permutation(len(uniq))
+                keep_subjects = {uniq[i] for i in perm[:max_subjects]}
                 sel = [i for i, s in enumerate(subjects) if s in keep_subjects]
                 missing = [a for a in self._PER_RECORDING_ATTRS
                            if not hasattr(self, a)]
