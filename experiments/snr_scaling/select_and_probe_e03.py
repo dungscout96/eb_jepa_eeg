@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -146,25 +147,41 @@ def main() -> None:
     p.add_argument("--suffix", default="_es")
     p.add_argument("--extended", action="store_true",
                    help="Use the extended-cohort S-axis cell list.")
+    p.add_argument("--cells-glob", default=None,
+                   help="Discover cells by directory glob instead of the cell "
+                        "lists, e.g. 'e03_s*_a101_nd*'. Needed for replicate "
+                        "sweeps where the slug carries a draw seed.")
     p.add_argument("--key", default=SELECT_KEY)
     p.add_argument("--probe", action="store_true",
                    help="Actually run the probes (otherwise select and report).")
     p.add_argument("--output", default="experiments/snr_scaling/e03_selection.json")
     args = p.parse_args()
 
-    cells = EXTENDED_CELLS if args.extended else CELLS
+    if args.cells_glob:
+        # Discover slugs from disk. Enumerating them instead would mean keeping
+        # two lists in sync (here and in _submit_e03.py) and would silently skip
+        # a cell that failed to produce a directory -- the glob makes a missing
+        # cell visible as a missing row.
+        slugs = sorted(
+            (Path(d).name for d in glob.glob(f"{CKPT_ROOT}/{args.cells_glob}")),
+            key=lambda n: (int(re.search(r"_s(\d+)_", n).group(1)), n),
+        )
+        if not slugs:
+            sys.exit(f"No cell directories matched {args.cells_glob!r}")
+    else:
+        cells = EXTENDED_CELLS if args.extended else CELLS
+        slugs = [f"e03_s{s_}_a{a_}{args.suffix}" for s_, a_ in cells]
     sel = {}
     print(f"selection metric: {args.key}\n")
-    print(f"  {'cell':<16}{'best_ep':>8}{'best':>8}{'final':>8}{'drop%':>7}"
+    print(f"  {'cell':<26}{'best_ep':>8}{'best':>8}{'final':>8}{'drop%':>7}"
           f"{'sel_ep':>8}{'snap':>6}")
-    for s, a in cells:
-        slug = f"e03_s{s}_a{a}{args.suffix}"
+    for slug in slugs:
         info = select_epoch(Path(CKPT_ROOT) / slug, args.key)
         sel[slug] = info
         if "error" in info and "selected_epoch" not in info:
-            print(f"  {slug:<16}  {info['error']}")
+            print(f"  {slug:<26}  {info['error']}")
             continue
-        print(f"  {slug:<16}{info['best_epoch']:>8}{info['best_value']:>8.4f}"
+        print(f"  {slug:<26}{info['best_epoch']:>8}{info['best_value']:>8.4f}"
               f"{info['final_value']:>8.4f}{info['drop_pct']:>7.1f}"
               f"{info['selected_epoch']:>8}{info['snap_distance']:>6}")
 
@@ -175,8 +192,7 @@ def main() -> None:
         print("Selection only. Re-run with --probe to probe the chosen checkpoints.")
         return
 
-    for s, a in cells:
-        slug = f"e03_s{s}_a{a}{args.suffix}"
+    for slug in slugs:
         info = sel[slug]
         if "checkpoint" not in info:
             print(f"SKIP {slug}: {info.get('error')}")
