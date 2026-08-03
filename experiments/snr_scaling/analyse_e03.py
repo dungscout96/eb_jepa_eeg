@@ -12,6 +12,7 @@ r-squared would understate BOTH axes and, worse, understate them unequally.
     uv run --group eeg python experiments/snr_scaling/analyse_e03.py
 """
 
+import argparse
 import glob
 import json
 import math
@@ -32,10 +33,22 @@ def _mean_r2(path: Path) -> tuple[float, dict]:
     return st.fmean(per.values()), per
 
 
-def load() -> tuple[dict, float, dict]:
+def load(suffix: str = "") -> tuple[dict, float, dict]:
+    """Load one protocol's cells.
+
+    ``suffix=""`` is the original fixed-budget run (final checkpoint);
+    ``suffix="_es_best"`` is the early-stopped run (each cell's selected
+    checkpoint). The random baseline is shared -- it is an untrained encoder, so
+    it has no stopping point.
+    """
     rand_mean, rand_per = _mean_r2(HERE / "e03_probe_val_random.json")
     cells = {}
-    for f in glob.glob(str(HERE / "e03_probe_val_e03_*.json")):
+    pat = f"e03_probe_val_e03_s*_a*{suffix}.json" if suffix else "e03_probe_val_e03_s*_a*.json"
+    for f in glob.glob(str(HERE / pat)):
+        if not suffix and ("_es" in Path(f).stem):
+            continue          # do not mix protocols
+        if suffix and not Path(f).stem.endswith(suffix):
+            continue
         m = re.search(r"_s(\d+)_a(\d+)", f)
         s, a = int(m.group(1)), int(m.group(2))
         mean, per = _mean_r2(Path(f))
@@ -65,7 +78,15 @@ def local_slope(x0, y0, x1, y1) -> float:
 
 
 def main() -> None:
-    cells, rand_mean, _ = load()
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--suffix", default="",
+                    help='"" = fixed-budget final checkpoint; "_es_best" = '
+                         "early-stopped selected checkpoint.")
+    ap.add_argument("--compare-to", default=None,
+                    help="Second suffix to diff against, e.g. \"\" .")
+    args = ap.parse_args()
+    cells, rand_mean, _ = load(args.suffix)
+    print(f"protocol: {args.suffix or 'fixed-budget (final checkpoint)'}\n")
 
     n_rec = {c["n_rec"] for c in cells.values()}
     n_win = {c["n_win"] for c in cells.values()}
@@ -159,8 +180,20 @@ def main() -> None:
         "cells": {f"S{s}_A{a}": {"r2": c["r2"], "d_r2": c["d_r2"]}
                   for (s, a), c in sorted(cells.items())},
     }
-    (HERE / "e03_surface.json").write_text(json.dumps(out, indent=2))
-    print(f"\nWrote {HERE / 'e03_surface.json'}")
+    name = f"e03_surface{args.suffix or ''}.json"
+    (HERE / name).write_text(json.dumps(out, indent=2))
+    print(f"\nWrote {HERE / name}")
+
+    if args.compare_to is not None:
+        other, _, _ = load(args.compare_to)
+        lbl = args.compare_to or "fixed-budget"
+        print(f"\nProtocol comparison vs {lbl}:")
+        print(f"  {'cell':>12}{'this':>10}{'other':>10}{'ratio':>8}")
+        for k in sorted(cells, key=lambda t: (-t[1], -t[0])):
+            if k in other:
+                a_, b_ = cells[k]["d_r2"], other[k]["d_r2"]
+                print(f"  {'S%d A%d' % k:>12}{a_:>10.5f}{b_:>10.5f}"
+                      f"{a_ / b_:>8.2f}")
 
 
 if __name__ == "__main__":

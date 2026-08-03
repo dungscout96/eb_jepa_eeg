@@ -2,11 +2,18 @@
 
 Two panels, because the result has two independent claims:
 
-  (a) The two axes behave differently. Delta r-squared vs FRACTION of the
-      available data on each axis, so subjects and anchors -- which have
-      incompatible units -- land on one comparable x. Log-log, so a power law
-      is a straight line and saturation is a visible bend. The anchor curve
-      flattens in its last doubling; the subject curve does not.
+  (a) The two axes behave differently. Absolute delta r-squared vs FRACTION of
+      the available data on each axis, so subjects and anchors -- which have
+      incompatible units -- land on one comparable x while y stays in the units
+      the rest of the paper reports. Log-log, so a power law is a straight line
+      and saturation is a visible bend. The anchor curve flattens in its last
+      doubling; the subject curve does not.
+
+      The anchor curve sits ABOVE the subject curve everywhere left of the
+      corner. That is a level effect, not a win: at A=13 the model still has
+      all 701 subjects, whereas at S=50 it has only 50. The comparison the
+      panel asks for is slope, and panel (b) is the model-free version that
+      controls the level.
 
   (b) The model-free version. Four iso-budget pairs: the same number of
       (subject x anchor) pairs, spent on subjects vs on anchors. A dumbbell,
@@ -67,7 +74,7 @@ def _style(ax):
 
 
 def main() -> None:
-    d = json.loads((HERE / "e03_surface.json").read_text())
+    d = json.loads((HERE / "e03_surface_es_best.json").read_text())
     cells = d["cells"]
 
     s_axis = [50, 100, 200, 400, FULL_S]
@@ -80,19 +87,19 @@ def main() -> None:
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10.8, 4.5), facecolor=SURFACE)
 
     # ------------------- (a) the two axes, log-log ----------------------
-    # Plotted RELATIVE to each axis's own full-data value. Absolute delta r2
-    # would put anchors above subjects everywhere -- at A=13 the model still
-    # has all 701 subjects -- and a reader would take the higher line for the
-    # better axis. The claim is about SLOPE, so normalise the level away and
-    # let the shapes be compared directly. Both curves therefore reach 1.0 by
-    # construction; that is stated on the panel.
+    # Plotted in ABSOLUTE delta r2 -- same units as panel (b) and as every
+    # number in RESULTS.md 2.10, so the two panels can be read against each
+    # other without a mental rescale. The cost is that anchors sit above
+    # subjects everywhere (at A=13 the model still has all 701 subjects), so
+    # the level gap is annotated on the panel as a held-fixed artefact rather
+    # than an advantage. Both curves end on the same cell, S701_A101, which is
+    # why they meet at 100%.
     corner = cells[f"S{FULL_S}_A{FULL_A}"]["d_r2"]
     for x, y, colour, mark, label in (
         (s_x, s_y, BLUE, "o", f"subjects (S, up to {FULL_S})"),
         (a_x, a_y, ORANGE, "s", f"anchors (A, up to {FULL_A})"),
     ):
-        yn = [v / corner for v in y]
-        ax1.errorbar(x, yn, yerr=SEED_SIGMA / corner, color=colour, lw=2,
+        ax1.errorbar(x, y, yerr=SEED_SIGMA, color=colour, lw=2,
                      marker=mark, ms=7, markerfacecolor=colour,
                      markeredgecolor=SURFACE, markeredgewidth=1.4, capsize=3,
                      elinewidth=1.2, ecolor=colour, zorder=3, label=label)
@@ -100,14 +107,13 @@ def main() -> None:
     ax1.set_yscale("log")
     ax1.set_xticks([0.1, 0.2, 0.5, 1.0])
     ax1.set_xticklabels(["10%", "20%", "50%", "100%"])
-    ax1.set_yticks([0.2, 0.3, 0.5, 0.7, 1.0])
-    ax1.set_yticklabels(["0.2", "0.3", "0.5", "0.7", "1.0"])
-    ax1.set_ylim(0.12, 1.55)
+    ax1.set_yticks([0.008, 0.01, 0.02, 0.03, 0.05])
+    ax1.set_yticklabels(["0.008", "0.01", "0.02", "0.03", "0.05"])
+    ax1.set_ylim(0.0062, 0.135)
     ax1.minorticks_off()          # log minor labels fight the explicit ticks
     ax1.set_xlabel("fraction of the available data on that axis",
                    color=INK_2, fontsize=10)
-    ax1.set_ylabel(r"$\Delta r^2$ relative to full data on that axis",
-                   color=INK_2, fontsize=10)
+    ax1.set_ylabel(r"$\Delta r^2$ over a random encoder", color=INK_2, fontsize=10)
     ax1.set_title("(a)  Subjects keep paying; anchors saturate",
                   color=INK, fontsize=11, loc="left", pad=10)
     _style(ax1)
@@ -116,19 +122,24 @@ def main() -> None:
         t.set_color(INK_2)
 
     # The whole claim is the slope in the LAST doubling. Label only that.
-    ax1.annotate(f"+{d['local_exponent_A_at_corner']:.2f}",
-                 xy=(0.615, 1.10), fontsize=10.5, color=ORANGE, fontweight="bold")
-    ax1.annotate(f"+{d['local_exponent_S_at_corner']:.2f}",
-                 xy=(0.615, 0.70), fontsize=10.5, color=BLUE, fontweight="bold")
+    ax1.annotate(f"{d['local_exponent_A_at_corner']:+.2f}",
+                 xy=(0.615, 0.0585), fontsize=10.5, color=ORANGE, fontweight="bold")
+    ax1.annotate(f"{d['local_exponent_S_at_corner']:+.2f}",
+                 xy=(0.615, 0.0345), fontsize=10.5, color=BLUE, fontweight="bold")
     ax1.annotate("local exponent over\nthe final doubling",
-                 xy=(0.635, 0.48), fontsize=7.5, color=MUTED, ha="left",
+                 xy=(0.635, 0.0255), fontsize=7.5, color=MUTED, ha="left",
                  va="center", style="italic")
-    # Both caveats live top-left, the one region no curve enters.
-    ax1.annotate("both reach 1.0 by construction —\ncompare the shapes, not the ends",
-                 xy=(0.066, 1.44), fontsize=7.5, color=MUTED, style="italic",
+    # All three caveats live top-left, the one region no curve enters.
+    ax1.annotate("anchors sit higher only because the\n"
+                 "other axis is held full — see (b)",
+                 xy=(0.066, 0.122), fontsize=7.5, color=MUTED, style="italic",
+                 ha="left", va="center")
+    ax1.annotate(f"both axes end on the same cell "
+                 f"(S{FULL_S}×A{FULL_A}, $\\Delta r^2$={corner:.3f})",
+                 xy=(0.066, 0.0965), fontsize=7.5, color=MUTED, style="italic",
                  ha="left", va="center")
     ax1.annotate(f"error bars: seed noise, $\\sigma$={SEED_SIGMA:.4f}, n=1 per cell",
-                 xy=(0.066, 1.20), fontsize=7.5, color=MUTED, style="italic",
+                 xy=(0.066, 0.082), fontsize=7.5, color=MUTED, style="italic",
                  ha="left", va="center")
 
     # ------------------- (b) iso-budget dumbbell ------------------------
@@ -168,8 +179,8 @@ def main() -> None:
                  xy=(0.5, -0.5), fontsize=7.5, color=MUTED, ha="center")
 
     fig.suptitle(
-        "E0.3 — (anchors × subjects) scaling, 11 step-matched cells "
-        "(4400 steps each, identical full val set)",
+        "E0.3 — (anchors × subjects) scaling, 11 step-matched cells, "
+        "early-stopped per cell (identical full val set)",
         color=INK, fontsize=11.5, y=0.985, x=0.008, ha="left")
     fig.tight_layout(rect=(0, 0, 1, 0.93))
     for ext in ("png", "pdf"):

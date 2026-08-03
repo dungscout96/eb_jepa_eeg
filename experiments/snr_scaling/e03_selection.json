@@ -1,0 +1,112 @@
+{
+  "e03_s701_a101_es": {
+    "best_epoch": 245,
+    "best_value": 0.9443413729128015,
+    "final_value": 0.8021772686652043,
+    "n_epochs_logged": 400,
+    "drop_pct": 15.054312807358523,
+    "selected_epoch": 250,
+    "checkpoint": "/work/hdd/bbnv/dtyoung/eb_jepa/e03_scaling/e03_s701_a101_es/epoch_250.pth.tar",
+    "snap_distance": 5
+  },
+  "e03_s400_a101_es": {
+    "best_epoch": 294,
+    "best_value": 0.9287092746055172,
+    "final_value": 0.7734178243561622,
+    "n_epochs_logged": 400,
+    "drop_pct": 16.721212385363255,
+    "selected_epoch": 300,
+    "checkpoint": "/work/hdd/bbnv/dtyoung/eb_jepa/e03_scaling/e03_s400_a101_es/epoch_300.pth.tar",
+    "snap_distance": 6
+  },
+  "e03_s200_a101_es": {
+    "best_epoch": 294,
+    "best_value": 0.9165626064252469,
+    "final_value": 0.6974571451783248,
+    "n_epochs_logged": 400,
+    "drop_pct": 23.905127670598674,
+    "selected_epoch": 300,
+    "checkpoint": "/work/hdd/bbnv/dtyoung/eb_jepa/e03_scaling/e03_s200_a101_es/epoch_300.pth.tar",
+    "snap_distance": 6
+  },
+  "e03_s100_a101_es": {
+    "best_epoch": 235,
+    "best_value": 0.8998040862020711,
+    "final_value": 0.6782029409375254,
+    "n_epochs_logged": 400,
+    "drop_pct": 24.627710483055107,
+    "selected_epoch": 225,
+    "checkpoint": "/work/hdd/bbnv/dtyoung/eb_jepa/e03_scaling/e03_s100_a101_es/epoch_225.pth.tar",
+    "snap_distance": 10
+  },
+  "e03_s50_a101_es": {
+    "best_epoch": 284,
+    "best_value": 0.881000951992384,
+    "final_value": 0.6048419855390365,
+    "n_epochs_logged": 400,
+    "drop_pct": 31.346046315706463,
+    "selected_epoch": 275,
+    "checkpoint": "/work/hdd/bbnv/dtyoung/eb_jepa/e03_scaling/e03_s50_a101_es/epoch_275.pth.tar",
+    "snap_distance": 9
+  },
+  "e03_s701_a50_es": {
+    "best_epoch": 294,
+    "best_value": 0.9116812351004654,
+    "final_value": 0.7908034771305549,
+    "n_epochs_logged": 400,
+    "drop_pct": 13.258774373763439,
+    "selected_epoch": 300,
+    "checkpoint": "/work/hdd/bbnv/dtyoung/eb_jepa/e03_scaling/e03_s701_a50_es/epoch_300.pth.tar",
+    "snap_distance": 6
+  },
+  "e03_s701_a25_es": {
+    "best_epoch": 349,
+    "best_value": 0.8659467713787086,
+    "final_value": 0.5898123324396782,
+    "n_epochs_logged": 400,
+    "drop_pct": 31.8881538757152,
+    "selected_epoch": 350,
+    "checkpoint": "/work/hdd/bbnv/dtyoung/eb_jepa/e03_scaling/e03_s701_a25_es/epoch_350.pth.tar",
+    "snap_distance": 1
+  },
+  "e03_s701_a13_es": {
+    "best_epoch": 328,
+    "best_value": 0.864464962121212,
+    "final_value": 0.5220570314404095,
+    "n_epochs_logged": 400,
+    "drop_pct": 39.6092318005124,
+    "selected_epoch": 325,
+    "checkpoint": "/work/hdd/bbnv/dtyoung/eb_jepa/e03_scaling/e03_s701_a13_es/epoch_325.pth.tar",
+    "snap_distance": 3
+  },
+  "e03_s400_a50_es": {
+    "best_epoch": 245,
+    "best_value": 0.9298701298701298,
+    "final_value": 0.6919327321472093,
+    "n_epochs_logged": 400,
+    "drop_pct": 25.588239699252632,
+    "selected_epoch": 250,
+    "checkpoint": "/work/hdd/bbnv/dtyoung/eb_jepa/e03_scaling/e03_s400_a50_es/epoch_250.pth.tar",
+    "snap_distance": 5
+  },
+  "e03_s200_a25_es": {
+    "best_epoch": 13,
+    "best_value": 0.8363345338135254,
+    "final_value": 0.515638963360143,
+    "n_epochs_logged": 400,
+    "drop_pct": 38.34536988339725,
+    "selected_epoch": 25,
+    "checkpoint": "/work/hdd/bbnv/dtyoung/eb_jepa/e03_scaling/e03_s200_a25_es/epoch_25.pth.tar",
+    "snap_distance": 12
+  },
+  "e03_s100_a13_es": {
+    "best_epoch": 156,
+    "best_value": 0.8587044534412955,
+    "final_value": 0.5252254447964904,
+    "n_epochs_logged": 400,
+    "drop_pct": 38.835132076976365,
+    "selected_epoch": 150,
+    "checkpoint": "/work/hdd/bbnv/dtyoung/eb_jepa/e03_scaling/e03_s100_a13_es/epoch_150.pth.tar",
+    "snap_distance": 6
+  }
+}

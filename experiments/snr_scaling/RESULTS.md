@@ -58,18 +58,19 @@ the record of what has been measured. Commits `b4492fe`, `6dd992d`, `fdf0b3b`.
    a 3 % difference — and the δ/θ-over-α ratio replicates at 3.06 vs 2.84. The
    cohorts are 98.9 % shared, so stimulus is the only thing varying. Say
    "replicates across movies within HBN," not "replicates."
-11. ⚠️ **E0.3 ran, but its exponents are PROVISIONAL** (§2.10). Every cell
-   overfits, worse with less data (val AUC drops 15 % at S=701 vs 31 % at S=50,
-   40 % at A=13), which is the exact bias that inflates a scaling exponent. The
-   *ordering* below holds at each cell's peak; the magnitudes do not. Re-running
-   early-stopped. Original endpoint-based text follows:
-12. **E0.3 ran; the thesis survived its own falsification test** (§2.10). Across
-   11 step-matched cells, Δr² scales with subjects (local exponent **+0.441** at
-   the operating point, still climbing at S=701) and saturates in anchors
-   (**+0.096** over A=50→101) — a **4.6× ratio**. Model-free version: at a
-   matched (subjects × anchors) budget, subject-heavy beats anchor-heavy **4/4,
-   median 1.34×**, twice while using *fewer* total pairs. Caveat: n=1 seed, and
-   the A saturation step is only ~3.4σ against jul7's seed noise.
+11. **E0.3 ran early-stopped; the thesis survived its own falsification test**
+   (§2.10). 11 step-matched cells, each probed at its own best epoch (selected
+   epochs ranged 25–350 — no single budget suited them all). Δr² scales with
+   subjects (local exponent **+0.280** at the operating point, still climbing at
+   S=701) and **stops paying entirely in anchors** (**−0.007** over A=50→101).
+   Model-free version: at a matched (subjects × anchors) budget, subject-heavy
+   beats anchor-heavy **4/4, median 1.30×**, twice while using *fewer* total
+   pairs — and this held under both protocols, making it the section's most
+   robust claim. The first pass probed final checkpoints under a fixed budget,
+   which is invalid across data scales; correcting it moved `A` from +0.096 to
+   flat and did **not** reverse anything. Caveat: still n=1 seed, and the local
+   exponents are ratios of nearby cells, so a 7 % move in the corner shifts
+   them materially.
 13. Two artifacts found and fixed that would have corrupted the headline: a flat
    reference channel faking ISC ≈ 0.4, and CorrCA component 1 failing to
    generalise despite the largest in-sample eigenvalue — the latter now known to
@@ -543,51 +544,35 @@ rank of the bad component is **not stable across stimuli**, and any statistic
 keyed to a fixed rank would be movie-dependent. The max-component and
 SNR-combined statistics used throughout are unaffected.
 
-### 2.10 E0.3 — the (anchors × subjects) surface. ⚠️ PROVISIONAL
+### 2.10 E0.3 — the (anchors × subjects) surface, early-stopped
 
-> ## ⚠️ DO NOT QUOTE THE EXPONENTS IN THIS SECTION YET
+> **Protocol note.** The first version of this section probed every cell's
+> **final** checkpoint after a fixed 4400 steps. That is invalid for
+> cross-data-scale comparison — the optimal stopping point is itself a function
+> of dataset size (Hestness 2017; Kaplan 2020) — and measurement confirmed it
+> mattered: on the in-loop val diagnostic every cell was 13–40 % past its peak,
+> monotonically worse the less data it had.
 >
-> **Every cell overfits, and the amount of overfitting is anticorrelated with
-> data size — the exact bias that inflates a scaling exponent.** Discovered
-> 2026-08-02 by pulling the per-epoch `val/clip_scene_auc` diagnostic out of the
-> offline wandb files.
+> **All 11 cells were re-run with periodic checkpoints, and each cell's best
+> epoch (selected on the in-loop val diagnostic, then snapped to the nearest
+> saved checkpoint) was probed.** Selected epochs ranged 25–350, i.e. no single
+> budget was right for all cells. The numbers below are the early-stopped ones.
 >
-> | cell | best | final | best epoch | drop |
-> |---|---:|---:|---:|---:|
-> | S=50 | 0.881 | 0.605 | 284 | **31.3 %** |
-> | S=100 | 0.900 | 0.678 | 235 | 24.6 % |
-> | S=200 | 0.917 | 0.698 | 294 | 23.9 % |
-> | S=400 | 0.929 | 0.773 | 294 | 16.7 % |
-> | S=701 | 0.944 | 0.802 | 245 | **15.1 %** |
-> | A=13 | 0.865 | 0.522 | 328 | **39.6 %** |
-> | A=25 | 0.866 | 0.590 | 349 | 31.9 % |
-> | A=50 | 0.912 | 0.791 | 294 | 13.3 % |
+> **The correction did not overturn the finding — it sharpened it.** `A`'s
+> exponent went from +0.096 to **−0.007**, i.e. from "nearly flat" to
+> "indistinguishable from flat," while `S` stayed clearly positive. The worry
+> that early stopping might *reverse* the result (the peak-epoch anchor slope
+> looked larger on the saturating AUC diagnostic) did **not** survive contact
+> with the probe metric the surface is actually built on.
 >
-> Every cell peaks at epoch ~235–350 and then degrades, monotonically worse with
-> less data. Corroborated by final train loss: **0.68** at S=50 and **0.28** at
-> A=13 against **2.65** at full data — the small cells drove training loss into
-> the floor by memorising.
->
-> The effect is large. At its peak S=50 reaches **93 %** of S=701; at the
-> endpoint measured below, only **75 %**. On the anchor axis, 92 % at peak vs
-> **65 %** at the end.
->
-> **What survives:** the ordering. Both axes still increase monotonically at
-> peak. **What does not:** the magnitudes. The "+0.441 vs +0.096, 4.6×" claim
-> below is measured at a fixed 4400-step budget, which the scaling literature
-> (Hestness 2017; Kaplan 2020) treats as invalid for cross-data-scale
-> comparison precisely because the optimal stopping point is a function of
-> dataset size. On this saturating AUC metric the peak-epoch A slope is actually
-> the *larger* of the two.
->
-> Two things stop this being a straight retraction: `val/clip_scene_auc` is an
-> in-loop diagnostic, not the probe Δr² the surface is built on, so it does not
-> transfer number-for-number; and no intermediate checkpoints exist to re-probe,
-> because `save_every=99999` was set to avoid the earlier quota incident.
->
-> **Fix in flight:** re-run all 11 cells with periodic checkpoints, select each
-> cell's best epoch by the in-loop val diagnostic, and probe that checkpoint —
-> the standard early-stopped protocol. Numbers below will be replaced.
+> **Per-cell Δr² barely moved: every cell is within ±11 % of its endpoint
+> value** (ratios 0.89–1.07). The overfitting hit the CLIP alignment diagnostic
+> (−13 to −40 %) far harder than the linear-probe readout. So the original
+> concern was directionally right but small on this metric — and the *exponents*
+> still shifted materially, because they are ratios of nearby cells and a 7 %
+> move in the corner cell propagates. That fragility is itself a result: see the
+> seed caveat below.
+
 
 
 11 cells, L-shape plus diagonal, retraining the jul7 recipe (TP-only
@@ -605,36 +590,42 @@ both axes, and unequally.
 
 | S (anchors=101) | Δr² | local exp. |   | A (subjects=701) | Δr² | local exp. |
 |---:|---:|---:|---|---:|---:|---:|
-| 50 | 0.0083 | — |   | 13 | 0.0239 | — |
-| 100 | 0.0177 | +1.089 |   | 25 | 0.0331 | +0.499 |
-| 200 | 0.0294 | +0.735 |   | 50 | 0.0483 | +0.548 |
-| 400 | 0.0404 | +0.457 |   | 101 | 0.0517 | **+0.096** |
-| 701 | 0.0517 | **+0.441** |   | | | |
+| 50 | 0.0086 | — |   | 13 | 0.0245 | — |
+| 100 | 0.0189 | +1.129 |   | 25 | 0.0332 | +0.466 |
+| 200 | 0.0290 | +0.620 |   | 50 | 0.0483 | +0.542 |
+| 400 | 0.0411 | +0.502 |   | 101 | 0.0481 | **−0.007** |
+| 701 | 0.0481 | **+0.280** |   | | | |
 
-**Fitted exponents: `S` +0.676, `A` +0.393.** But the marginal fits average over
-the cheap early gains and understate the contrast. What matters is the slope
-**at the operating point**:
+**Fitted exponents: `S` +0.636, `A` +0.349.** The marginal fits average over the
+cheap early gains and understate the contrast; what matters is the slope **at
+the operating point**:
 
-> **S: +0.441 (400→701). A: +0.096 (50→101). A ratio of 4.6×.**
+> **S: +0.280 (400→701). A: −0.007 (50→101).**
 
-`A`'s exponent collapses from ~+0.5 to +0.096 in its last doubling — anchors are
-saturating. `S`'s barely moves (+0.457 → +0.441) and is still climbing at 701,
-the largest cohort available. This is the prediction PLAN.md registered in
-advance: ***r* scales with `S` and saturates in `A`.** The thesis survives the
-test built to falsify it.
+Deliberately not quoted as a ratio: `A`'s exponent is indistinguishable from
+zero, so a ratio against it is arithmetic noise (the endpoint protocol's "4.6×"
+was already fragile for this reason). The statement that survives is the
+qualitative one, and it is now cleaner than before: **`A` has stopped paying
+entirely, while `S` is still climbing at 701 — the largest cohort available.**
+`A`'s exponent collapses from ~+0.5 to flat in its final doubling. This is the
+prediction PLAN.md registered in advance — ***r* scales with `S` and saturates
+in `A`** — and it survives the test built to falsify it, under the protocol the
+scaling literature requires.
 
 **The cleanest statement needs no fitted model.** Hold the (subjects × anchors)
 budget roughly fixed and ask which axis to spend it on:
 
 | subject-heavy | pairs | Δr² | anchor-heavy | pairs | Δr² | gain |
 |---|---:|---:|---|---:|---:|---:|
-| S200 A25 | 5 000 | 0.0157 | S50 A101 | 5 050 | 0.0083 | **1.89×** |
-| S701 A13 | 9 113 | 0.0239 | S100 A101 | 10 100 | 0.0177 | **1.35×** |
-| S400 A50 | 20 000 | 0.0390 | S200 A101 | 20 200 | 0.0294 | **1.33×** |
-| S701 A50 | 35 050 | 0.0483 | S400 A101 | 40 400 | 0.0404 | **1.20×** |
+| S200 A25 | 5 000 | 0.0140 | S50 A101 | 5 050 | 0.0086 | **1.62×** |
+| S701 A13 | 9 113 | 0.0245 | S100 A101 | 10 100 | 0.0189 | **1.30×** |
+| S400 A50 | 20 000 | 0.0375 | S200 A101 | 20 200 | 0.0290 | **1.29×** |
+| S701 A50 | 35 050 | 0.0483 | S400 A101 | 40 400 | 0.0411 | **1.18×** |
 
-**Subject-heavy wins 4/4, median 1.34×** — twice with *fewer* total pairs than
+**Subject-heavy wins 4/4, median 1.30×** — twice with *fewer* total pairs than
 the anchor-heavy arm it beats. At a fixed data budget, spend it on subjects.
+This is the most robust claim in the section: it held under both protocols
+(median 1.34× endpoint, 1.30× early-stopped) and needs no fitted model.
 
 ![E0.3 scaling surface](e03_scaling.png)
 
@@ -646,8 +637,8 @@ by construction and only the shapes are comparable. Error bars are jul7's
 seed noise, not a within-run error. (b) is model-free. Produced by
 [`plot_e03.py`](plot_e03.py).*
 
-**The axes are not cleanly separable.** A multiplicative `Δr² ~ S^0.676 · A^0.393`
-anchored at the corner under-predicts every diagonal cell by 23–45 %, so
+**The axes are not cleanly separable.** A multiplicative `Δr² ~ S^0.636 · A^0.349`
+anchored at the corner under-predicts every diagonal cell by 5–43 %, so
 shrinking both axes hurts *less* than the product model says. The two partially
 substitute; a design formula that treats them as independent will be
 pessimistic.
