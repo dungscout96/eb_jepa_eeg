@@ -39,6 +39,15 @@ from pathlib import Path
 CKPT_ROOT = "/work/hdd/bbnv/dtyoung/eb_jepa/e03_scaling"
 OUT_DIR = Path("experiments/snr_scaling")
 SELECT_KEY = "val/clip_scene_auc"
+# Rolling window for smoothing the selection metric, ~ the checkpoint spacing.
+SMOOTH_WINDOW = 25
+
+
+def _rolling_mean(v: list[float], w: int) -> list[float]:
+    """Centred rolling mean; edges shrink the window rather than pad."""
+    import statistics as _st
+    return [_st.fmean(v[max(0, i - w // 2):min(len(v), i + w // 2 + 1)])
+            for i in range(len(v))]
 
 CELLS = [
     (701, 101), (400, 101), (200, 101), (100, 101), (50, 101),
@@ -117,8 +126,22 @@ def select_epoch(cell_dir: Path, key: str) -> dict:
         logger_msg = (f"  [{cell_dir.name}] using {Path(best_file).parent.name} "
                       f"({len(vals)} points); ignored {skipped}")
         print(logger_msg)
-    best = max(vals)
-    best_ep = vals.index(best)
+    # SMOOTH before argmax. val/clip_scene_auc is an AUC over 29 windows
+    # (eval.val_recording_fraction=0.1), with sd ~0.10 and adjacent-epoch swings
+    # of ~0.09 -- it is close to pure noise around a slow trend. argmax over 400
+    # such samples selects a ~3 sd spike at an essentially arbitrary epoch: it
+    # picked epoch 21 for s1000_d22, whose probe then scored 0.0096, near
+    # random, because that checkpoint is genuinely undertrained.
+    #
+    # It also manufactured RESULTS.md 2.10's "overfitting worsens as data
+    # shrinks": with equal noise across cells, the same absolute spike is a
+    # larger FRACTION of a lower-scoring cell's value, so the apparent drop
+    # correlated with score rather than with overfitting. Smoothed, the ordering
+    # reverses.
+    sm = _rolling_mean(vals, SMOOTH_WINDOW)
+    best = max(sm)
+    best_ep = sm.index(best)
+    raw_best = max(vals)
 
     saved = sorted(
         (int(p.stem.split("_")[1].split(".")[0]), p)
@@ -132,10 +155,13 @@ def select_epoch(cell_dir: Path, key: str) -> dict:
     nearest_ep, nearest_path = min(saved, key=lambda t: abs(t[0] - best_ep))
     return {
         "best_epoch": best_ep,
-        "best_value": best,
-        "final_value": vals[-1],
+        "best_value": best,                 # smoothed
+        "raw_best_value": raw_best,         # noisy argmax, for comparison only
+        "final_value": sm[-1],              # smoothed, comparable to best
+        "raw_final_value": vals[-1],
         "n_epochs_logged": len(vals),
-        "drop_pct": 100.0 * (best - vals[-1]) / best if best else 0.0,
+        "smooth_window": SMOOTH_WINDOW,
+        "drop_pct": 100.0 * (best - sm[-1]) / best if best else 0.0,
         "selected_epoch": nearest_ep,
         "checkpoint": str(nearest_path),
         "snap_distance": abs(nearest_ep - best_ep),

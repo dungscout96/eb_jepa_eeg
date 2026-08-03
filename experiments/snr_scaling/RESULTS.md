@@ -58,20 +58,18 @@ the record of what has been measured. Commits `b4492fe`, `6dd992d`, `fdf0b3b`.
    a 3 % difference — and the δ/θ-over-α ratio replicates at 3.06 vs 2.84. The
    cohorts are 98.9 % shared, so stimulus is the only thing varying. Say
    "replicates across movies within HBN," not "replicates."
-11. **E0.3 ran early-stopped; the thesis survived its own falsification test**
-   (§2.10). 11 step-matched cells, each probed at its own best epoch (selected
-   epochs ranged 25–350 — no single budget suited them all). Δr² scales with
-   subjects (local exponent **+0.280** at the operating point, still climbing at
-   S=701) and **stops paying entirely in anchors** (**−0.007** over A=50→101).
-   Model-free version: at a matched (subjects × anchors) budget, subject-heavy
-   beats anchor-heavy **4/4, median 1.30×**, twice while using *fewer* total
-   pairs — and this held under both protocols, making it the section's most
-   robust claim. The first pass probed final checkpoints under a fixed budget,
-   which is invalid across data scales; correcting it moved `A` from +0.096 to
-   flat and did **not** reverse anything. Caveat: still n=1 seed, and the local
-   exponents are ratios of nearby cells, so a 7 % move in the corner shifts
-   them materially.
-13. Two artifacts found and fixed that would have corrupted the headline: a flat
+11. **E0.3: subjects scale, anchors do not — the ordering is robust, the
+   exponents are not** (§2.10, §2.11). Across 11 step-matched cells, Δr² rises
+   with subjects and is flat in anchors (**−0.007** over A=50→101), and at a
+   matched (subjects × anchors) budget subject-heavy beats anchor-heavy **4/4,
+   median 1.30×** — a model-free claim that held under every protocol tried.
+   Two measurement problems were found and corrected along the way: the
+   "overfitting worsens with less data" motivation was an artifact of
+   `argmax`-ing a 29-window AUC (§2.10 protocol note), and the S-axis draws were
+   not nested (§2.11). Extending to 1863 subjects showed R7–R10 subjects are
+   worth **8–15 % less** than R1–R4 at matched count, so the two pools cannot be
+   spliced.
+12. Two artifacts found and fixed that would have corrupted the headline: a flat
    reference channel faking ISC ≈ 0.4, and CorrCA component 1 failing to
    generalise despite the largest in-sample eigenvalue — the latter now known to
    be **rank-unstable across movies** (§2.9), which is a stronger reason to avoid
@@ -546,32 +544,51 @@ SNR-combined statistics used throughout are unaffected.
 
 ### 2.10 E0.3 — the (anchors × subjects) surface, early-stopped
 
-> **Protocol note.** The first version of this section probed every cell's
-> **final** checkpoint after a fixed 4400 steps. That is invalid for
-> cross-data-scale comparison — the optimal stopping point is itself a function
-> of dataset size (Hestness 2017; Kaplan 2020) — and measurement confirmed it
-> mattered: on the in-loop val diagnostic every cell was 13–40 % past its peak,
-> monotonically worse the less data it had.
+> **Protocol note — the overfitting story here was a measurement artifact.**
 >
-> **All 11 cells were re-run with periodic checkpoints, and each cell's best
-> epoch (selected on the in-loop val diagnostic, then snapped to the nearest
-> saved checkpoint) was probed.** Selected epochs ranged 25–350, i.e. no single
-> budget was right for all cells. The numbers below are the early-stopped ones.
+> The first version of this section probed every cell's **final** checkpoint
+> after a fixed 4400 steps. Fixed-budget comparison across data scales is
+> genuinely invalid (Hestness 2017; Kaplan 2020), so the cells were re-run with
+> periodic checkpoints and each probed at its selected best epoch. That much was
+> right. **The evidence used to motivate it was not.**
 >
-> **The correction did not overturn the finding — it sharpened it.** `A`'s
-> exponent went from +0.096 to **−0.007**, i.e. from "nearly flat" to
-> "indistinguishable from flat," while `S` stayed clearly positive. The worry
-> that early stopping might *reverse* the result (the peak-epoch anchor slope
-> looked larger on the saturating AUC diagnostic) did **not** survive contact
-> with the probe metric the surface is actually built on.
+> The motivating claim was "every cell is 13–40 % past its peak, monotonically
+> worse the less data it had." That came from taking `argmax` over
+> `val/clip_scene_auc`. **That metric is an AUC over 29 windows**
+> (`eval.val_recording_fraction: 0.1`), with sd ≈ 0.10 and **adjacent-epoch
+> swings of ≈ 0.09** — close to pure noise around a slow trend. An argmax over
+> 400 such samples lands ~3 sd above the trend at an essentially arbitrary
+> epoch, and the "drop" was then measured against that spike.
 >
-> **Per-cell Δr² barely moved: every cell is within ±11 % of its endpoint
-> value** (ratios 0.89–1.07). The overfitting hit the CLIP alignment diagnostic
-> (−13 to −40 %) far harder than the linear-probe readout. So the original
-> concern was directionally right but small on this metric — and the *exponents*
-> still shifted materially, because they are ratios of nearby cells and a 7 %
-> move in the corner cell propagates. That fragility is itself a result: see the
-> seed caveat below.
+> Smoothing the metric (centred rolling mean, window 25) reverses the finding:
+>
+> | cell | raw "drop" | smoothed end/max |
+> |---|---:|---:|
+> | S=50 | 31.3 % | **0.984** |
+> | S=100 | 24.6 % | 0.916 |
+> | S=200 | 23.9 % | 0.922 |
+> | S=400 | 16.7 % | 0.920 |
+> | S=701 | 15.1 % | 0.962 |
+>
+> S=50 was reported as the *most* overfit and is in fact the *least*. The
+> apparent anticorrelation was arithmetic: with roughly equal absolute noise
+> across cells, the same spike is a larger **fraction** of a lower-scoring
+> cell's value, so the "drop" tracked the score rather than any overfitting.
+> Real late-training decline is **2–8 %**, not 15–31 %.
+>
+> **Consequences.** (a) There is no strong evidence of data-size-dependent
+> overfitting in E0.3. (b) Selection on the raw metric picked near-arbitrary
+> epochs — which is why per-cell Δr² moved only ±11 % between the two protocols,
+> and why one nested-draw cell selected epoch 21 and probed at near-random
+> (§2.11). (c) With smoothing, **every cell selects epoch ~325**, so the
+> early-stopped protocol reduces in practice to "train 325 epochs rather than
+> 400" — a far weaker intervention than the name suggests.
+>
+> The exponents below were produced with the raw-argmax selection. Treat them as
+> "probed at a near-arbitrary late epoch," which is close to but not identical
+> to the endpoint numbers. **Whichever selection is used, the qualitative result
+> is unchanged**: `S` positive, `A` flat, and subject-heavy winning every
+> iso-budget comparison. Selection noise moves the exponents, not the ordering.
 
 
 
