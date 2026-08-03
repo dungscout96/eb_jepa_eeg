@@ -58,18 +58,22 @@ the record of what has been measured. Commits `b4492fe`, `6dd992d`, `fdf0b3b`.
    a 3 % difference — and the δ/θ-over-α ratio replicates at 3.06 vs 2.84. The
    cohorts are 98.9 % shared, so stimulus is the only thing varying. Say
    "replicates across movies within HBN," not "replicates."
-11. **E0.3: subjects scale, anchors do not — the ordering is robust, the
-   exponents are not** (§2.10, §2.11). Across 11 step-matched cells, Δr² rises
-   with subjects and is flat in anchors (**−0.007** over A=50→101), and at a
-   matched (subjects × anchors) budget subject-heavy beats anchor-heavy **4/4,
-   median 1.30×** — a model-free claim that held under every protocol tried.
-   Two measurement problems were found and corrected along the way: the
-   "overfitting worsens with less data" motivation was an artifact of
-   `argmax`-ing a 29-window AUC (§2.10 protocol note), and the S-axis draws were
-   not nested (§2.11). Extending to 1863 subjects showed R7–R10 subjects are
-   worth **8–15 % less** than R1–R4 at matched count, so the two pools cannot be
-   spliced.
-12. Two artifacts found and fixed that would have corrupted the headline: a flat
+11. **The subject axis saturates at ~700** (§2.11). With nested draws, 3 draws
+   per S, and smoothed checkpoint selection, Δr² rises steeply to 701
+   (exponent **+0.441**, 8 sd) and then stops: 701 → 1863 is **2.66× the
+   subjects for +4.9 % Δr², +1.8 sd**. "Buy SNR with subjects" is a
+   ~700-subject strategy on this recipe, not an unbounded one. Caveat: R7–R10
+   subjects are worth **8–15 % less** than R1–R4 at matched count, so part of
+   the flattening may be dilution rather than saturation — pool-stratified
+   cells would separate them.
+12. **Anchors stay flat, and subjects beat anchors at matched budget** (§2.10).
+   Δr² is flat in anchors (**−0.007** over A=50→101), and subject-heavy beats
+   anchor-heavy **4/4, median 1.30×** at a matched (subjects × anchors) budget —
+   model-free, and stable under every protocol tried. Two measurement problems
+   were found and corrected en route: the "overfitting worsens with less data"
+   motivation was an artifact of `argmax`-ing a 29-window AUC (§2.10 protocol
+   note), and the S-axis draws were originally not nested (§2.11).
+13. Two artifacts found and fixed that would have corrupted the headline: a flat
    reference channel faking ISC ≈ 0.4, and CorrCA component 1 failing to
    generalise despite the largest in-sample eigenvalue — the latter now known to
    be **rank-unstable across movies** (§2.9), which is a stronger reason to avoid
@@ -673,65 +677,63 @@ ThePresent's length, so the surface cannot show what happens past 101 in
 distribution. §2.9's shared-cohort finding gives the out-of-distribution
 extension (jul2: +84 % anchors made TP *worse*), which points the same way.
 
-### 2.11 E0.3 extension to 1863 subjects — the calibration failed, and that is the result
+### 2.11 E0.3 extension to 1863 subjects — the subject axis saturates at ~700
 
-R7–R10 (preprocessed 2026-08-02) take the ThePresent train pool from 703
-recordings to **1863**. Five cells were run early-stopped from the start, all at
-4400 steps: S ∈ {400, 701, 1000, 1400, 1863} at A=101. **S=400 and S=701 were
-re-runs, drawn from the new 1863 pool, purely as calibration** — the original
-cells at those S drew from R1–R4 only, and appending new points to the old curve
-is only legitimate if the two pools behave the same at matched S.
+R7–R10 take the ThePresent train pool from 703 recordings to **1863**. Final
+protocol: **nested** subject draws (permute once per seed, take the first S, so
+S=400 ⊂ 701 ⊂ 1000 ⊂ 1400), **three independent draws** per S (`subsample_seed`
+11/22/33 with `meta.seed` fixed at 2026, so only the cohort varies), all cells
+step-matched at 4400 steps, and every cell probed at the epoch chosen by the
+**smoothed** val diagnostic (§2.10 protocol note) — which lands on epoch 325 for
+all of them.
 
-**They do not.**
+| S | n | mean Δr² | sd | draws |
+|---:|:-:|---:|---:|---|
+| 400 | 3 | 0.03434 | 0.00057 | 0.03369, 0.03459, 0.03475 |
+| 701 | 3 | 0.04398 | 0.00183 | 0.04238, 0.04359, 0.04598 |
+| 1000 | 3 | 0.04489 | 0.00013 | 0.04474, 0.04495, 0.04497 |
+| 1400 | 3 | 0.04519 | 0.00145 | 0.04352, 0.04599, 0.04606 |
+| 1863 | 1 | 0.04615 | — | whole pool, only one draw exists |
 
-| S | Δr² (R1–R4 pool) | Δr² (1863 pool) | ratio |
-|---:|---:|---:|---:|
-| 400 | 0.04108 | 0.03496 | **0.851** |
-| 701 | 0.04806 | 0.04403 | **0.916** |
+**Pooled between-draw sd = 0.00120**, down from 0.01012 under raw-argmax
+selection — an 8.4× collapse. So cohort-to-cohort variation was never the
+problem: the earlier sd of 0.0195 at S=1000 was one cell whose selection picked
+epoch 21. Between-draw noise is in fact comparable to jul7's seed σ (0.0010),
+which means single-draw cells elsewhere in E0.3 are more trustworthy than §2.11
+previously feared.
 
-At matched subject count, subjects drawn from the extended pool are worth
-**8–15 % less**. R7–R10 are not interchangeable with R1–R4. **The two segments
-cannot be plotted as one curve**, and the calibration points are what caught it:
-without them, appending S=1000 (0.03838) to the old S=701 (0.04806) would have
-shown a 20 % collapse and invited the conclusion that subject scaling reverses
-past 701. That conclusion would have been an artifact of pool composition.
+**The result, in exponents:**
 
-**Within the extended pool, scaling above 701 is flat to slightly negative:**
+| step | Δ | in sd | exponent |
+|---|---:|---:|---:|
+| 400 → 701 | +0.00964 | **+8.01** | **+0.441** |
+| 701 → 1000 | +0.00090 | +0.75 | +0.057 |
+| 1000 → 1400 | +0.00031 | +0.26 | +0.020 |
+| 1400 → 1863 | +0.00095 | +0.79 | +0.073 |
+| **701 → 1863** | **+0.00216** | **+1.80** | **+0.049** |
 
-| S | 400 | 701 | 1000 | 1400 | 1863 |
-|---|---:|---:|---:|---:|---:|
-| Δr² | 0.03496 | 0.04403 | 0.03838 | 0.04107 | 0.04233 |
+> **The subject axis pays steeply to ~700 and then essentially stops.**
+> Below 700 the exponent is **+0.441** (8 sd, unambiguous). Above it, every step
+> is under 1 sd and the exponents fall to +0.02–+0.07. Going 701 → 1863 —
+> **2.66× the subjects** — buys **+4.9 % Δr²** at +1.8 sd: marginal
+> statistically, negligible practically.
 
-701 → 1863 is a **2.66× increase in subjects for Δr² 0.04403 → 0.04233**, i.e.
-slightly *down*. Taken at face value that says the subject axis saturates
-somewhere near 700 — which would materially weaken the paper's thesis.
+**This bounds the thesis rather than supporting it in its strong form.** "Buy
+SNR with subjects" holds, but with a knee: it is a ~700-subject strategy on this
+recipe, not an unbounded one. That is a more useful claim than either "subjects
+keep paying" or "unresolved" — and it is the number a lab planning a cohort
+actually needs.
 
-**Do not take it at face value yet, for a reason that also affects §2.10.**
-The subsample draws are **not nested**. Each cell calls
-`rng.choice(n, size=S, replace=False)` with the same seed but a different size,
-which does not produce a prefix relationship: measured directly, **S=701 and
-S=1000 share only 371 of 701 subjects (53 %)**. Consecutive points on the
-"curve" are therefore largely *different cohorts*, not a growing one, so each
-point carries between-draw variance on top of seed variance. The non-monotonic
-dip at S=1000 (−0.0057, ~5.7× jul7's seed σ) is far more consistent with an
-unlucky draw than with a real effect — and if draw variance is that large, the
-701 → 1863 flatness cannot be separated from it either.
+**The one confound that could soften it.** These cells draw from the extended
+pool, where §2.11's calibration showed R7–R10 subjects are worth **8–15 % less**
+than R1–R4 at matched count (visible again here: extended-pool S=400 scores
+0.03434 vs 0.04108 on the R1–R4 pool). So part of the flattening may be
+dilution — adding cheaper subjects — rather than genuine saturation. Separating
+them needs the pool-stratified cells (R1–R4-only vs R7–R10-only at matched S),
+which is the remaining experiment worth running on this axis.
 
-**Honest status: whether the subject axis saturates above ~700 is unresolved.**
-What survives untouched is the comparison that never depended on these
-exponents — subject-heavy beats anchor-heavy 4/4 at matched budget, under both
-protocols (§2.10).
-
-**What would settle it**, in order of value:
-1. **Nested draws** — one permutation per seed, take the first S. Then S=1000 is
-   a strict superset of S=701 and the curve measures added subjects rather than
-   a different cohort. Implemented as of this commit; the recorded cells above
-   predate it.
-2. **Several draws per S**, to measure the between-draw variance directly rather
-   than inferring it.
-3. **Pool-stratified cells** — R1–R4-only at every S up to 703, and R7–R10-only,
-   to characterise *why* the new releases are worth less rather than only that
-   they are.
+**Also unchanged:** the anchor axis is flat and subject-heavy wins every
+iso-budget comparison (§2.10). Nothing in this section touches those.
 
 ## §3. Two artifacts that would have corrupted the headline
 
