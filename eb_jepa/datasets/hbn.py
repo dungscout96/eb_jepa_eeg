@@ -48,26 +48,6 @@ def _resolve_hbn_cache_dir() -> Path:
 
 DATA_DIR = _resolve_hbn_cache_dir()
 
-if os.environ.get("environment") == "development":
-    SPLIT_RELEASES = {
-        "train": {
-            "R1": "ds005505",  # 136 subjects
-        },
-        "val": {"R1": "ds005505"},  # 136 subjects
-        "test": {"R1": "ds005505"},  # 134 subjects
-    }
-else:
-    SPLIT_RELEASES = {
-        "train": {
-            "R1": "ds005505",  # 136 subjects
-            "R2": "ds005506",  # 152 subjects
-            "R3": "ds005507",  # 184 subjects
-            "R4": "ds005508",  # 324 subjects
-        },
-        "val": {"R5": "ds005509"},  # 136 subjects
-        "test": {"R6": "ds005510"},  # 134 subjects
-    }
-
 # Every known HBN release -> OpenNeuro accession. Kept SEPARATE from
 # SPLIT_RELEASES on purpose: which releases exist is a fact about OpenNeuro,
 # while which releases a split uses is an experimental choice. Preprocessing a
@@ -89,6 +69,50 @@ ALL_RELEASES = {
     "R10": "ds005515",
     "R11": "ds005516",
 }
+
+if os.environ.get("environment") == "development":
+    SPLIT_RELEASES = {
+        "train": {
+            "R1": "ds005505",  # 136 subjects
+        },
+        "val": {"R1": "ds005505"},  # 136 subjects
+        "test": {"R1": "ds005505"},  # 134 subjects
+    }
+else:
+    SPLIT_RELEASES = {
+        "train": {
+            "R1": "ds005505",  # 136 subjects
+            "R2": "ds005506",  # 152 subjects
+            "R3": "ds005507",  # 184 subjects
+            "R4": "ds005508",  # 324 subjects
+        },
+        "val": {"R5": "ds005509"},  # 136 subjects
+        "test": {"R6": "ds005510"},  # 134 subjects
+    }
+
+    # R7-R10 were preprocessed 2026-08-02 and roughly triple the train cohort
+    # (703 -> 1886 ThePresent recordings). They are NOT enabled by default, and
+    # deliberately so: ~66 existing submit scripts pin the R1-R4 train split
+    # implicitly, and silently retraining them on twice the data would
+    # invalidate every recorded result in the repo without touching a line of
+    # their code. Opt in per run instead:
+    #
+    #     HBN_TRAIN_RELEASES=R1,R2,R3,R4,R7,R8,R9,R10
+    #
+    # val (R5) and test (R6) are intentionally NOT extensible here -- every
+    # measured number in experiments/snr_scaling is on R5 val, and moving that
+    # target would break comparability with the ceiling, E0.2 and E0.3.
+    _train_env = os.environ.get("HBN_TRAIN_RELEASES")
+    if _train_env:
+        _requested = [r.strip() for r in _train_env.split(",") if r.strip()]
+        _unknown = [r for r in _requested if r not in ALL_RELEASES]
+        if _unknown:
+            raise ValueError(
+                f"HBN_TRAIN_RELEASES names unknown release(s) {_unknown}. "
+                f"Known: {sorted(ALL_RELEASES)}")
+        SPLIT_RELEASES["train"] = {r: ALL_RELEASES[r] for r in _requested}
+        logger.info("HBN_TRAIN_RELEASES override: train = %s", _requested)
+
 
 DEFAULT_TASK = "ThePresent"
 
