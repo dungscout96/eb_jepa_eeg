@@ -234,3 +234,88 @@ def test_normalise_descriptions_falls_back_to_the_requested_task():
     ds = _FakeConcat([_FakeDS({"subject": "S"})])
     s3.normalise_descriptions(ds, "DespicableMe")
     assert dict(ds.datasets[0].description)["task"] == "DespicableMe"
+
+
+# ------------------------------------------------- upstream data defects
+
+
+def test_repair_channel_types_fills_a_blank_type_column(tmp_path):
+    """ds005515 (R10) ships every channels.tsv with `type` blank. mne-bids
+    overrides channel types from that file, so nothing ends up typed as EEG and
+    raw.filter() dies with "picks yielded no channels" -- deep inside pass 1,
+    after the 22 GB download."""
+    import pandas as pd
+    d = tmp_path / "sub-A" / "eeg"
+    d.mkdir(parents=True)
+    f = d / "sub-A_task-TP_channels.tsv"
+    pd.DataFrame({"name": ["E1", "E2"], "type": [None, None],
+                  "units": ["uV", "uV"]}).to_csv(f, sep="\t", index=False)
+    assert s3.repair_channel_types(tmp_path) == 1
+    out = pd.read_csv(f, sep="\t")
+    assert out["type"].tolist() == ["EEG", "EEG"]
+    assert out["name"].tolist() == ["E1", "E2"]      # nothing else disturbed
+
+
+def test_repair_channel_types_leaves_populated_files_alone(tmp_path):
+    """R7/R8/R9 already say EEG. Rewriting them would be a silent no-op at best
+    and a corruption at worst."""
+    import pandas as pd
+    d = tmp_path / "sub-A" / "eeg"
+    d.mkdir(parents=True)
+    f = d / "sub-A_task-TP_channels.tsv"
+    pd.DataFrame({"name": ["E1"], "type": ["EEG"]}).to_csv(f, sep="\t", index=False)
+    before = f.read_text()
+    assert s3.repair_channel_types(tmp_path) == 0
+    assert f.read_text() == before
+
+
+def test_repair_channel_types_does_not_touch_partially_typed_files(tmp_path):
+    """Only a WHOLLY blank column is a defect; a partially typed one may be
+    deliberate (e.g. a few EOG channels) and must not be overwritten."""
+    import pandas as pd
+    d = tmp_path / "sub-A" / "eeg"
+    d.mkdir(parents=True)
+    f = d / "sub-A_task-TP_channels.tsv"
+    pd.DataFrame({"name": ["E1", "E2"], "type": ["EEG", None]}).to_csv(
+        f, sep="\t", index=False)
+    assert s3.repair_channel_types(tmp_path) == 0
+
+
+class _RawStub:
+    def __init__(self, n):
+        self.ch_names = [f"E{i}" for i in range(n)]
+
+
+class _DSStub:
+    def __init__(self, n, subject):
+        import pandas as pd
+        self.raw = _RawStub(n)
+        self._description = pd.Series({"subject": subject, "task": "TP"})
+
+    @property
+    def description(self):
+        return self._description
+
+
+def test_drop_anomalous_recordings_removes_the_corrupt_one():
+    """R7 sub-NDARBA381JGH has 6 unnamed channels where 129 are expected; on the
+    default on_ch_mismatch it aborted the entire release-task."""
+    ds = _FakeConcat([_DSStub(129, "good1"), _DSStub(129, "good2"),
+                      _DSStub(6, "NDARBA381JGH")])
+    dropped = s3.drop_anomalous_recordings(ds)
+    assert dropped == ["NDARBA381JGH(6ch)"]
+    assert len(ds.datasets) == 2
+
+
+def test_drop_anomalous_recordings_uses_the_mode_not_a_hardcoded_129():
+    """A future release could legitimately use a different montage; the check
+    must follow the cohort, not a magic number."""
+    ds = _FakeConcat([_DSStub(64, "a"), _DSStub(64, "b"), _DSStub(129, "c")])
+    assert s3.drop_anomalous_recordings(ds) == ["c(129ch)"]
+    assert len(ds.datasets) == 2
+
+
+def test_drop_anomalous_recordings_is_a_no_op_when_uniform():
+    ds = _FakeConcat([_DSStub(129, "a"), _DSStub(129, "b")])
+    assert s3.drop_anomalous_recordings(ds) == []
+    assert len(ds.datasets) == 2

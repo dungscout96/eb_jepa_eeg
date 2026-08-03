@@ -172,6 +172,74 @@ def fetch_bids_task(dataset_id: str, task: str, root: Path,
     return ds_root
 
 
+def repair_channel_types(ds_root: Path, default_type: str = "EEG") -> int:
+    """Fill an empty ``type`` column in mirrored ``channels.tsv`` files.
+
+    ds005515 (R10) ships every ``channels.tsv`` with the ``type`` column blank,
+    while R7/R8/R9 all say ``EEG``. mne-bids overrides channel types from that
+    file, so blank types mean nothing is typed as EEG and the first
+    ``raw.filter()`` dies with "picks (data_or_ica) yielded no channels" -- deep
+    inside pass 1, long after the 22 GB download.
+
+    Safe because the ``.set`` itself already types all 129 channels as eeg and
+    the names match the TSV exactly; this restores what the recording says about
+    itself. Only the local mirror is modified.
+
+    Returns the number of files repaired.
+    """
+    import pandas as pd
+
+    n = 0
+    for tsv in ds_root.rglob("*_channels.tsv"):
+        try:
+            df = pd.read_csv(tsv, sep="\t")
+        except Exception:
+            continue
+        if "type" not in df.columns or df["type"].notna().any():
+            continue
+        df["type"] = default_type
+        df.to_csv(tsv, sep="\t", index=False, na_rep="n/a")
+        n += 1
+    if n:
+        logger.warning(
+            "Repaired %d channels.tsv file(s) under %s with a blank `type` "
+            "column (filled with %r from the recording's own typing).",
+            n, ds_root.name, default_type)
+    return n
+
+
+def drop_anomalous_recordings(dataset) -> list[str]:
+    """Remove recordings whose channel count differs from the cohort mode.
+
+    ds005511 (R7) contains sub-NDARBA381JGH's DespicableMe file with 6 unnamed
+    channels ("EEG 000"...) where 129 are expected -- a corrupt recording that
+    otherwise aborts the whole release-task. Dropping by *modal* channel count
+    rather than a hardcoded 129 keeps this honest if a future release legitimately
+    uses a different montage.
+
+    Returns the subject labels dropped.
+    """
+    from collections import Counter
+
+    counts = [len(d.raw.ch_names) for d in dataset.datasets]
+    if not counts:
+        return []
+    modal, _ = Counter(counts).most_common(1)[0]
+    keep, dropped = [], []
+    for d, c in zip(dataset.datasets, counts):
+        if c == modal:
+            keep.append(d)
+        else:
+            desc = d.description
+            dropped.append(f"{desc.get('subject', '?')}({c}ch)")
+    if dropped:
+        logger.warning(
+            "Dropping %d recording(s) whose channel count != %d (the cohort "
+            "mode): %s", len(dropped), modal, ", ".join(dropped))
+        dataset.datasets = keep
+    return dropped
+
+
 def load_from_s3(release: str, task: str, cache_dir: Path,
                  *, max_workers: int = 8):
     """eegdash-free replacement for ``load_or_download``.
@@ -187,7 +255,14 @@ def load_from_s3(release: str, task: str, cache_dir: Path,
     dataset_id = _release_to_dataset_id(release)
     ds_root = fetch_bids_task(dataset_id, task, Path(cache_dir),
                               max_workers=max_workers)
-    ds = BIDSDataset(root=ds_root, tasks=task, datatypes="eeg", preload=False)
+    repair_channel_types(ds_root)
+    # on_ch_mismatch="warn" rather than the default "raise": a single corrupt
+    # recording (R7 sub-NDARBA381JGH, 6 unnamed channels) otherwise aborts the
+    # entire release-task. Mismatched files fall through to
+    # drop_anomalous_recordings below rather than being silently kept.
+    ds = BIDSDataset(root=ds_root, tasks=task, datatypes="eeg", preload=False,
+                     on_ch_mismatch="warn")
+    drop_anomalous_recordings(ds)
     normalise_descriptions(ds, task)
     logger.info("Loaded %d recordings from %s (task=%s)",
                 len(ds.datasets), ds_root, task)
