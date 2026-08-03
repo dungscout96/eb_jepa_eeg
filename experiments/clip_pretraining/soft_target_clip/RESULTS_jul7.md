@@ -83,9 +83,32 @@ model:  encoder_embed_dim: 512, encoder_depth: 12, encoder_heads: 8, patch_size:
 loss:   mean_center: true, target_kind: per_window, temporal_buffer_s: 2.0
         proj_dim: 512, temperature: 0.07, vision_passthrough: false
 optim:  optimizer: adam, lr: 1e-4, warmup_epochs: 5, epochs: 400
-data:   batch_size: 64, n_windows: 8, window_size_seconds: 2, task: [ThePresent, DespicableMe]
+data:   batch_size: 64, n_windows: 1, window_size_seconds: 2, task: [ThePresent, DespicableMe]
         (single task override for TP-only runs)
 ```
+
+> **⚠️ CORRECTION (2026-08-03).** This block previously read `n_windows: 8`.
+> **All twelve jul7 runs used `n_windows: 1`.** Checked directly against the
+> saved `config.yaml` of every run under
+> `/work/hdd/bbnv/dtyoung/eb_jepa/soft_target_clip/` — all 12 report
+> `n_windows: 1` — which is also the value in `config/clip_pretrain.yaml`, and
+> `_submit_ab.py` never overrides it (it passes only `--optim.epochs`,
+> `--meta.seed`, `--folder`, `--logging.*`). The `latest.pth.tar` of the
+> best run corroborates it arithmetically: `{'epoch': 399, 'step': 4400}` is
+> 11 steps/epoch = ceil(703 recordings / batch 64), i.e. **one item per
+> recording per epoch**. At `n_windows: 8` the step count would be unchanged
+> (the dataset is recording-indexed) but each item would carry 8 windows, so
+> this is the loss/​batch composition, not the schedule.
+>
+> Not a cosmetic fix. `n_windows` decides whether an item is one movie moment
+> or a contiguous block of eight, which changes what an InfoNCE batch contains
+> and what the 2 s `temporal_buffer_s` exclusion masks. It is also load-bearing
+> for [`snr_scaling` E0.3](../../snr_scaling/RESULTS.md): with `n_windows: 1`,
+> restricted-anchor sampling (draw 1 window from the allowed set) has the same
+> distribution as unrestricted sampling (draw 1 from all windows), so the
+> A=101 corner cell is statistically identical to no anchor restriction and the
+> scaling surface has no sampling-mode confound. At `n_windows: 8` it would
+> have had one, and the surface would have needed a different design.
 
 Two engineering changes committed with this experiment:
 
