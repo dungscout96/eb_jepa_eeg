@@ -62,6 +62,17 @@ FULL_ANCHORS = 101           # 2 s windows spanning ThePresent (202.5 s)
 #   diagonal ............. 3 cells, to test separability of the two axes
 SUFFIX = ""
 
+# Extended-cohort S axis (R7-R10 preprocessed 2026-08-02, train pool 703 ->
+# 1863 recordings). S=400 and S=701 are re-run FROM THE EXTENDED POOL as
+# calibration: the original cells at those S drew from R1-R4 only, so without
+# an overlap point, stitching the old and new curves would silently mix two
+# different sampling pools. If the calibration points reproduce the originals,
+# the axis stitches honestly; if they do not, that is itself the finding.
+EXTENDED_CELLS = [
+    (400, 101), (701, 101),          # calibration overlap with the R1-R4 curve
+    (1000, 101), (1400, 101), (1863, 101),
+]
+
 CELLS = [
     (701, 101), (400, 101), (200, 101), (100, 101), (50, 101),   # vary S
     (701, 50), (701, 25), (701, 13),                             # vary A
@@ -71,7 +82,7 @@ CELLS = [
 
 def build_job(subjects: int, anchors: int, partition: str,
               time_limit: str, epochs: int, save_every: int = 99999,
-              skip_probe: bool = False) -> Job:
+              skip_probe: bool = False, extended: bool = False) -> Job:
     slug = f"e03_s{subjects}_a{anchors}{SUFFIX}"
     exp_dir = f"{CKPT_ROOT}/{slug}"
 
@@ -129,7 +140,14 @@ def build_job(subjects: int, anchors: int, partition: str,
         branch="",
         env_vars={
             "WANDB_PROJECT": "eb_jepa",
-            "HBN_PREPROCESS_DIR": "/projects/bbnv/kkokate/hbn_preprocessed",
+            # The unified root (R1-R6 symlinked, R7-R10 real) only when
+            # extended; otherwise the original root, so existing cells stay
+            # bit-comparable.
+            "HBN_PREPROCESS_DIR": (
+                "/work/hdd/bbnv/dtyoung/hbn_preprocessed" if extended
+                else "/projects/bbnv/kkokate/hbn_preprocessed"),
+            **({"HBN_TRAIN_RELEASES": "R1,R2,R3,R4,R7,R8,R9,R10"}
+               if extended else {}),
         },
     )
 
@@ -149,6 +167,10 @@ def main() -> None:
     p.add_argument("--skip-probe", action="store_true",
                    help="Train only. Under the early-stopped protocol the probe "
                         "runs later, on the selected checkpoint, not on latest.")
+    p.add_argument("--extended", action="store_true",
+                   help="Run the extended-cohort S axis: enables R7-R10 via "
+                        "HBN_TRAIN_RELEASES, points HBN_PREPROCESS_DIR at the "
+                        "unified root, and uses EXTENDED_CELLS.")
     p.add_argument("--suffix", default="",
                    help="Appended to the cell slug, so a re-run does not "
                         "overwrite the endpoint-protocol results.")
@@ -157,7 +179,7 @@ def main() -> None:
 
     global SUFFIX
     SUFFIX = args.suffix
-    cells = CELLS
+    cells = EXTENDED_CELLS if args.extended else CELLS
     if args.only:
         s, a = (int(v) for v in args.only.lower().split("x"))
         cells = [(s, a)]
@@ -172,13 +194,14 @@ def main() -> None:
 
     if args.action != "submit":
         print(build_job(*cells[0], args.partition, args.time_limit,
-                        args.epochs, args.save_every, args.skip_probe).command)
+                        args.epochs, args.save_every, args.skip_probe,
+                        args.extended).command)
         print("\nDry run. Re-run with 'submit' to sbatch.")
         return
 
     for s, a in cells:
         job = build_job(s, a, args.partition, args.time_limit, args.epochs,
-                        args.save_every, args.skip_probe)
+                        args.save_every, args.skip_probe, args.extended)
         print(f"submitted {job.name}: {job.submit()}")
 
 
