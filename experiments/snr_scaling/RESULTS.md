@@ -16,10 +16,13 @@ the record of what has been measured. Commits `b4492fe`, `6dd992d`, `fdf0b3b`.
 1. **The single-trial ceiling on R5 val is *r* = 0.313.** Cross-validated
    CorrCA gives a combined 5-component reliability of `rho1 = 0.0982`; the
    Spearman-Brown / Schoppe ceiling is `sqrt(rho1) = 0.313`.
-2. **The best checkpoint sits at 83–88 % of it** — Schoppe CC_norm = **0.826**
-   on val (*r* = 0.2584 / 0.313) and **0.882** on test (*r* = 0.1517 / 0.172).
-   ⚠️ An earlier version of this file reported 0.484 by comparing the **test**
-   *r* against the **val** ceiling. That was a split mismatch; see §2.2.
+2. **The best checkpoint sits at ~83 % of the VAL ceiling** — Schoppe
+   CC_norm = **0.826** on val (*r* = 0.2584 / 0.313). ⚠️ **The test CC_norm of
+   0.882 is withdrawn**: §2.12 measures test *r* = 0.1918 against a test ceiling
+   of 0.172, a ratio of 1.115, so the test ceiling is provably an underestimate
+   (§2.5 predicted this from CorrCA fit-set size). Quote val only. An even
+   earlier version reported 0.484 by comparing test *r* against the val ceiling
+   — a split mismatch; see §2.2.
 3. **Single-trial headroom is only ~1.15–1.2×, not ~2×.** Four objectives
    tying within ±0.003 Δr²
    ([jul7 §4.1](../clip_pretraining/soft_target_clip/RESULTS_jul7.md)) is
@@ -58,14 +61,15 @@ the record of what has been measured. Commits `b4492fe`, `6dd992d`, `fdf0b3b`.
    a 3 % difference — and the δ/θ-over-α ratio replicates at 3.06 vs 2.84. The
    cohorts are 98.9 % shared, so stimulus is the only thing varying. Say
    "replicates across movies within HBN," not "replicates."
-11. **The subject axis saturates at ~700** (§2.11). With nested draws, 3 draws
-   per S, and smoothed checkpoint selection, Δr² rises steeply to 701
-   (exponent **+0.441**, 8 sd) and then stops: 701 → 1863 is **2.66× the
-   subjects for +4.9 % Δr², +1.8 sd**. "Buy SNR with subjects" is a
-   ~700-subject strategy on this recipe, not an unbounded one. Caveat: R7–R10
-   subjects are worth **8–15 % less** than R1–R4 at matched count, so part of
-   the flattening may be dilution rather than saturation — pool-stratified
-   cells would separate them.
+11. **The subject axis saturates at ~700 — for the linear probe only**
+   (§2.11, §2.12). With nested draws, 3 draws per S and smoothed selection, Δr²
+   rises steeply to 701 (exponent **+0.441**, 8 sd) then stops; `probe_traintest`
+   reproduces this on **both** val and test (test *r* 0.1865 → 0.1901 for
+   701 → 1863, +1.9 %). **But e→v retrieval does not saturate** — test scene
+   top-5 rises monotonically 0.345 → 0.408 over the same range, **+18 %**. Same
+   checkpoints, opposite answer: saturation is a property of the *readout*, not
+   the representation. Caveat: R7–R10 subjects are worth **8–15 % less** than
+   R1–R4 at matched count, so part of the probe flattening may be dilution.
 12. **Anchors stay flat, and subjects beat anchors at matched budget** (§2.10).
    Δr² is flat in anchors (**−0.007** over A=50→101), and subject-heavy beats
    anchor-heavy **4/4, median 1.30×** at a matched (subjects × anchors) budget —
@@ -231,9 +235,17 @@ from the jul7 probe JSONs
 |---|---|---:|---:|---:|
 | **soft τ=0.05 400 ep** | **val** | **0.2584** | 0.313 | **0.826** |
 | vanilla CLIP 400 ep | val | 0.2485 | 0.313 | 0.794 |
-| **soft τ=0.05 400 ep** | **test** | **0.1517** | 0.172 | **0.882** |
-| vanilla CLIP 400 ep | test | 0.1459 | 0.172 | 0.848 |
-| random init | test | 0.0527 | 0.172 | 0.306 |
+| ~~soft τ=0.05 400 ep~~ | ~~test~~ | ~~0.1517~~ | ~~0.172~~ | ~~0.882~~ |
+| ~~vanilla CLIP 400 ep~~ | ~~test~~ | ~~0.1459~~ | ~~0.172~~ | ~~0.848~~ |
+| ~~random init~~ | ~~test~~ | ~~0.0527~~ | ~~0.172~~ | ~~0.306~~ |
+
+> **⚠️ The test rows are WITHDRAWN (2026-08-03).** §2.12 measures test
+> *r* = 0.1918 with `probe_traintest` against this same 0.172 ceiling — a ratio
+> of **1.115**. A probe cannot exceed a true ceiling, so 0.172 is an
+> underestimate, exactly as §2.5 predicted from the CorrCA fit-set size (108
+> test recordings vs 293 on val). Every test CC_norm computed against it is
+> meaningless. **The val rows stand** — those cells sit at 0.74–0.83 of the val
+> ceiling under every protocol tried.
 
 The two splits agree: the best checkpoint captures **83–88 %** of the
 attainable single-trial signal. Remaining single-trial headroom is
@@ -734,6 +746,82 @@ which is the remaining experiment worth running on this axis.
 
 **Also unchanged:** the anchor axis is flat and subject-heavy wins every
 iso-budget comparison (§2.10). Nothing in this section touches those.
+
+### 2.12 Three independent readouts — the saturation is metric-dependent
+
+All 13 nested cells trained; the five S cells (one draw each, plus a matched
+random baseline) were re-evaluated at the **same epoch-325 checkpoints** under
+three readouts. `probe_traintest` fits the ridge head on TRAIN and evaluates on
+the held-out split — unlike `probe.py`, which cross-validates *within* the split
+it reports. Head-fitting data is the full 1863-recording extended train for every
+cell, so only the encoder's cohort differs.
+
+**(a) `probe_traintest`, mean Pearson *r* over 12 features:**
+
+| S | val *r* | test *r* | val *r*/ceiling | test *r*/ceiling |
+|---:|---:|---:|---:|---:|
+| random | 0.1417 | 0.1022 | — | — |
+| 400 | 0.2306 | 0.1729 | 0.737 | 1.005 |
+| 701 | 0.2509 | 0.1865 | 0.801 | 1.084 |
+| 1000 | 0.2545 | 0.1886 | 0.813 | 1.096 |
+| 1400 | **0.2589** | **0.1918** | **0.827** | **1.115** |
+| 1863 | 0.2571 | 0.1901 | 0.822 | 1.105 |
+
+**The §2.11 saturation replicates under a different protocol and on a split
+checkpoint selection never touched.** Both curves jump 400 → 701 then flatten,
+and both put S=1863 marginally *below* S=1400. The subject knee is not an
+artifact of the CV protocol or of selecting on val.
+
+> **⚠️ This also invalidates the test-split CC_norm in §2.2.** Measured test *r*
+> reaches **0.1918 against a measured test ceiling of 0.172** — a ratio of
+> **1.115**. A probe cannot exceed a true ceiling, so **0.172 is provably an
+> underestimate.** §2.5 already argued the test `rho1` is downward-biased by
+> CorrCA fit-set size (108 recordings vs 293 on val); this is direct proof
+> rather than an argument. **Do not quote test CC_norm = 0.882.** The val
+> ceiling is unaffected — every val cell sits at 0.74–0.83 of it, comfortably
+> under 1.
+>
+> Note the protocol gap this exposes: CV-on-test gave *r* = 0.1517 (§2.2) where
+> train→test gives 0.1901 on comparable checkpoints. `probe_traintest`'s
+> docstring claims CV "biases clip_probe's test estimates downward"; that is now
+> measured at **~25 %**, not asserted.
+
+**(b) e→v retrieval — and here the curve does *not* saturate.**
+Top-K on the test split, scene level (pool N=35, chance@1 = 0.029):
+
+| S | top-1 | top-5 | top-10 |
+|---:|---:|---:|---:|
+| random | 0.0146 | 0.1551 | 0.2753 |
+| 400 | 0.1063 | 0.3260 | 0.4796 |
+| 701 | 0.1030 | 0.3452 | 0.5204 |
+| 1000 | 0.1061 | 0.3714 | 0.5597 |
+| 1400 | 0.1259 | 0.3888 | 0.5663 |
+| 1863 | **0.1298** | **0.4076** | **0.5674** |
+
+Top-5 rises **monotonically** 0.326 → 0.408, and **701 → 1863 gains +18 %** —
+against **+1.9 %** for the probe over the same range. Same checkpoints, same
+split, opposite conclusion about whether subjects past 700 buy anything.
+
+**The likely reason, stated as a hypothesis:** the probe reads 12 scalar movie
+features through a ridge head, while retrieval uses the full 512-d CLIP-aligned
+space. More subjects can keep improving the *alignment geometry* without
+improving those particular scalar readouts. If so, "the subject axis saturates"
+is a statement about **what you measure**, not about the representation — and
+the paper must say which readout it means.
+
+**(c) A caution on val retrieval.** The random baseline scores **3.79× chance**
+at scene level on val (top-1 0.1082) while sitting *below* chance on test
+(0.0146, 0.51×). A random encoder should not beat chance; the val scene/shot
+pools evidently carry structure exploitable without learning. Trained cells
+reach only 4.2–5.2× on val, so the learned gain there is small and partly
+illusory. **Use the test retrieval numbers**, where random is at chance and the
+trained cells sit at 3.4–4.5×.
+
+**Net effect on §2.11.** The saturation claim survives *for the linear probe*,
+on two splits and two protocols. It does **not** hold for retrieval, which keeps
+improving to 1863. The honest headline is narrower than "the subject axis
+saturates at ~700": scalar-feature readout saturates there; CLIP-space retrieval
+does not.
 
 ## §3. Two artifacts that would have corrupted the headline
 
