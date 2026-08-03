@@ -45,6 +45,13 @@ CELLS = [
     (400, 50), (200, 25), (100, 13),
 ]
 
+# Extended-cohort S axis (R7-R10). 400 and 701 overlap the R1-R4 curve on
+# purpose -- they are the calibration points that decide whether the two
+# segments can be plotted as one curve.
+EXTENDED_CELLS = [
+    (400, 101), (701, 101), (1000, 101), (1400, 101), (1863, 101),
+]
+
 
 def read_history(wandb_file: str, key: str) -> list[float]:
     """Per-step values of *key* from an offline .wandb datastore.
@@ -85,12 +92,30 @@ def read_history(wandb_file: str, key: str) -> list[float]:
 
 
 def select_epoch(cell_dir: Path, key: str) -> dict:
+    """Best epoch for one cell, from the RICHEST wandb run it has.
+
+    A cell can hold several run directories -- a crashed attempt leaves an ~8 KB
+    stub beside the real ~9.5 MB run. ``glob`` returns them in arbitrary order,
+    so taking ``files[0]`` picks the stub roughly half the time. That is not
+    merely a failure mode: a partially-written run would yield a plausible but
+    WRONG best epoch, and the wrong checkpoint would then be probed and reported
+    as the cell's early-stopped result.
+
+    Choosing by "most values recorded for the selection key" is robust to both
+    stubs and glob ordering, and needs no assumption about filenames or mtimes.
+    """
     files = glob.glob(str(cell_dir / "wandb" / "run-*" / "run-*.wandb"))
     if not files:
         return {"error": "no wandb file"}
-    vals = read_history(files[0], key)
+    histories = [(f, read_history(f, key)) for f in files]
+    best_file, vals = max(histories, key=lambda t: len(t[1]))
     if not vals:
-        return {"error": f"no '{key}' in history"}
+        return {"error": f"no '{key}' in history (checked {len(files)} run dir(s))"}
+    skipped = [Path(f).parent.name for f, v in histories if f != best_file]
+    if skipped:
+        logger_msg = (f"  [{cell_dir.name}] using {Path(best_file).parent.name} "
+                      f"({len(vals)} points); ignored {skipped}")
+        print(logger_msg)
     best = max(vals)
     best_ep = vals.index(best)
 
@@ -119,17 +144,20 @@ def select_epoch(cell_dir: Path, key: str) -> dict:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--suffix", default="_es")
+    p.add_argument("--extended", action="store_true",
+                   help="Use the extended-cohort S-axis cell list.")
     p.add_argument("--key", default=SELECT_KEY)
     p.add_argument("--probe", action="store_true",
                    help="Actually run the probes (otherwise select and report).")
     p.add_argument("--output", default="experiments/snr_scaling/e03_selection.json")
     args = p.parse_args()
 
+    cells = EXTENDED_CELLS if args.extended else CELLS
     sel = {}
     print(f"selection metric: {args.key}\n")
     print(f"  {'cell':<16}{'best_ep':>8}{'best':>8}{'final':>8}{'drop%':>7}"
           f"{'sel_ep':>8}{'snap':>6}")
-    for s, a in CELLS:
+    for s, a in cells:
         slug = f"e03_s{s}_a{a}{args.suffix}"
         info = select_epoch(Path(CKPT_ROOT) / slug, args.key)
         sel[slug] = info
@@ -147,7 +175,7 @@ def main() -> None:
         print("Selection only. Re-run with --probe to probe the chosen checkpoints.")
         return
 
-    for s, a in CELLS:
+    for s, a in cells:
         slug = f"e03_s{s}_a{a}{args.suffix}"
         info = sel[slug]
         if "checkpoint" not in info:
