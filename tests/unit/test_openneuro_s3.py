@@ -319,3 +319,31 @@ def test_drop_anomalous_recordings_is_a_no_op_when_uniform():
     ds = _FakeConcat([_DSStub(129, "a"), _DSStub(129, "b")])
     assert s3.drop_anomalous_recordings(ds) == []
     assert len(ds.datasets) == 2
+
+
+def test_ch_mismatch_strategy_is_version_adaptive(monkeypatch):
+    """mne-bids 0.19 accepts "warn"; 0.18 (what Delta runs) raises ValueError on
+    it and only takes {reorder,raise,rename}. Hardcoding either value breaks one
+    environment -- and reading the 0.19 source locally while the cluster ran
+    0.18 is how R7/DespicableMe failed twice."""
+    import inspect
+    monkeypatch.setattr(inspect, "getsource",
+                        lambda _: 'if on_ch_mismatch == "warn": ...')
+    assert s3._ch_mismatch_strategy() == "warn"
+
+    monkeypatch.setattr(inspect, "getsource",
+                        lambda _: "must be one of {'reorder','raise','rename'}")
+    assert s3._ch_mismatch_strategy() == "rename"
+
+
+def test_ch_mismatch_strategy_falls_back_safely_when_source_is_unavailable(
+        monkeypatch):
+    """Compiled or stripped installs give no source; must still return a value
+    every known version accepts rather than raising."""
+    import inspect
+
+    def boom(_):
+        raise OSError("no source")
+
+    monkeypatch.setattr(inspect, "getsource", boom)
+    assert s3._ch_mismatch_strategy() == "rename"

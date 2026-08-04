@@ -172,6 +172,33 @@ def fetch_bids_task(dataset_id: str, task: str, root: Path,
     return ds_root
 
 
+def _ch_mismatch_strategy() -> str:
+    """Pick the least-invasive ``on_ch_mismatch`` the installed mne-bids accepts.
+
+    Version-dependent, and getting this wrong costs a whole release: mne-bids
+    0.19 accepts ``"warn"`` (skip the channels.tsv metadata and carry on), but
+    0.18 -- which is what Delta has -- validates against
+    ``{'reorder','raise','rename'}`` and raises ValueError on "warn". Reading
+    the 0.19 source locally and assuming it applied to the cluster is exactly
+    how R7/DespicableMe failed a second time.
+
+    Order of preference:
+      "warn"    least invasive: ignores the mismatched tsv metadata entirely.
+      "rename"  renames raw channels to the tsv names. Fires only on an actual
+                mismatch, and ``drop_anomalous_recordings`` still removes the
+                offending recording by channel count afterwards.
+    """
+    import inspect
+
+    import mne_bids.read as _read
+
+    try:
+        src = inspect.getsource(_read._handle_channel_mismatch)
+    except Exception:  # noqa: BLE001
+        return "rename"
+    return "warn" if '"warn"' in src or "'warn'" in src else "rename"
+
+
 def repair_channel_types(ds_root: Path, default_type: str = "EEG") -> int:
     """Fill an empty ``type`` column in mirrored ``channels.tsv`` files.
 
@@ -256,12 +283,15 @@ def load_from_s3(release: str, task: str, cache_dir: Path,
     ds_root = fetch_bids_task(dataset_id, task, Path(cache_dir),
                               max_workers=max_workers)
     repair_channel_types(ds_root)
-    # on_ch_mismatch="warn" rather than the default "raise": a single corrupt
-    # recording (R7 sub-NDARBA381JGH, 6 unnamed channels) otherwise aborts the
-    # entire release-task. Mismatched files fall through to
-    # drop_anomalous_recordings below rather than being silently kept.
+    # Anything but the default "raise": a single corrupt recording (R7
+    # sub-NDARBA381JGH, 6 unnamed channels) otherwise aborts the entire
+    # release-task. The accepted values differ by mne-bids version, hence the
+    # probe. Mismatched files fall through to drop_anomalous_recordings below
+    # rather than being silently kept.
+    strategy = _ch_mismatch_strategy()
+    logger.info("on_ch_mismatch=%r (mne-bids-version dependent)", strategy)
     ds = BIDSDataset(root=ds_root, tasks=task, datatypes="eeg", preload=False,
-                     on_ch_mismatch="warn")
+                     on_ch_mismatch=strategy)
     drop_anomalous_recordings(ds)
     normalise_descriptions(ds, task)
     logger.info("Loaded %d recordings from %s (task=%s)",
