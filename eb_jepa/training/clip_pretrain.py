@@ -247,6 +247,14 @@ def run(
     task_cfg = cfg.data.get("task", "ThePresent")
     task = list(task_cfg) if not isinstance(task_cfg, str) else task_cfg
 
+    # Data-scaling knobs (experiments/snr_scaling E0.3). All default to null,
+    # so an unmodified config trains on everything exactly as before. Applied
+    # to TRAIN ONLY -- the val loader below and every downstream probe keep the
+    # full anchor set, or retrieval chance levels would shift between cells and
+    # no two runs would be comparable.
+    max_subjects = cfg.data.get("max_subjects", None)
+    max_anchors = cfg.data.get("max_anchors", None)
+    epoch_size = cfg.data.get("epoch_size", None)
     train_set = JEPAMovieDataset(
         split="train",
         n_windows=cfg.data.n_windows,
@@ -261,7 +269,26 @@ def run(
         recipe_target_kind=recipe_target_kind,
         recipe_mean_center=recipe_mean_center,
         recipe_require_shots=recipe_require_shots,
+        max_subjects=max_subjects,
+        max_anchors=max_anchors,
+        epoch_size=epoch_size,
+        # Which subjects are drawn, kept SEPARATE from model init / batch order
+        # (meta.seed). Repeating a cell with the same meta.seed and a different
+        # data.subsample_seed isolates between-DRAW variance -- how much the
+        # score depends on WHICH subjects you happened to get -- from seed
+        # variance. Conflating the two would make "3 draws per S" measure both
+        # at once and neither cleanly. Defaults to meta.seed, so every existing
+        # config is unchanged.
+        subsample_seed=int(cfg.data.get("subsample_seed", cfg.meta.seed)),
     )
+    if max_subjects or max_anchors or epoch_size:
+        logger.info(
+            "E0.3 scaling cell: max_subjects=%s max_anchors=%s epoch_size=%s "
+            "-> %d recordings, %d items/epoch, %d steps/epoch",
+            max_subjects, max_anchors, epoch_size,
+            len(train_set._fif_paths), len(train_set),
+            math.ceil(len(train_set) / cfg.data.batch_size),
+        )
     if train_set.frame_embedding_dim == 0:
         raise RuntimeError(
             "JEPAMovieDataset reports frame_embedding_dim=0 — no V-JEPA-2 .npz "

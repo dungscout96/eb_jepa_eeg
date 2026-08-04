@@ -48,6 +48,28 @@ def _resolve_hbn_cache_dir() -> Path:
 
 DATA_DIR = _resolve_hbn_cache_dir()
 
+# Every known HBN release -> OpenNeuro accession. Kept SEPARATE from
+# SPLIT_RELEASES on purpose: which releases exist is a fact about OpenNeuro,
+# while which releases a split uses is an experimental choice. Preprocessing a
+# new release must not require first declaring it part of a split, or the
+# training code would start looking for data that has not been built yet.
+#
+# Verified against each dataset's S3 dataset_description.json, including the
+# gap: R9 is ds005514 because ds005513 does not exist.
+ALL_RELEASES = {
+    "R1": "ds005505",
+    "R2": "ds005506",
+    "R3": "ds005507",
+    "R4": "ds005508",
+    "R5": "ds005509",
+    "R6": "ds005510",
+    "R7": "ds005511",
+    "R8": "ds005512",
+    "R9": "ds005514",   # ds005513 does not exist
+    "R10": "ds005515",
+    "R11": "ds005516",
+}
+
 if os.environ.get("environment") == "development":
     SPLIT_RELEASES = {
         "train": {
@@ -67,6 +89,30 @@ else:
         "val": {"R5": "ds005509"},  # 136 subjects
         "test": {"R6": "ds005510"},  # 134 subjects
     }
+
+    # R7-R10 were preprocessed 2026-08-02 and roughly triple the train cohort
+    # (703 -> 1886 ThePresent recordings). They are NOT enabled by default, and
+    # deliberately so: ~66 existing submit scripts pin the R1-R4 train split
+    # implicitly, and silently retraining them on twice the data would
+    # invalidate every recorded result in the repo without touching a line of
+    # their code. Opt in per run instead:
+    #
+    #     HBN_TRAIN_RELEASES=R1,R2,R3,R4,R7,R8,R9,R10
+    #
+    # val (R5) and test (R6) are intentionally NOT extensible here -- every
+    # measured number in experiments/snr_scaling is on R5 val, and moving that
+    # target would break comparability with the ceiling, E0.2 and E0.3.
+    _train_env = os.environ.get("HBN_TRAIN_RELEASES")
+    if _train_env:
+        _requested = [r.strip() for r in _train_env.split(",") if r.strip()]
+        _unknown = [r for r in _requested if r not in ALL_RELEASES]
+        if _unknown:
+            raise ValueError(
+                f"HBN_TRAIN_RELEASES names unknown release(s) {_unknown}. "
+                f"Known: {sorted(ALL_RELEASES)}")
+        SPLIT_RELEASES["train"] = {r: ALL_RELEASES[r] for r in _requested}
+        logger.info("HBN_TRAIN_RELEASES override: train = %s", _requested)
+
 
 DEFAULT_TASK = "ThePresent"
 
@@ -199,13 +245,19 @@ def reject_recording(
 
 
 def _release_to_dataset_id(release: str) -> str:
-    """Look up the OpenNeuro dataset ID for a given release key."""
+    """Look up the OpenNeuro dataset ID for a given release key.
+
+    Consults ALL_RELEASES, not SPLIT_RELEASES, so a release can be downloaded
+    and preprocessed before any split has been wired to use it. SPLIT_RELEASES
+    is still checked first so a split-local override wins.
+    """
     for split_releases in SPLIT_RELEASES.values():
         if release in split_releases:
             return split_releases[release]
+    if release in ALL_RELEASES:
+        return ALL_RELEASES[release]
     raise ValueError(
-        f"Unknown release '{release}'. Known releases: "
-        f"{[r for splits in SPLIT_RELEASES.values() for r in splits]}"
+        f"Unknown release '{release}'. Known releases: {sorted(ALL_RELEASES)}"
     )
 
 
@@ -277,21 +329,40 @@ def _load_participants_metadata(
     return subject_meta
 
 
-def load_or_download(release, task=DEFAULT_TASK):
+def load_or_download(release, task=DEFAULT_TASK, source: str = "auto"):
     """Load an EEGDashDataset from cache, downloading if necessary.
 
     Filters to the specified *task* so only matching recordings are returned.
+
+    Args:
+        source: ``"eegdash"`` forces the eegdash API, ``"s3"`` forces the
+            direct-from-OpenNeuro path, ``"auto"`` (default) tries eegdash and
+            falls back to S3 when it is unreachable. eegdash routes through
+            ``data.eegdash.org``, which is a separate service from the S3
+            bucket and has gone down independently of it; the fallback keeps
+            preprocessing working through that. Override with
+            ``HBN_DOWNLOAD_SOURCE``.
     """
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-
     dataset_id = _release_to_dataset_id(release)
-    dataset = EEGDashDataset(
-        cache_dir=DATA_DIR,
-        dataset=dataset_id,
-        task=task,
-    )
+    source = os.environ.get("HBN_DOWNLOAD_SOURCE", source)
 
-    return dataset
+    if source not in {"auto", "eegdash", "s3"}:
+        raise ValueError(f"source must be auto/eegdash/s3, got {source!r}")
+
+    if source != "s3":
+        try:
+            return EEGDashDataset(cache_dir=DATA_DIR, dataset=dataset_id, task=task)
+        except Exception as exc:  # noqa: BLE001 -- surfaces as many error types
+            if source == "eegdash":
+                raise
+            logger.warning(
+                "eegdash lookup for %s/%s failed (%s: %s); falling back to "
+                "OpenNeuro S3.", dataset_id, task, type(exc).__name__, exc)
+
+    from eb_jepa.datasets.openneuro_s3 import load_from_s3
+
+    return load_from_s3(release, task, DATA_DIR)
 
 
 # Default directory for preprocessed data (override via HBN_PREPROCESS_DIR env var).
@@ -1034,6 +1105,10 @@ class JEPAMovieDataset(HBNMovieDataset):
         recipe_target_kind: str = "shot_mean",
         recipe_mean_center: bool = True,
         recipe_require_shots: bool = True,
+        max_subjects: int | None = None,
+        max_anchors: int | None = None,
+        epoch_size: int | None = None,
+        subsample_seed: int = 0,
     ):
         super().__init__(
             split, window_size_seconds, task, cfg=cfg,
@@ -1275,6 +1350,13 @@ class JEPAMovieDataset(HBNMovieDataset):
         self._recording_tasks = filtered_tasks
         del self.labels  # labels are now in feature_recordings
 
+        # Data-scaling subsample (experiments/snr_scaling E0.3). Applied HERE,
+        # before probe labels and norm stats, so both derive from the reduced
+        # set -- a 50-subject run must not inherit 703-subject statistics.
+        self._apply_scaling_subsample(
+            max_subjects, max_anchors, epoch_size, subsample_seed
+        )
+
         # Derive binary probe labels from subject metadata (age / sex).
         # Falls back to all-NaN if metadata is not available; the sanity
         # check hook will then use luminance as a fallback label instead.
@@ -1416,24 +1498,27 @@ class JEPAMovieDataset(HBNMovieDataset):
         all_feats = torch.cat(self.feature_recordings, dim=0)
         return all_feats.median(0).values
 
-    def __len__(self):
-        return len(self._fif_paths)
+    # __len__ lives with the scaling knobs below -- it depends on epoch_size.
 
-    def __getitem__(self, idx):
-        crop_inds = self._crop_inds[idx]
-        feats = self.feature_recordings[idx]
-        embeds = self.embedding_recordings[idx]
-        shot_ids = self.shot_id_recordings[idx]
-        scene_ids = self.scene_id_recordings[idx] if self.scene_id_recordings else None
-        t_starts = self.t_start_recordings[idx] if self.t_start_recordings else None
-        n = len(crop_inds)
-        required = (self.n_windows - 1) * self.temporal_stride + 1
-        start = torch.randint(0, n - required + 1, (1,)).item()
-        indices = list(range(start, start + required, self.temporal_stride))
+    def _load_clip(self, rec_idx, indices) -> torch.Tensor:
+        """Read, normalize, and spatially project one clip from one recording.
 
+        Shared by ``__getitem__`` and ``PairedSubjectJEPADataset`` so the
+        normalization / envelope / CorrCA semantics can never drift between
+        the single-subject and paired code paths.
+
+        Args:
+            rec_idx: recording index into ``_fif_paths`` / ``_crop_inds``.
+            indices: window indices within that recording (list or array).
+
+        Returns:
+            [len(indices), C_out, n_times] float32. ``C_out`` is ``n_chans``,
+            doubled when ``add_envelope`` is set, or the CorrCA component
+            count when ``corrca_filters`` is set.
+        """
         # Load only the needed windows from disk
         eeg = torch.from_numpy(
-            _read_raw_windows(self._fif_paths[idx], crop_inds[indices])
+            _read_raw_windows(self._fif_paths[rec_idx], self._crop_inds[rec_idx][indices])
         )
 
         # Normalization: per-recording removes subject fingerprint, global preserves it
@@ -1452,6 +1537,174 @@ class JEPAMovieDataset(HBNMovieDataset):
         if self._corrca_W is not None:
             # eeg: [n_windows, C, T] → [n_windows, k, T]
             eeg = torch.einsum("wct,ck->wkt", eeg, self._corrca_W)
+
+        return eeg
+
+    # ------------------------------------------------------------------
+    # Data-scaling subsample (experiments/snr_scaling E0.3)
+    # ------------------------------------------------------------------
+    # Every per-recording list that must stay index-aligned. Listed once, in
+    # one place, so adding a new per-recording attribute without filtering it
+    # fails loudly in _apply_scaling_subsample rather than silently pairing
+    # recording i's EEG with recording j's targets.
+    _PER_RECORDING_ATTRS = (
+        "_fif_paths",
+        "_crop_inds",
+        "_recording_metadata",
+        "_recording_tasks",
+        "feature_recordings",
+        "embedding_recordings",
+        "shot_id_recordings",
+        "scene_id_recordings",
+        "t_start_recordings",
+    )
+
+    def _apply_scaling_subsample(self, max_subjects, max_anchors,
+                                 epoch_size, seed):
+        """Restrict the training set along the (anchors x subjects) axes.
+
+        Three independent knobs, all no-ops when None:
+
+        ``max_subjects`` (S)
+            Keep S distinct *subjects*, not S recordings -- a subject with two
+            recordings must contribute both or neither, or the axis is
+            confounded by recordings-per-subject.
+
+        ``max_anchors`` (A)
+            Restrict which movie moments the model may ever see, chosen evenly
+            spaced over the movie so coverage stays uniform (a random subset
+            clumps). Anchors are selected as movie *times* and resolved to
+            per-recording window indices through ``t_start_recordings``, the
+            same value-join ``datasets/paired.py`` uses -- window index i is
+            not guaranteed to be the same movie moment in every recording.
+
+        ``epoch_size``
+            Decouples optimisation budget from data scale. ``__len__`` returns
+            this instead of the recording count, so steps/epoch is constant
+            across cells and the LR schedule (which is keyed to epochs) means
+            the same thing everywhere. Without it, holding gradient steps
+            constant would require scaling epochs as 703/S -- at S=50 that is
+            5624 epochs, and per-epoch overhead would dominate the run.
+        """
+        self._epoch_size = epoch_size
+        self._allowed_anchor_idx = None
+        if max_subjects is None and max_anchors is None and epoch_size is None:
+            return
+
+        rng = np.random.default_rng(seed)
+
+        if max_subjects is not None:
+            subjects = [m.get("subject") for m in self._recording_metadata]
+            uniq = sorted({s for s in subjects if s is not None})
+            if max_subjects < len(uniq):
+                # NESTED by construction: permute once, take the first S. With
+                # a shared seed this makes the S=1000 cohort a strict superset
+                # of the S=701 one, so a scaling curve measures *added*
+                # subjects.
+                #
+                # The previous `rng.choice(n, size=S)` did NOT nest -- same seed,
+                # different size, different subset. Measured on the real cohort,
+                # S=701 and S=1000 shared only 371 of 701 subjects (53 %), so
+                # consecutive points on the curve were largely different
+                # cohorts and every comparison carried between-draw variance.
+                # See RESULTS.md 2.11; cells recorded before this change have
+                # that variance baked in.
+                perm = rng.permutation(len(uniq))
+                keep_subjects = {uniq[i] for i in perm[:max_subjects]}
+                sel = [i for i, s in enumerate(subjects) if s in keep_subjects]
+                missing = [a for a in self._PER_RECORDING_ATTRS
+                           if not hasattr(self, a)]
+                if missing:
+                    raise RuntimeError(
+                        f"_PER_RECORDING_ATTRS lists absent attributes {missing}; "
+                        "subsampling would leave the dataset misaligned.")
+                n_before = len(self._fif_paths)
+                for attr in self._PER_RECORDING_ATTRS:
+                    cur = getattr(self, attr)
+                    if cur is None or len(cur) == 0:
+                        continue
+                    if len(cur) != n_before:
+                        raise RuntimeError(
+                            f"{attr} has length {len(cur)}, expected {n_before}; "
+                            "refusing to subsample a misaligned dataset.")
+                    setattr(self, attr, [cur[i] for i in sel])
+                logger.info(
+                    "Scaling subsample: %d -> %d subjects (%d -> %d recordings)",
+                    len(uniq), max_subjects, n_before, len(self._fif_paths))
+
+        if max_anchors is not None:
+            if not self.t_start_recordings:
+                raise RuntimeError(
+                    "max_anchors needs t_start_recordings to join anchors by "
+                    "movie time; it is empty.")
+            # Anchors live in movie time, shared across recordings. Round to ms
+            # so float noise cannot split one moment into two anchors.
+            times = sorted({int(round(float(t) * 1000))
+                            for ts in self.t_start_recordings
+                            for t in ts})
+            if max_anchors < len(times):
+                pick = np.linspace(0, len(times) - 1, max_anchors)
+                chosen = {times[int(round(p))] for p in pick}
+            else:
+                chosen = set(times)
+            self._allowed_anchor_idx = []
+            for ts in self.t_start_recordings:
+                keys = np.rint(np.asarray(ts, dtype=np.float64) * 1000).astype(np.int64)
+                idx = np.flatnonzero(np.isin(keys, list(chosen)))
+                if len(idx) < self.n_windows:
+                    raise RuntimeError(
+                        f"A recording has only {len(idx)} of the {len(chosen)} "
+                        f"selected anchors, fewer than n_windows="
+                        f"{self.n_windows}; lower n_windows or raise max_anchors.")
+                self._allowed_anchor_idx.append(idx)
+            logger.info(
+                "Scaling subsample: %d -> %d distinct movie anchors "
+                "(evenly spaced; items now sample %d windows from the allowed "
+                "set rather than a contiguous crop)",
+                len(times), len(chosen), self.n_windows)
+
+    def __len__(self):
+        return self._epoch_size or len(self._fif_paths)
+
+    def __getitem__(self, idx):
+        # epoch_size decouples steps/epoch from the recording count.
+        #
+        # epoch_size >= n_recordings: wrap. Each recording is drawn
+        #   ceil(epoch_size / n) times per epoch, and the random crop below
+        #   makes repeats different samples.
+        # epoch_size <  n_recordings: wrapping would be WRONG. __len__ reports
+        #   epoch_size, so the DataLoader only ever emits indices in
+        #   [0, epoch_size) and `idx % n` is the identity -- recordings
+        #   [epoch_size, n) would never be sampled at all, silently turning an
+        #   S=1863 cell into an S=703 one that still looks valid. Draw
+        #   uniformly instead, so an epoch is a random window over the whole
+        #   cohort and coverage is uniform across epochs.
+        n_rec = len(self._fif_paths)
+        if self._epoch_size is not None and self._epoch_size < n_rec:
+            idx = int(torch.randint(0, n_rec, (1,)).item())
+        else:
+            idx = idx % n_rec
+        crop_inds = self._crop_inds[idx]
+        feats = self.feature_recordings[idx]
+        embeds = self.embedding_recordings[idx]
+        shot_ids = self.shot_id_recordings[idx]
+        scene_ids = self.scene_id_recordings[idx] if self.scene_id_recordings else None
+        t_starts = self.t_start_recordings[idx] if self.t_start_recordings else None
+        n = len(crop_inds)
+        required = (self.n_windows - 1) * self.temporal_stride + 1
+        if self._allowed_anchor_idx is not None:
+            # Restricted-anchor mode: draw n_windows from the allowed set. The
+            # contiguous crop below cannot be reused -- a block starting at an
+            # allowed anchor would run through disallowed ones, so the model
+            # would see far more than max_anchors distinct moments.
+            allowed = self._allowed_anchor_idx[idx]
+            sel = torch.randperm(len(allowed))[:self.n_windows].numpy()
+            indices = np.sort(allowed[np.sort(sel)]).tolist()
+        else:
+            start = torch.randint(0, n - required + 1, (1,)).item()
+            indices = list(range(start, start + required, self.temporal_stride))
+
+        eeg = self._load_clip(idx, indices)
 
         # Binary subject label (age > median, sex, …) — scalar float tensor.
         # NaN means metadata was unavailable for this recording.

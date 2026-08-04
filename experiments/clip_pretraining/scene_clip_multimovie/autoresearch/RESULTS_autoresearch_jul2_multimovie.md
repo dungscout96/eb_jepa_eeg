@@ -189,8 +189,38 @@ TP is **not fixable at our scale by capacity or compute alone**. The
 two movies' V-JEPA-2 target distributions differ enough that a shared
 46 M-param encoder trades TP fidelity for DM coverage. Standard SSL
 "more data" scaling doesn't apply because the "more data" is
-**non-IID** (different vision content, different EEG-vision
-relationships across the two subject pools).
+**non-IID** — different vision content, and therefore a different
+EEG→vision mapping to be learned for each movie.
+
+> **⚠️ CORRECTION (2026-07-31).** This paragraph previously attributed the
+> non-IID-ness partly to "different EEG-vision relationships across the two
+> **subject pools**." That is wrong: **the two movies are watched by the same
+> subjects.** Measured directly from
+> `/projects/bbnv/kkokate/hbn_preprocessed`:
+>
+> | release | TP subjects | DM subjects | shared |
+> |---|---|---|---|
+> | R1 | 124 | 130 | 124 |
+> | R2 | 125 | 134 | 124 |
+> | R3 | 167 | 174 | 164 |
+> | R4 | 287 | 307 | 283 |
+> | **R1–R4 total** | **703** | **745** | **695** |
+> | R5 (val) | 296 | 300 | 292 |
+>
+> 695 / 703 = **98.9 %** of TP subjects also watched DM. The cohort is held
+> essentially constant, so the non-IID-ness is **entirely stimulus-side**.
+>
+> This *strengthens* the domain-shift verdict rather than weakening it — with
+> the cohort constant, the negative transfer cannot be attributed to cohort
+> differences at all. But it also changes what this experiment measures for
+> other purposes: TP → TP+DM moves **anchors by +84 %** (101 → 186 distinct
+> 2 s movie windows) while moving **subjects by only +7 %** (703 → 753 union).
+> That makes it a near-clean *anchor-count* manipulation at fixed subject
+> count, which is why it is now cited as the out-of-distribution `A` point in
+> [`experiments/snr_scaling/PLAN.md`](../../../snr_scaling/PLAN.md) E0.3.
+> The remaining confound for that use is that the added anchors are
+> out-of-distribution (DM is 25 fps animated vs TP's live action), so it
+> bounds "do OOD anchors help?" and not the in-distribution `A` slope.
 
 Both scaling axes are exhausted at our regime. Loss-level intervention
 is the remaining lever.

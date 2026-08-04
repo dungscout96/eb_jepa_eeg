@@ -1,0 +1,119 @@
+# LeJEPA pretraining — randomly-initialized REVE encoder + SIGReg anti-collapse.
+#
+# LeJEPA (arXiv:2511.08544) replaces the DINO/VICReg tricks with a single
+# encoder whose targets carry gradients, regularized by SIGReg — a sketched
+# Cramér-Wold Gaussianity test (Epps-Pulley statistic averaged over random
+# unit-norm 1-D projections). Total loss is the convex combination
+#     L = (1 - λ) * pred_loss + λ * sigreg
+# Matches the paper's Algorithm 1 (see eb_jepa/losses.py :: SIGRegLoss).
+#
+# EEG adaptation: LeJEPA's spatial patch masking is replaced by
+# MultiBlockMaskCollator's short/long channel × patch blocks on the
+# [n_chans, n_patches] grid — the same masking used throughout this repo.
+#
+# Encoder shape mirrors the REVE encoder that worked in soft_target_clip
+# (experiments/clip_pretraining/soft_target_clip/RESULTS_jul7.md): depth=12,
+# embed_dim=512, heads=8, head_dim=64, mlp_dim_ratio=2.66. No warm-start —
+# encoder starts from a fresh random init.
+#
+# Invoke via _submit.py (Delta). To smoke-test locally:
+#   PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.jepa_pretrain \
+#     --fname=experiments/jepa_pretraining/lejepa_reve/config.yaml \
+#     --optim.epochs=1 --data.batch_size=8 --logging.log_wandb=false
+
+meta:
+  seed: 2025
+  device: auto
+
+data:
+  batch_size: 128           # SIGReg needs enough samples per batch for the
+                            # Cramér-Wold test — LeJEPA paper uses 256+; 128
+                            # is the compromise that fits an A40 at depth=12
+                            # / embed=512. Bump if VRAM allows.
+  num_workers: 4
+  task: ThePresent          # Match soft_target_clip TP-only setup.
+  n_windows: 1
+  window_size_seconds: 2    # 2s @ 200Hz → 400 samples per window.
+  temporal_stride: 1
+  preprocessed: true
+  preprocessed_dir: null
+  norm_mode: per_recording
+  add_envelope: false
+  corrca_filters: null
+  annotation_duration_tolerance_s: 1.0
+  max_recording_overshoot_s: 60.0
+
+model:
+  # REVE encoder — shape matches config/clip_pretrain.yaml (the soft_target_clip
+  # winner). Kept at depth=12 rather than REVE-base's 22 because that is the
+  # size that empirically pretrains well on this dataset.
+  encoder_embed_dim: 512
+  encoder_depth: 12
+  encoder_heads: 8
+  encoder_head_dim: 64
+
+  # Masked prediction geometry.
+  # LeJEPA uses V-JEPA's masking; the equivalent here is
+  # MultiBlockMaskCollator. patch_size=50 (250ms) with 20-sample overlap
+  # → ~12 patches per 2s window, enough to define meaningful short/long
+  # temporal mask blocks (patch_size=400 would give 1 patch/window and
+  # collapse masking to pure channel dropout).
+  patch_size: 50
+  patch_overlap: 20
+  freqs: 4                  # 4^4 = 256 ≥ embed_dim/2 = 256
+  mlp_dim_ratio: 2.66
+  predictor_depth: 2        # Shallow predictor (V-JEPA / LeJEPA convention)
+  predictor_embed_dim: null # null → predictor width = encoder_embed_dim
+
+masking:
+  # V-JEPA-style multi-block masking on the [n_chans, n_patches] grid.
+  # Same knobs as config/jepa_pretrain.yaml — LeJEPA does not change this.
+  n_pred_masks_short: 2
+  n_pred_masks_long: 2
+  short_channel_scale: [0.08, 0.15]
+  short_patch_scale: [0.3, 0.6]
+  long_channel_scale: [0.15, 0.35]
+  long_patch_scale: [0.5, 1.0]
+  min_context_fraction: 0.15
+
+loss:
+  # LeJEPA: single encoder, gradients flow through targets, SIGReg on the
+  # per-window pooled embedding (the same tensor probes read). See
+  # eb_jepa.anti_collapse.SIGRegAntiCollapse.
+  anti_collapse: sigreg
+  sigreg:
+    num_slices: 1024        # LeJEPA Algorithm 1 default.
+    coeff: 0.05             # λ in (1-λ)*pred + λ*sigreg. Paper default.
+    ep_t_range: 5.0         # Epps-Pulley integration domain.
+    ep_n_points: 17         # Epps-Pulley quadrature points.
+  pred_loss_type: smooth_l1 # Huber — matches V-JEPA; LeJEPA is loss-agnostic
+                            # but Huber is slightly more stable than MSE here.
+
+optim:
+  epochs: 100
+  lr: 5.0e-4                # jepa_pretrain sweet-spot at small models. Tune
+                            # down (e.g. 2e-4) if loss diverges at depth=12.
+  lr_min: 1.0e-6
+  warmup_epochs: 5
+
+logging:
+  log_wandb: true
+  wandb_group: lejepa_reve
+  log_every: 1
+  save_every: 20            # Keep periodic snapshots for later probe eval;
+                            # bump to 99999 during smoke runs to skip.
+  tqdm_silent: false
+
+# Post-training auto-eval: closed-form probes on the pretrained encoder.
+# Set to false when a sweep launcher runs eval as its own SLURM job.
+eval:
+  auto_run: true
+  n_passes: 20
+  probe_seed: 42
+  n_bootstrap: 2000
+  feature_names:
+    - contrast_rms
+    - luminance_mean
+    - position_in_movie
+    - narrative_event_score
+  visual_processing_delay_s: 0.0

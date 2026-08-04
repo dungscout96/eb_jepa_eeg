@@ -23,7 +23,14 @@ from eb_jepa.losses import SIGRegLoss, VCLoss
 
 
 class AntiCollapse(nn.Module):
-    """Base anti-collapse strategy. Default: no-op (representations will collapse)."""
+    """Base anti-collapse strategy. Default: no-op (representations will collapse).
+
+    ``combine_mode`` determines how ``auxiliary_loss`` combines with the
+    prediction loss in ``MaskedJEPA.forward``:
+      - ``"additive"``            : total = pred + ac              (VICReg default; coeffs live inside vc_loss)
+      - ``"additive_weighted"``   : total = pred + λ · ac          (Laya SIGReg)
+      - ``"convex"``              : total = (1-λ) · pred + λ · ac  (LeJEPA SIGReg)
+    """
 
     combine_mode: str = "additive"
 
@@ -101,15 +108,22 @@ class SIGRegAntiCollapse(AntiCollapse):
 
     Targets are produced by the online encoder with gradients flowing — this
     matches LeJEPA's recipe of constraining the very representations probes
-    will read. The auxiliary loss is combined convexly with the prediction
-    loss (λ from the inner ``SIGRegLoss.coeff``).
+    will read.
+
+    Two combine modes:
+      - ``"convex"`` (default, LeJEPA arXiv:2511.08544): total = (1-λ)·pred + λ·sigreg
+      - ``"additive_weighted"`` (Laya arXiv:2603.16281): total = pred + λ·sigreg
     """
 
-    combine_mode = "convex"
-
-    def __init__(self, sigreg_loss: SIGRegLoss):
+    def __init__(self, sigreg_loss: SIGRegLoss, combine_mode: str = "convex"):
         super().__init__()
         self.sigreg_loss = sigreg_loss
+        if combine_mode not in ("convex", "additive_weighted"):
+            raise ValueError(
+                f"SIGRegAntiCollapse combine_mode must be 'convex' or "
+                f"'additive_weighted', got {combine_mode!r}"
+            )
+        self.combine_mode = combine_mode
 
     def target_representations(self, encoder, eeg):
         # NO stop-gradient: SIGReg is meant to shape these representations.

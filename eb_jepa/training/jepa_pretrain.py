@@ -64,12 +64,13 @@ from pathlib import Path
 import fire
 import torch
 from omegaconf import OmegaConf
-from torch.optim import Adam
+from torch.optim import Adam, AdamW
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from eb_jepa.anti_collapse import DINOAntiCollapse
 from eb_jepa.datasets.hbn import JEPAMovieDataset
+from eb_jepa.datasets.paired import PairedSubjectJEPADataset
 from eb_jepa.logging import get_logger
 from eb_jepa.paths import resolve_preprocessed_dir
 from eb_jepa.training.builder import build_jepa
@@ -78,6 +79,7 @@ from eb_jepa.training_utils import (
     get_unified_experiment_dir,
     load_checkpoint,
     load_config,
+    load_encoder_weights,
     log_config,
     log_data_info,
     log_epoch,
@@ -123,6 +125,11 @@ def run(
     device = setup_device(cfg.meta.device)
     setup_seed(cfg.meta.seed)
     temporal_stride = cfg.data.get("temporal_stride", 1)
+    # "masked" (default) or "cross_subject". Selects both the dataset class and
+    # the model class, so the two can never disagree.
+    objective = str(cfg.loss.get("objective", "masked"))
+    is_cross_subject = objective == "cross_subject"
+    is_mjepa = objective == "mjepa"
 
     # Create experiment directory
     if folder is None:
@@ -149,12 +156,14 @@ def run(
             else:
                 ac_suffix = "_noac"
             nw_suffix = f"_nw{cfg.data.n_windows}_ws{cfg.data.window_size_seconds}s"
+            obj_suffix = "_xsubj" if is_cross_subject else ""
             exp_name = (
                 f"eeg_jepa_bs{cfg.data.batch_size}"
                 f"_lr{cfg.optim.lr}"
                 f"{ac_suffix}"
                 f"{nw_suffix}"
                 f"{stride_suffix}"
+                f"{obj_suffix}"
             )
             exp_dir = get_unified_experiment_dir(
                 example_name="eeg_jepa",
@@ -190,7 +199,28 @@ def run(
     # Pretraining is self-supervised: pass feature_names=[] to skip per-window
     # movie-feature tensor construction. visual_processing_delay_s defaults to
     # 0.0 — irrelevant since labels are unused; relevant only at eval time.
-    train_set = JEPAMovieDataset(
+    # Cross-subject pretraining needs time-aligned (subject A, subject B) pairs,
+    # so it swaps in the paired dataset. Items become [2, T, C, W] instead of
+    # [T, C, W]; the batch tuple shrinks from 5 to 3 (see the epoch loop below).
+    # MJEPA additionally needs the frozen V-JEPA-2 targets, which live behind
+    # recipe_mode -- that turns the item into a 7-tuple carrying `embeds`.
+    ds_cls = PairedSubjectJEPADataset if is_cross_subject else JEPAMovieDataset
+    if is_cross_subject:
+        ds_extra = {
+            "pairs_per_recording": cfg.data.get("pairs_per_recording", 1),
+            "pair_min_partners": cfg.data.get("pair_min_partners", 1),
+        }
+    elif is_mjepa:
+        mj_cfg = cfg.loss.get("mjepa", {}) or {}
+        ds_extra = {
+            "recipe_mode": True,
+            "recipe_target_kind": str(mj_cfg.get("target_kind", "shot_mean")),
+            "recipe_mean_center": bool(mj_cfg.get("mean_center", True)),
+            "recipe_require_shots": bool(mj_cfg.get("require_shots", True)),
+        }
+    else:
+        ds_extra = {}
+    train_set = ds_cls(
         split="train",
         n_windows=cfg.data.n_windows,
         window_size_seconds=cfg.data.window_size_seconds,
@@ -200,6 +230,7 @@ def run(
         cfg=cfg.data,
         preprocessed=preprocessed,
         preprocessed_dir=preprocessed_dir,
+        **ds_extra,
     )
 
     num_workers = cfg.data.num_workers
@@ -234,8 +265,35 @@ def run(
         n_times=n_times,
         chs_info=chs_info,
         n_windows=cfg.data.n_windows,
+        vision_dim=(train_set.frame_embedding_dim if is_mjepa else 0),
     ).to(device)
     is_dino = isinstance(jepa.anti_collapse, DINOAntiCollapse)
+
+    # Optional encoder warm-start (e.g. from a REVE checkpoint). Mirrors
+    # clip_pretrain.py, but GUARDS the result: load_encoder_weights is
+    # strict=False, so a shape or name mismatch silently loads zero tensors and
+    # the run trains from scratch while looking healthy.
+    encoder_init_from = cfg.meta.get("encoder_init_from", None)
+    if encoder_init_from:
+        info = load_encoder_weights(jepa.encoder, encoder_init_from, device=device)
+        logger.info(
+            "Warm-started encoder from %s: loaded=%d missing=%d unexpected=%d dropped=%d",
+            encoder_init_from, info["n_loaded"], len(info["missing"]),
+            len(info["unexpected"]), len(info["dropped"]),
+        )
+        if info["n_loaded"] == 0:
+            raise RuntimeError(
+                f"encoder_init_from={encoder_init_from!r} loaded 0 tensors. The "
+                "checkpoint has no 'encoder.' prefixed keys, or the path is wrong."
+            )
+        backbone_missing = [k for k in info["missing"] if k.startswith("transformer.")]
+        if backbone_missing:
+            raise RuntimeError(
+                f"encoder_init_from={encoder_init_from!r} left {len(backbone_missing)} "
+                f"backbone tensors uninitialized (e.g. {backbone_missing[:3]}). The "
+                "encoder shape almost certainly does not match the checkpoint; "
+                "training would silently start from scratch."
+            )
 
     log_model_info(
         jepa,
@@ -247,15 +305,41 @@ def run(
 
     jepa.train()
 
-    # Encoder + predictor + any trainable params owned by the anti-collapse
-    # strategy (e.g. VICReg's projector). DINO's target encoder has
-    # requires_grad=False so it contributes nothing here.
-    jepa_params = (
-        list(jepa.encoder.parameters())
-        + list(jepa.predictor.parameters())
-        + [p for p in jepa.anti_collapse.parameters() if p.requires_grad]
-    )
-    optimizer = Adam(jepa_params, lr=cfg.optim.lr)
+    # EVERY trainable parameter the model owns. Previously this was hardcoded to
+    # encoder + predictor + anti_collapse, which silently excluded any submodule
+    # a new objective adds (MJEPA's cross-modal MLPs would never have been
+    # trained, while the run looked perfectly healthy). Behaviour is unchanged
+    # for the existing objectives: mask_collator is not an nn.Module, and DINO's
+    # target encoder has requires_grad=False.
+    jepa_params = [p for p in jepa.parameters() if p.requires_grad]
+    optimizer_name = cfg.optim.get("optimizer", "adam").lower()
+    weight_decay = cfg.optim.get("weight_decay", 0.0)
+    if optimizer_name == "adamw":
+        # Exclude biases and norm weights from decay (mirrors clip_pretrain.py);
+        # required to reproduce the record recipe's AdamW wd=0.05 faithfully.
+        decay, no_decay = [], []
+        for name, p in jepa.named_parameters():
+            if not p.requires_grad:
+                continue
+            if p.ndim > 1 and not name.endswith(".bias") and "norm" not in name.lower():
+                decay.append(p)
+            else:
+                no_decay.append(p)
+        optimizer = AdamW(
+            [{"params": decay, "weight_decay": weight_decay},
+             {"params": no_decay, "weight_decay": 0.0}],
+            lr=cfg.optim.lr,
+        )
+        logger.info(
+            "AdamW param groups: %d decayed (wd=%s), %d undecayed",
+            len(decay), weight_decay, len(no_decay),
+        )
+    elif optimizer_name == "adam":
+        optimizer = Adam(jepa_params, lr=cfg.optim.lr, weight_decay=weight_decay)
+    else:
+        raise ValueError(
+            f"Unknown optim.optimizer={optimizer_name!r}. Expected 'adam' or 'adamw'."
+        )
 
     # Cosine LR schedule with linear warmup (disabled if lr_min == 0)
     lr_min = cfg.optim.get("lr_min", 0.0)
@@ -300,18 +384,31 @@ def run(
             disable=cfg.logging.get("tqdm_silent", False),
         )
 
-        for eeg, _features, _embeds, _shot_ids, _probe_labels in pbar:
+        for batch in pbar:
+            vision = None
+            if is_cross_subject:
+                # eeg: [B, 2, T, C, W] — subject A / subject B at the same
+                # movie time. t_starts and rec_ids are carried for debugging
+                # only; the loss reads neither.
+                eeg, _t_starts, _rec_ids = batch
+            elif is_mjepa:
+                # recipe_mode 7-tuple; `embeds` is the frozen V-JEPA-2 target.
+                eeg, _features, vision, _shot_ids, _scene_ids, _t_starts, _probe_labels = batch
+                vision = vision.to(device, non_blocking=True)
+            else:
+                eeg, _features, _embeds, _shot_ids, _probe_labels = batch
             eeg = eeg.to(device)
 
-            # --- Masked JEPA pretraining ---
+            # --- JEPA pretraining ---
             optimizer.zero_grad()
-            jepa_loss, loss_dict = jepa(eeg, global_step=global_step)
+            if is_mjepa:
+                jepa_loss, loss_dict = jepa(eeg, vision, global_step=global_step)
+            else:
+                jepa_loss, loss_dict = jepa(eeg, global_step=global_step)
             jepa_loss.backward()
-            torch.nn.utils.clip_grad_norm_(
-                list(jepa.encoder.parameters())
-                + list(jepa.predictor.parameters()),
-                max_norm=1.0,
-            )
+            # Clip over everything being optimized, not just encoder+predictor,
+            # so a new objective's submodules are covered too (see jepa_params).
+            torch.nn.utils.clip_grad_norm_(jepa_params, max_norm=1.0)
             optimizer.step()
 
             # EMA update of target encoder (cosine momentum schedule).
@@ -330,11 +427,27 @@ def run(
                 if k not in ("total_loss", "ac_loss", "pred_loss")
             }
 
-            pbar.set_postfix({
+            postfix = {
                 "loss": f"{jepa_loss.item():.4f}",
                 "ac":   f"{float(acl):.4f}",
                 "pred": f"{float(pl):.4f}",
-            })
+            }
+            # Cross-subject collapse detectors. Surfaced in the progress bar (not
+            # just wandb) because they are the kill-switch signal and need to be
+            # readable straight from the job log: pred_loss_gap must be > 0 and
+            # growing, pred_var_ratio must stay well above 0.
+            if "pred_loss_gap" in loss_dict:
+                postfix["gap"] = f"{float(loss_dict['pred_loss_gap']):.4f}"
+            if "pred_var_ratio" in loss_dict:
+                postfix["pvr"] = f"{float(loss_dict['pred_var_ratio']):.3f}"
+            # MJEPA collapse detectors. ev_gap must be > 0 and growing; an
+            # ev_loss parked at its predict-the-mean floor (~0.71-0.80) means
+            # nothing was learned. pooled_pr -> 1 is rank collapse.
+            if "ev_loss" in loss_dict:
+                postfix["ev"] = f"{float(loss_dict['ev_loss']):.3f}"
+                postfix["evgap"] = f"{float(loss_dict['ev_gap']):+.4f}"
+                postfix["pr"] = f"{float(loss_dict['pooled_pr']):.2f}"
+            pbar.set_postfix(postfix)
 
             if wandb_run:
                 import wandb
@@ -407,7 +520,19 @@ def run(
     # a separate SLURM job should set cfg.eval.auto_run=false.
     # ------------------------------------------------------------------
     eval_cfg = cfg.get("eval", None)
-    if eval_cfg is None or eval_cfg.get("auto_run", True):
+    if eval_cfg is None:
+        auto_run = True
+    else:
+        # A dot-notation CLI override (--eval.auto_run=false) arrives as the
+        # STRING "false", which is truthy -- so a plain truthiness check silently
+        # runs the full probe eval anyway. Same coercion idiom as vicreg
+        # use_projector above.
+        _ar = eval_cfg.get("auto_run", True)
+        auto_run = (
+            _ar if isinstance(_ar, bool)
+            else str(_ar).lower() not in ("false", "0", "no")
+        )
+    if auto_run:
         _run_auto_eval(cfg, exp_dir, fname, wandb_run_id=wandb_run_id)
 
 

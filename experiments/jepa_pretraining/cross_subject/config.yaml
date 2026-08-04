@@ -1,0 +1,179 @@
+# Cross-subject predictive JEPA — predict subject B's tokens from subject A's
+# context at the SAME movie time.
+#
+# WHY. Masked JEPA pretraining is currently worse than no pretraining at all.
+# From probe_results_jul10/ (mean test Pearson r over 12 scalar movie features):
+#     random_lejepa (untrained) 0.0515   <- the bar
+#     jepa_lejepa_single        0.0344   <- masked JEPA, this exact config
+#     jepa_laya_multi           0.0494   <- best trained arm
+# experiments.md § "Core Problem Identified" explains it: EEG = stimulus(~3 uV) + subject
+# fingerprint(~30 uV) + noise(~50 uV), single-trial stimulus SNR ~ -24 dB, and
+# the fingerprint is ~96% of variance. Within-subject masked prediction is
+# *rationally* solved by modelling the fingerprint — which is anti-correlated
+# with what a movie-feature probe reads.
+#
+# THE FIX. Because partner B is drawn independently of A,
+#     E[z_B | context_A] = E[shared_stimulus_response(t) | context_A]
+# so the fingerprint is marginalized out and the Bayes-optimal solution IS the
+# shared stimulus response. Proposed at experiments.md § "Three proposed solutions" in April, built now.
+#
+# COLLAPSE IS THE #1 RISK, AND SIGReg DOES NOT FULLY COVER IT. At -24 dB the MSE
+# difference between "recover the shared response" and "emit the constant mean"
+# is small, so this objective has a much stronger collapse gradient than masked
+# prediction. SIGReg constrains only the *marginal* distribution of the
+# embeddings, so "targets spread isotropically while predictions go constant" is
+# a valid optimum that ac_loss / sigreg_loss / target_var cannot see.
+# WATCH THESE FROM STEP 1, NOT EPOCH 100 — within the first ~100 steps:
+#   1. pred_loss_gap > 0 and INCREASING. It is ~0 at step 0 by construction (a
+#      random predictor is equally bad on matched and mismatched targets); the
+#      gap opening up is the ONLY evidence anything time-specific was learned.
+#   2. pred_var_ratio > 0.1 and not monotonically falling. -> 0 means the
+#      predictor emits a constant.
+#   3. target_var_across_batch not decaying toward 0.
+# Rescue order if it flattens: pred_target_mode=all -> sigreg coeff 0.05->0.1
+# -> within_subject_weight=0.3 -> context_mask_mode=full.
+# Do NOT use anti_collapse=dino here: its EMA target follows the online encoder
+# into any constant it drifts toward.
+#
+# model.* AND masking.* ARE BIT-IDENTICAL TO lejepa_reve/config.yaml. Two
+# reasons: (a) the probe delta is then attributable to the target swap alone,
+# (b) it keeps the encoder shape loadable by the *_from_jepa_checkpoint CLIP
+# configs, which use strict=False and would silently drop mismatched keys.
+# Do not "tidy" these values.
+#
+# Invoke via _submit.py (Delta). To smoke-test on the cluster:
+#   PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.jepa_pretrain \
+#     --fname=experiments/jepa_pretraining/cross_subject/config.yaml \
+#     --optim.epochs=1 --data.batch_size=4 --logging.log_wandb=false
+
+meta:
+  seed: 2025
+  device: auto
+
+data:
+  batch_size: 64            # 2 subjects per item -> 128 flattened rows, i.e.
+                            # exactly lejepa_reve's committed bs=128 footprint.
+                            # Nothing in the encoder mixes across the batch
+                            # axis, so A and B batched together is numerically
+                            # identical to two separate passes.
+  num_workers: 8            # 2 FIF opens per item (lejepa_reve used 4).
+  task: ThePresent
+  n_windows: 1              # Keep 1 for run #1: matches lejepa_reve, and
+                            # sidesteps the multi-window time-contiguity
+                            # constraint entirely. n_windows=4 is the natural
+                            # follow-up (ISC is a low-frequency phenomenon), but
+                            # only after the parity comparison is established.
+  window_size_seconds: 2    # 2s @ 200Hz -> 400 samples per window.
+  temporal_stride: 1
+  preprocessed: true
+  preprocessed_dir: null
+  norm_mode: per_recording  # DELIBERATE, not inherited by accident. At
+                            # n_windows=1 this is per-window per-channel
+                            # z-scoring, applied independently to A and B, so
+                            # their token targets are commensurate and the
+                            # predictor never fits a per-subject gain. Without
+                            # it, much of the A->B residual is a subject scalar
+                            # gain inferable from A's own amplitude — inflating
+                            # apparent prediction quality with zero stimulus
+                            # content. Falsification check: if pred_loss gets
+                            # BETTER under norm_mode=global, the model is
+                            # exploiting subject identity, not shared stimulus.
+  add_envelope: false
+  corrca_filters: null
+  annotation_duration_tolerance_s: 1.0
+  max_recording_overshoot_s: 60.0
+
+  # Cross-subject pairing.
+  pairs_per_recording: 1    # How many times each recording appears as subject A
+                            # per epoch. 1 reproduces JEPAMovieDataset's epoch
+                            # semantics, so steps/epoch and the LR schedule
+                            # shape stay comparable to the masked baseline.
+                            # NOTE the budget is small: ~701 recordings / bs 64
+                            # ~= 11 steps/epoch x 100 = ~1100 total steps, for a
+                            # strictly harder task. pairs_per_recording in
+                            # {2, 4} is the pre-planned first sweep — a better
+                            # use of compute than sweeping sigreg coeff.
+  pair_min_partners: 1      # A movie window is usable only if at least this
+                            # many OTHER recordings also have it.
+
+model:
+  # UNCHANGED from lejepa_reve — see the header note.
+  encoder_embed_dim: 512
+  encoder_depth: 12
+  encoder_heads: 8
+  encoder_head_dim: 64
+  patch_size: 50
+  patch_overlap: 20
+  freqs: 4
+  mlp_dim_ratio: 2.66
+  predictor_depth: 2
+  predictor_embed_dim: null
+
+masking:
+  # UNCHANGED from lejepa_reve — single-variable comparison.
+  n_pred_masks_short: 2
+  n_pred_masks_long: 2
+  short_channel_scale: [0.08, 0.15]
+  short_patch_scale: [0.3, 0.6]
+  long_channel_scale: [0.15, 0.35]
+  long_patch_scale: [0.5, 1.0]
+  min_context_fraction: 0.15
+
+loss:
+  objective: cross_subject  # "masked" (default) | "cross_subject". Selects both
+                            # the dataset class and the model class.
+  anti_collapse: sigreg     # The only strategy that penalizes the constant
+                            # solution on the tensor the probe actually reads
+                            # (pooled per-window embeddings, gradients flowing).
+                            # See the header for what it still does NOT cover.
+  sigreg:
+    num_slices: 1024
+    coeff: 0.05             # lambda in (1-l)*pred + l*sigreg. LeJEPA default.
+    ep_t_range: 5.0
+    ep_n_points: 17
+  pred_loss_type: smooth_l1
+
+  cross_subject:
+    symmetric: true         # Train A->B and B->A in one predictor call via
+                            # roll(targets, B, dim=0). Free — no extra compute.
+    context_mask_mode: masked   # "masked" keeps mask geometry identical to
+                            # lejepa_reve. "full" would let a near-identity map
+                            # plus an "average subject" affine correction solve
+                            # the task with no stimulus abstraction (volume
+                            # conduction leaves neighbours correlated at r>0.9).
+                            # Ablation order: masked/masked -> masked/all -> full/all.
+    pred_target_mode: masked    # "all" supervises every token position,
+                            # decoupling "context is partial" from "supervision
+                            # is sparse". First rescue lever.
+    within_subject_weight: 0.0  # Pure A->B. Non-zero reintroduces a
+                            # *predictable* target to anchor the representation;
+                            # a rescue lever, NOT part of the hypothesis.
+    diagnostic_every: 50
+
+optim:
+  epochs: 100
+  lr: 5.0e-4
+  lr_min: 1.0e-6
+  warmup_epochs: 5
+
+logging:
+  log_wandb: true
+  wandb_group: cross_subject_jepa
+  log_every: 1
+  save_every: 20
+  tqdm_silent: false
+
+# Post-training auto-eval: closed-form probes on the pretrained encoder. This is
+# the cheap "is the encoder alive" check; the number that gets compared against
+# probe_results_jul10 comes from the clip_probe suite via _submit_probe.py.
+eval:
+  auto_run: true
+  n_passes: 20
+  probe_seed: 42
+  n_bootstrap: 2000
+  feature_names:
+    - contrast_rms
+    - luminance_mean
+    - position_in_movie
+    - narrative_event_score
+  visual_processing_delay_s: 0.0

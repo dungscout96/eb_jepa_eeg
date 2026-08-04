@@ -17,7 +17,8 @@ from eb_jepa.anti_collapse import (
     VICRegAntiCollapse,
 )
 from eb_jepa.architectures import EEGEncoderTokens, MaskedPredictor, Projector
-from eb_jepa.jepa import MaskedJEPA
+from eb_jepa.jepa import CrossSubjectJEPA, MaskedJEPA
+from eb_jepa.mjepa import MJEPA
 from eb_jepa.losses import SIGRegLoss, VCLoss
 from eb_jepa.masking import MultiBlockMaskCollator
 
@@ -44,7 +45,8 @@ def build_anti_collapse(cfg, encoder) -> AntiCollapse:
             ep_t_range=sigreg_cfg.get("ep_t_range", 5.0),
             ep_n_points=sigreg_cfg.get("ep_n_points", 17),
         )
-        return SIGRegAntiCollapse(sigreg)
+        combine_mode = sigreg_cfg.get("combine_mode", "convex")
+        return SIGRegAntiCollapse(sigreg, combine_mode=combine_mode)
 
     if ac_type == "vicreg":
         vicreg_cfg = cfg.loss.get("vicreg", {})
@@ -92,17 +94,12 @@ def build_encoder(cfg, *, n_chans: int, n_times: int, chs_info,
     )
 
 
-def build_jepa(cfg, *, n_chans: int, n_times: int, chs_info,
-               n_windows: int) -> MaskedJEPA:
-    """Build a MaskedJEPA from a config.
-
-    Args:
-        cfg: OmegaConf config with ``model``, ``loss``, ``masking`` sections.
-        n_chans / n_times / chs_info: dataset-derived inputs.
-        n_windows: number of windows per sample.
+def _build_components(cfg, *, n_chans: int, n_times: int, chs_info,
+                      n_windows: int):
+    """Construct the four pieces every JEPA variant shares.
 
     Returns:
-        A fully assembled ``MaskedJEPA`` on CPU. The caller moves it to a device.
+        (encoder, predictor, mask_collator, anti_collapse)
     """
     embed_dim = cfg.model.encoder_embed_dim
     masking_cfg = cfg.get("masking", {})
@@ -131,11 +128,105 @@ def build_jepa(cfg, *, n_chans: int, n_times: int, chs_info,
         min_context_fraction=masking_cfg.get("min_context_fraction", 0.15),
     )
     anti_collapse = build_anti_collapse(cfg, encoder)
-    pred_loss_type = cfg.loss.get("pred_loss_type", "mse")
+    return encoder, predictor, mask_collator, anti_collapse
 
-    return MaskedJEPA(
-        encoder, predictor, mask_collator, anti_collapse,
-        pred_loss_type=pred_loss_type,
+
+def build_jepa(cfg, *, n_chans: int, n_times: int, chs_info,
+               n_windows: int, vision_dim: int = 0) -> MaskedJEPA:
+    """Build a JEPA model from a config.
+
+    ``cfg.loss.objective`` selects the variant:
+
+    - ``"masked"`` (default): ``MaskedJEPA`` — within-subject masked prediction.
+    - ``"cross_subject"``: ``CrossSubjectJEPA`` — predict a different subject's
+      tokens at the same movie time. Requires ``PairedSubjectJEPADataset``,
+      which yields ``[B, 2, T, C, W]`` batches.
+    - ``"mjepa"``: ``MJEPA`` — masked prediction plus cross-modal L1 regression
+      to frozen V-JEPA-2 embeddings. Requires ``recipe_mode`` on the dataset and
+      a non-zero ``vision_dim``; batches are ``([B,T,C,W], [B,T,vision_dim])``.
+
+    All three share the same submodule layout, so a checkpoint from any of them
+    loads into the encoder-only evaluators unchanged.
+
+    Args:
+        cfg: OmegaConf config with ``model``, ``loss``, ``masking`` sections.
+        n_chans / n_times / chs_info: dataset-derived inputs.
+        n_windows: number of windows per sample.
+        vision_dim: frozen movie-embedding dim (``train_set.frame_embedding_dim``,
+            1408 for V-JEPA-2). Required by ``mjepa``, ignored otherwise.
+
+    Returns:
+        A fully assembled model on CPU. The caller moves it to a device.
+    """
+    encoder, predictor, mask_collator, anti_collapse = _build_components(
+        cfg, n_chans=n_chans, n_times=n_times, chs_info=chs_info,
+        n_windows=n_windows,
+    )
+    pred_loss_type = cfg.loss.get("pred_loss_type", "mse")
+    objective = str(cfg.loss.get("objective", "masked"))
+
+    if objective == "masked":
+        return MaskedJEPA(
+            encoder, predictor, mask_collator, anti_collapse,
+            pred_loss_type=pred_loss_type,
+        )
+    if objective == "cross_subject":
+        cs_cfg = cfg.loss.get("cross_subject", {}) or {}
+        return CrossSubjectJEPA(
+            encoder, predictor, mask_collator, anti_collapse,
+            pred_loss_type=pred_loss_type,
+            symmetric=bool(cs_cfg.get("symmetric", True)),
+            context_mask_mode=str(cs_cfg.get("context_mask_mode", "masked")),
+            pred_target_mode=str(cs_cfg.get("pred_target_mode", "masked")),
+            within_subject_weight=float(cs_cfg.get("within_subject_weight", 0.0)),
+            diagnostic_every=int(cs_cfg.get("diagnostic_every", 50)),
+        )
+    if objective == "mjepa":
+        mj_cfg = cfg.loss.get("mjepa", {}) or {}
+        lambda_intra = float(mj_cfg.get("lambda_intra", 1.0))
+        ac_name = str(cfg.loss.get("anti_collapse", "none")).lower()
+        # With no masked term there is nothing for the existing anti-collapse
+        # strategies to act on: all four consume `target_representations` from
+        # the masked branch, which lambda=0 skips entirely. Requiring "none"
+        # keeps lambda=0 a clean "pure cross-modal regression" arm rather than a
+        # silent no-op.
+        #
+        # NB this is a *structural* constraint, not a claim that lambda=0 cannot
+        # collapse. An earlier version of this comment argued there was "no
+        # collapse attractor" because L_e2v regresses to a fixed external target
+        # the model cannot influence. That reasoning rules out *total* collapse
+        # (a constant encoder is underfitting, not an optimum) but says nothing
+        # about *dimensional* collapse, and measurement contradicts it: the
+        # lambda=0 from-scratch arm collapsed to participation ratio 1.02 with
+        # ev_gap ~= 2e-4, probing at the noise floor (experiments/mjepa/
+        # RESULTS.md). The lambda=0 REVE warm-start arm dips to pr=1.24 by epoch
+        # 48 before recovering to 6.31. If a future arm needs regularizing at
+        # lambda=0, the fix is to apply SIGReg to `pooled` directly -- not to
+        # relax this check.
+        if lambda_intra == 0.0 and ac_name != "none":
+            raise ValueError(
+                f"loss.mjepa.lambda_intra=0 requires loss.anti_collapse='none', "
+                f"got {ac_name!r}. At lambda=0 the masked term is skipped entirely, "
+                "so the anti-collapse loss would be applied to nothing it can act on."
+            )
+        return MJEPA(
+            encoder, predictor, mask_collator, anti_collapse,
+            pred_loss_type=pred_loss_type,
+            vision_dim=vision_dim,
+            lambda_intra=lambda_intra,
+            cross_loss_type=str(mj_cfg.get("cross_loss_type", "l1")),
+            predictor_hidden=int(mj_cfg.get("predictor_hidden", 2048)),
+            predictor_depth=int(mj_cfg.get("predictor_depth", 3)),
+            cross_source=str(mj_cfg.get("cross_source", "auto")),
+            ve_enabled=bool(mj_cfg.get("ve_enabled", True)),
+            ve_stopgrad=bool(mj_cfg.get("ve_stopgrad", True)),
+            standardize_targets=bool(mj_cfg.get("standardize_targets", True)),
+            standardizer_momentum=float(mj_cfg.get("standardizer_momentum", 0.01)),
+            diagnostic_every=int(mj_cfg.get("diagnostic_every", 1)),
+        )
+    raise ValueError(
+        f"Unknown loss.objective={objective!r}. "
+        "Expected 'masked', 'cross_subject' or 'mjepa'."
     )
 
 

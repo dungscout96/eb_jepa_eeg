@@ -112,8 +112,21 @@ loss:   mode: cs_aligner
         mean_center: true, target_kind: per_window, temporal_buffer_s: 2.0
         proj_dim: 512, temperature: 0.07, vision_passthrough: false
 optim:  optimizer: adam, lr: 1e-4, warmup_epochs: 5
-data:   batch_size: 64, n_windows: 8, window_size_seconds: 2, task: ThePresent
+data:   batch_size: 64, n_windows: 1, window_size_seconds: 2, task: ThePresent
 ```
+
+> **⚠️ CORRECTION (2026-08-03).** This block previously read `n_windows: 8`,
+> the same error as
+> [RESULTS_jul7.md §1.2](../soft_target_clip/RESULTS_jul7.md#12-training-config)
+> — the config block was carried over from it. **Every cs_aligner run used
+> `n_windows: 1`**, checked against the saved `config.yaml` of all ten runs
+> under `/work/hdd/bbnv/dtyoung/eb_jepa/cs_aligner/`. It is also the value in
+> `config/clip_pretrain.yaml`, and the submit script never overrides it.
+>
+> `n_windows` sets whether an item is one movie moment or a contiguous block of
+> eight, so it changes what an InfoNCE batch contains and what the 2 s
+> `temporal_buffer_s` exclusion masks — worth having right before anyone
+> reproduces these numbers.
 
 ### 1.3 Verification: six unit tests
 [`tests/test_loss_equivalences.py::TestCSAlignerDivergence`](../../../tests/test_loss_equivalences.py)
