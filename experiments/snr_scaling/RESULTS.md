@@ -61,14 +61,15 @@ the record of what has been measured. Commits `b4492fe`, `6dd992d`, `fdf0b3b`.
    a 3 % difference — and the δ/θ-over-α ratio replicates at 3.06 vs 2.84. The
    cohorts are 98.9 % shared, so stimulus is the only thing varying. Say
    "replicates across movies within HBN," not "replicates."
-11. **The subject axis saturates at ~700 — for the linear probe only**
-   (§2.11, §2.12). With nested draws, 3 draws per S and smoothed selection, Δr²
-   rises steeply to 701 (exponent **+0.441**, 8 sd) then stops; `probe_traintest`
-   reproduces this on **both** val and test (test *r* 0.1865 → 0.1901 for
-   701 → 1863, +1.9 %). **But e→v retrieval does not saturate** — test scene
-   top-5 rises monotonically 0.345 → 0.408 over the same range, **+18 %**. Same
-   checkpoints, opposite answer: saturation is a property of the *readout*, not
-   the representation. Caveat: R7–R10 subjects are worth **8–15 % less** than
+11. **The 12-feature linear probe saturates at ~700 subjects; CLIP-space
+   retrieval does not** (§2.11, §2.12). With nested draws, 3 draws per S and
+   smoothed selection, Δr² rises steeply to 701 (exponent **+0.441**, 8 sd) then
+   flattens. **Three scalar readouts agree** — CV-val Δr² **+4.9 %**,
+   train→test val *r* **+2.5 %**, train→test **test** *r* **+1.9 %** over
+   701 → 1863 — while **e→v scene retrieval gains +26 % (top-1) / +18 %
+   (top-5)** on the same checkpoints and the same test split. The split is by
+   *readout*, not by split, so never write "the subject axis saturates" without
+   naming the metric. Caveat: R7–R10 subjects are worth **8–15 % less** than
    R1–R4 at matched count, so part of the probe flattening may be dilution.
 12. **Anchors stay flat, and subjects beat anchors at matched budget** (§2.10).
    Δr² is flat in anchors (**−0.007** over A=50→101), and subject-heavy beats
@@ -689,7 +690,7 @@ ThePresent's length, so the surface cannot show what happens past 101 in
 distribution. §2.9's shared-cohort finding gives the out-of-distribution
 extension (jul2: +84 % anchors made TP *worse*), which points the same way.
 
-### 2.11 E0.3 extension to 1863 subjects — the subject axis saturates at ~700
+### 2.11 E0.3 extension to 1863 subjects — the probe saturates at ~700, retrieval does not
 
 R7–R10 take the ThePresent train pool from 703 recordings to **1863**. Final
 protocol: **nested** subject draws (permute once per seed, take the first S, so
@@ -724,15 +725,40 @@ previously feared.
 | 1400 → 1863 | +0.00095 | +0.79 | +0.073 |
 | **701 → 1863** | **+0.00216** | **+1.80** | **+0.049** |
 
-> **The subject axis pays steeply to ~700 and then essentially stops.**
-> Below 700 the exponent is **+0.441** (8 sd, unambiguous). Above it, every step
-> is under 1 sd and the exponents fall to +0.02–+0.07. Going 701 → 1863 —
-> **2.66× the subjects** — buys **+4.9 % Δr²** at +1.8 sd: marginal
-> statistically, negligible practically.
+> **On this probe, the subject axis pays steeply to ~700 and then essentially
+> stops.** Below 700 the exponent is **+0.441** (8 sd, unambiguous). Above it,
+> every step is under 1 sd and the exponents fall to +0.02–+0.07. Going
+> 701 → 1863 — **2.66× the subjects** — buys **+4.9 % Δr²** at +1.8 sd.
+
+**But that is a statement about the probe, not about the encoder.** The same
+epoch-325 checkpoints were re-evaluated under three further readouts (§2.12).
+Two agree with the probe; retrieval flatly disagrees:
+
+| S | Δr² (CV, val) | *r* (train→test, val) | *r* (train→test, **test**) | scene e→v top-1 | scene e→v top-5 |
+|---:|---:|---:|---:|---:|---:|
+| 400 | 0.03434 | 0.2306 | 0.1729 | 0.1063 | 0.3260 |
+| 701 | 0.04398 | 0.2509 | 0.1865 | 0.1030 | 0.3452 |
+| 1000 | 0.04489 | 0.2545 | 0.1886 | 0.1061 | 0.3714 |
+| 1400 | 0.04519 | **0.2589** | **0.1918** | 0.1259 | 0.3888 |
+| 1863 | **0.04615** | 0.2571 | 0.1901 | **0.1298** | **0.4076** |
+| **701 → 1863** | **+4.9 %** | **+2.5 %** | **+1.9 %** | **+26.0 %** | **+18.1 %** |
+
+**Every scalar-feature readout says +2–5 %; retrieval says +18–26 %.** The
+split is not between val and test — train→test on the untouched test split
+agrees with the CV probe — but between *what is being read out*. The probe
+regresses 12 scalar movie features through a ridge head; retrieval uses the full
+512-d CLIP-aligned space. Subjects past ~700 keep improving the alignment
+geometry while adding little to those particular scalar regressions.
+
+> **So the saturation is a property of the readout, not of the representation.**
+> Quote it as *"the 12-feature linear probe saturates near 700 subjects"* —
+> never as *"the subject axis saturates,"* which the retrieval numbers on the
+> same checkpoints contradict.
 
 **This bounds the thesis rather than supporting it in its strong form.** "Buy
-SNR with subjects" holds, but with a knee: it is a ~700-subject strategy on this
-recipe, not an unbounded one. That is a more useful claim than either "subjects
+SNR with subjects" holds, and for CLIP-space retrieval it keeps holding to 1863
+— but if what you care about is scalar-feature decoding, it is a ~700-subject
+strategy on this recipe. That is a more useful claim than either "subjects
 keep paying" or "unresolved" — and it is the number a lab planning a cohort
 actually needs.
 
