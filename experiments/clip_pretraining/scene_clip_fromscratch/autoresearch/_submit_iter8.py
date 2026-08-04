@@ -31,7 +31,7 @@ job = Job(
     command=(
         f"mkdir -p {EXP_DIR} && "
         "PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.clip_pretrain"
-        " --fname=config/clip_pretrain.yaml"
+        " --fname=experiments/clip_pretraining/scene_clip_fromscratch/autoresearch/clip_pretrain.yaml"
         f" --meta.resume_from={RESUME_FROM}"
         f" --optim.epochs={EPOCHS}"
         " --optim.lr=5e-5"
@@ -41,7 +41,7 @@ job = Job(
         "PYTHONPATH=. uv run --group eeg python"
         " eb_jepa/evaluation/clip_probe/probe.py"
         f" --checkpoint {EXP_DIR}/latest.pth.tar"
-        " --config config/clip_pretrain.yaml"
+        " --config experiments/clip_pretraining/scene_clip_fromscratch/autoresearch/clip_pretrain.yaml"
         " --split val --cv-splits 5"
         f" --output {OUTPUT_JSON}"
     ),

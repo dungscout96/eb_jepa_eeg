@@ -41,7 +41,7 @@ train_and_probe = Job(
         f"mkdir -p {EXP_DIR} && "
         # 1. Train (~30 min, 130 epochs).
         "PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.clip_pretrain"
-        " --fname=config/clip_pretrain.yaml"
+        " --fname=experiments/clip_pretraining/scene_clip_fromscratch/autoresearch/clip_pretrain.yaml"
         " --optim.epochs=130"
         f" --folder={EXP_DIR}"
         " --logging.wandb_group=auto_jul1_iter0_baseline"
@@ -50,7 +50,7 @@ train_and_probe = Job(
         "PYTHONPATH=. uv run --group eeg python"
         " eb_jepa/evaluation/clip_probe/probe.py"
         f" --checkpoint {EXP_DIR}/latest.pth.tar"
-        " --config config/clip_pretrain.yaml"
+        " --config experiments/clip_pretraining/scene_clip_fromscratch/autoresearch/clip_pretrain.yaml"
         " --split val --cv-splits 5"
         f" --output {AUTORESEARCH_DIR}/probe_val_iter0.json"
     ),
@@ -70,7 +70,7 @@ rand_probe = Job(
         "PYTHONPATH=. uv run --group eeg python"
         " eb_jepa/evaluation/clip_probe/probe.py"
         " --random-baseline"
-        " --config config/clip_pretrain.yaml"
+        " --config experiments/clip_pretraining/scene_clip_fromscratch/autoresearch/clip_pretrain.yaml"
         " --split val --cv-splits 5"
         f" --output {AUTORESEARCH_DIR}/probe_val_rand.json"
     ),

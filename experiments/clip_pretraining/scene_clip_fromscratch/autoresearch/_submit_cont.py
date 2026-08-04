@@ -49,7 +49,7 @@ def build_job(option: str) -> Job:
         time_limit="01:00:00",
         command=(
             f"mkdir -p {exp_dir} && "
-            f"cp config/clip_pretrain.yaml {exp_dir}/config.yaml && "
+            f"cp experiments/clip_pretraining/scene_clip_fromscratch/autoresearch/clip_pretrain.yaml {exp_dir}/config.yaml && "
             "PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.clip_pretrain"
             f" --fname={exp_dir}/config.yaml"
             f" --meta.resume_from={BASE_CKPT}"

@@ -30,7 +30,7 @@ Optional overrides (positional --kw=):
 
 Job structure per arm:
   1. mkdir checkpoint dir
-  2. snapshot config/clip_pretrain.yaml → <ckpt>/config.yaml (multi-movie)
+  2. snapshot experiments/clip_pretraining/soft_target_clip/clip_pretrain.yaml → <ckpt>/config.yaml (multi-movie)
   3. patch loss.mode and (for soft_target_clip) soft_alpha / soft_tau_teacher
   4. snapshot per-movie configs (config_TP.yaml, config_DM.yaml)
   5. train (multi-movie, reads config.yaml)
@@ -140,7 +140,7 @@ def build_job(
         time_limit=time_limit,
         command=(
             f"mkdir -p {exp_dir} && "
-            f"cp config/clip_pretrain.yaml {exp_dir}/config.yaml && "
+            f"cp experiments/clip_pretraining/soft_target_clip/clip_pretrain.yaml {exp_dir}/config.yaml && "
             f"{patch_cmd}"
             f"{snapshot_cmd}"
             # Train (multi-movie or single-movie per patched config.yaml).

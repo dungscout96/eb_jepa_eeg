@@ -130,7 +130,7 @@ def build_job(subjects: int, anchors: int, partition: str,
         time_limit=time_limit,
         command=(
             f"mkdir -p {exp_dir} && "
-            f"cp config/clip_pretrain.yaml {exp_dir}/config.yaml && "
+            f"cp experiments/snr_scaling/clip_pretrain.yaml {exp_dir}/config.yaml && "
             f"PYTHONPATH=. uv run --group eeg python -c \"{patch}\" && "
             f"PYTHONPATH=. uv run --group eeg python -c \"{probe_patch}\" && "
             "PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.clip_pretrain"

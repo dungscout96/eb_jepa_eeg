@@ -27,7 +27,7 @@ def build_job(iter_num: int, ckpt_name: str = "latest.pth.tar") -> Job:
             "PYTHONPATH=. uv run --group eeg python"
             " eb_jepa/evaluation/clip_probe/probe.py"
             f" --checkpoint {ckpt}"
-            " --config config/clip_pretrain.yaml"
+            " --config experiments/clip_pretraining/scene_clip_fromscratch/autoresearch/clip_pretrain.yaml"
             " --split val --cv-splits 5"
             f" --output {output}"
         ),

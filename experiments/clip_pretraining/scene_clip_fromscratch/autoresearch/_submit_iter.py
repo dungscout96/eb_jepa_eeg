@@ -34,9 +34,9 @@ def build_job(iter_num: int) -> Job:
         command=(
             f"mkdir -p {exp_dir} && "
             # Snapshot the config at job start so a mid-flight sync of
-            # config/clip_pretrain.yaml can't break the probe step (iter8
+            # experiments/clip_pretraining/scene_clip_fromscratch/autoresearch/clip_pretrain.yaml can't break the probe step (iter8
             # got hit by exactly this problem).
-            f"cp config/clip_pretrain.yaml {exp_dir}/config.yaml && "
+            f"cp experiments/clip_pretraining/scene_clip_fromscratch/autoresearch/clip_pretrain.yaml {exp_dir}/config.yaml && "
             "PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.clip_pretrain"
             f" --fname={exp_dir}/config.yaml"
             f" --optim.epochs={EPOCHS}"

@@ -13,7 +13,7 @@ Options:
 
 Sbatch flow per iteration:
   1. mkdir CKPT_DIR
-  2. cp config/clip_pretrain.yaml CKPT_DIR/config.yaml
+  2. cp experiments/clip_pretraining/scene_clip_multimovie/autoresearch/clip_pretrain.yaml CKPT_DIR/config.yaml
   3. If --wider, dump modified config with wider fields to CKPT_DIR/config.yaml
   4. python -c 'OmegaConf: task=ThePresent' > CKPT_DIR/config_TP.yaml
   5. python -c 'OmegaConf: task=DespicableMe' > CKPT_DIR/config_DM.yaml
@@ -59,7 +59,7 @@ def build_job(iter_num: int, wider: bool = False) -> Job:
         command=(
             f"mkdir -p {exp_dir} && "
             # Snapshot base config
-            f"cp config/clip_pretrain.yaml {exp_dir}/config.yaml && "
+            f"cp experiments/clip_pretraining/scene_clip_multimovie/autoresearch/clip_pretrain.yaml {exp_dir}/config.yaml && "
             # If wider, patch the snapshot with widening fields
             f"{wider_patch}"
             # Snapshot single-task variants for per-movie probing (reads the

@@ -50,7 +50,7 @@ def build_job(epochs: int, tag: str) -> Job:
         time_limit="01:00:00",  # 60 min - iter12 was 25 min at 300 ep; 500 ep ~ 42 min + probe
         command=(
             f"mkdir -p {exp_dir} && "
-            f"cp config/clip_pretrain.yaml {exp_dir}/config.yaml && "
+            f"cp experiments/clip_pretraining/scene_clip_fromscratch/autoresearch/clip_pretrain.yaml {exp_dir}/config.yaml && "
             "PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.clip_pretrain"
             f" --fname={exp_dir}/config.yaml"
             f" --optim.epochs={epochs}"

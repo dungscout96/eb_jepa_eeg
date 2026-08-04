@@ -18,7 +18,7 @@ job = Job(
         "PYTHONPATH=. uv run --group eeg python"
         " eb_jepa/evaluation/clip_probe/probe.py"
         f" --checkpoint {CKPT}"
-        " --config config/clip_pretrain.yaml"
+        " --config experiments/clip_pretraining/scene_clip_fromscratch/autoresearch/clip_pretrain.yaml"
         " --split val --cv-splits 5"
         f" --output {AUTORESEARCH_DIR}/probe_val_iter0.json"
     ),

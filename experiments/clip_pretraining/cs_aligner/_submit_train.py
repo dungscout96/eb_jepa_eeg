@@ -101,7 +101,7 @@ def build_job(
         time_limit=time_limit,
         command=(
             f"mkdir -p {exp_dir} && "
-            f"cp config/clip_pretrain.yaml {exp_dir}/config.yaml && "
+            f"cp experiments/clip_pretraining/cs_aligner/clip_pretrain.yaml {exp_dir}/config.yaml && "
             f"{patch_cmd}"
             f"{snapshot_cmd}"
             "PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.clip_pretrain"

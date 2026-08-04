@@ -93,7 +93,7 @@ def build_job(key: str) -> Job:
         time_limit=v["wall"],
         command=(
             f"mkdir -p {exp_dir} && "
-            f"cp config/clip_pretrain.yaml {exp_dir}/config.yaml && "
+            f"cp experiments/clip_pretraining/scene_clip_multimovie/autoresearch/clip_pretrain.yaml {exp_dir}/config.yaml && "
             f"{patch_cmd}"
             # Snapshot single-task variants for per-movie probing
             "PYTHONPATH=. uv run --group eeg python -c \""

@@ -1,3 +1,22 @@
+# FROZEN CONFIG — experiments/clip_pretraining/scene_clip_fromscratch/autoresearch
+#
+# A snapshot of config/clip_pretrain.yaml as it stood at commit eb22b48, taken
+# 2026-08-04 when the shared template moved to the current best from-scratch
+# recipe (soft_target_clip / tau=0.05 / ThePresent / 400 ep).
+#
+# Scripts in this folder read THIS file, not config/clip_pretrain.yaml, so the
+# experiments they document keep reproducing regardless of what the shared
+# template does later. That fragility was real and had already bitten once:
+# see the comment in scene_clip_fromscratch/autoresearch/_submit_iter.py about
+# iter8 being broken by a template change mid-experiment.
+#
+# jul1 was SINGLE-movie (ThePresent) with scene_clip. These scripts patch
+# neither field, so both come from here. Note the shared template had drifted to
+# multi-movie in jul2 -- so these scripts were ALREADY not reproducing jul1
+# before this freeze; task is restored to ThePresent here.
+#
+# Do not "update" this file. If you want new defaults, use the shared template.
+
 # EEG CLIP Training Configuration
 # Train an EEG encoder via symmetric InfoNCE against V-JEPA-2 frame embeddings.
 # No masking, no predictor, no anti-collapse — the CLIP objective is the only loss.
@@ -12,11 +31,7 @@ meta:
 data:
   batch_size: 64
   num_workers: 4
-  task: ThePresent     # TP-only. jul7 3.3: multi-movie helps the JOINT metric
-                       # but costs per-movie performance, and jul2's diagnostics
-                       # trace that to domain shift between the two V-JEPA-2
-                       # target distributions, not capacity or compute. Scripts
-                       # wanting both movies pass --data.task='[ThePresent,DespicableMe]'.
+  task: ThePresent
   n_windows: 1
   window_size_seconds: 2
   temporal_stride: 1
@@ -55,13 +70,7 @@ loss:
   #                  (Yin et al. 2025, arXiv:2502.17028). Directly attacks the
   #                  modality gap that pairwise InfoNCE cannot close. Ignores
   #                  scene_id; keeps the 2 s temporal buffer on the InfoNCE half.
-  # CURRENT BEST FROM-SCRATCH (2026-08-04): soft_target_clip, TP-only,
-  # alpha=0.5, tau=0.05, lr=1e-4, 400 ep. Source: RESULTS_jul7.md 3.4 (best
-  # single-seed from-scratch) and snr_scaling/RESULTS.md 2.12 (test r=0.190 at
-  # S=1863 under probe_traintest, vs 0.133 for the previous from-scratch best).
-  # Historical autoresearch scripts that relied on the old `scene_clip` default
-  # now pass --loss.mode=scene_clip explicitly, so they still reproduce.
-  mode: soft_target_clip
+  mode: scene_clip
   # Recipe knobs (used when mode in {scene_clip, soft_target_clip, cs_aligner}):
   mean_center: true            # subtract V-JEPA-2 global mean at dataset init
   target_kind: per_window      # {per_window, shot_mean}; per_window keeps the
@@ -71,9 +80,7 @@ loss:
   temporal_buffer_s: 2.0       # mask cross-scene pairs with |Δt|<2s from denom
   # Soft-target knobs (only used when mode=soft_target_clip):
   soft_alpha: 0.5              # blend weight: t = (1-α)·diag + α·teacher_softmax(V V^T / τ_t)
-  soft_tau_teacher: 0.05       # jul7 3.2/3.4: tau=0.05 beat 0.1 -- the best
-                               # single-seed from-scratch run. Lower → sharper
-                               # (near one-hot),
+  soft_tau_teacher: 0.1        # teacher temperature; lower → sharper (near one-hot),
                                # higher → smoother. See centered-cosine range in
                                # experiments/.../clip_design_observations_vjepa2.md §2.
   # CS-Aligner knobs (only used when mode=cs_aligner):
@@ -94,10 +101,7 @@ loss:
   drop_proj: 0.5       # dropout inside the EEG-side residual block
 
 optim:
-  epochs: 400          # jul7 recipe. Note snr_scaling/RESULTS.md 2.10: the
-                       # smoothed val diagnostic peaks near epoch 325, so 400 is
-                       # mildly past the optimum -- 2-8% below peak, not the
-                       # 15-31% an earlier noisy-argmax analysis suggested.
+  epochs: 50
   lr: 1.0e-4           # jul1 iter4/17: from-scratch prefers lr=1e-4 across shapes (single AND multi-movie confirmed jul2 iter3)
   lr_min: 1.0e-6
   warmup_epochs: 5  # iter9: revert iter7 (10 hurt). Back to fresh500 default.

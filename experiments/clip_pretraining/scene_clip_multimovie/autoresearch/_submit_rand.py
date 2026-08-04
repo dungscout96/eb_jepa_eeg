@@ -32,7 +32,7 @@ def build_prep_and_prob(task_tag: str) -> Job:
         command=(
             f"mkdir -p {RAND_DIR} && "
             # Snapshot config + override task
-            f"cp config/clip_pretrain.yaml {RAND_DIR}/config_{task_tag}.yaml && "
+            f"cp experiments/clip_pretraining/scene_clip_multimovie/autoresearch/clip_pretrain.yaml {RAND_DIR}/config_{task_tag}.yaml && "
             "PYTHONPATH=. uv run --group eeg python -c \""
             "from omegaconf import OmegaConf; "
             f"c = OmegaConf.load('{RAND_DIR}/config_{task_tag}.yaml'); "
