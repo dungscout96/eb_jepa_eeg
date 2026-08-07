@@ -79,6 +79,13 @@ EXTENDED_CELLS = [
 # made the first extension unreadable. S=1863 is the whole pool -- there is only
 # one possible draw -- so it gets a single cell rather than three identical ones.
 NESTED_S = [400, 701, 1000, 1400]
+
+# Low-S arm: where does the model start learning at all? Below the nested axis's
+# floor of 400. Three draws each matters MORE here than at 400+: with 10-20
+# subjects, which particular subjects you drew is a large fraction of the
+# signal, so a single draw would be uninterpretable. Nesting still holds
+# (10 subset 20 subset 50 ... subset 1400 within a draw seed).
+LOW_S = [10, 20, 50, 100, 200]
 NESTED_DRAW_SEEDS = [11, 22, 33]
 FULL_POOL_S = 1863
 
@@ -180,6 +187,10 @@ def main() -> None:
     p.add_argument("--skip-probe", action="store_true",
                    help="Train only. Under the early-stopped protocol the probe "
                         "runs later, on the selected checkpoint, not on latest.")
+    p.add_argument("--low-s", action="store_true",
+                   help="Low-S arm: LOW_S x NESTED_DRAW_SEEDS. Implies "
+                        "--extended so draws come from the same 1863 pool and "
+                        "nest with the existing cells.")
     p.add_argument("--nested-draws", action="store_true",
                    help="Nested + replicated S axis: NESTED_S x NESTED_DRAW_SEEDS "
                         "plus a single full-pool cell. Implies --extended.")
@@ -195,7 +206,10 @@ def main() -> None:
 
     global SUFFIX
     SUFFIX = args.suffix
-    if args.nested_draws:
+    if args.low_s:
+        args.extended = True
+        cells = [(s_, 101, d) for s_ in LOW_S for d in NESTED_DRAW_SEEDS]
+    elif args.nested_draws:
         args.extended = True
         cells = [(s_, 101, d) for s_ in NESTED_S for d in NESTED_DRAW_SEEDS]
         cells.append((FULL_POOL_S, 101, None))     # whole pool: one draw only
