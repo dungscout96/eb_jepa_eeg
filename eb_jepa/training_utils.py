@@ -245,16 +245,38 @@ def load_checkpoint(
     }
 
 
+# braindecode's REVE registers a fixed (543, 3) channel-position buffer that
+# EEGEncoderTokens recomputes from chs_info instead of storing, so a converted
+# REVE checkpoint always carries this one key with nowhere to go. It is the only
+# leftover that does not indicate a shape/topology mismatch.
+BENIGN_UNEXPECTED_ENCODER_KEYS = frozenset({"_position_bank.embedding"})
+
+
 def load_encoder_weights(
     encoder: nn.Module,
     ckpt_path: Union[str, Path],
     device: Optional[torch.device] = None,
+    allow_partial: bool = False,
 ) -> Dict[str, Any]:
     """Copy only ``encoder.*`` tensors from a checkpoint into ``encoder``.
 
     Used by the CLIP-pretraining script to warm-start its encoder from a JEPA
     checkpoint. Predictor / anti-collapse / optimizer state from the checkpoint
     are silently discarded; downstream caller starts a fresh optimizer & schedule.
+
+    The copy is done with ``strict=False`` because non-encoder keys are dropped
+    up front, so the result is then GUARDED: unless ``allow_partial``, any
+    missing key -- or any unexpected key outside
+    ``BENIGN_UNEXPECTED_ENCODER_KEYS`` -- raises. Without this, warm-starting a
+    depth-22 REVE into a depth-12 encoder reports ``missing=0, unexpected=61``
+    and trains happily on a truncated backbone, producing plausible loss curves
+    and plausible metrics that nothing downstream can flag as wrong.
+
+    ``allow_partial`` defaults to False after auditing every in-repo warm-start:
+    all of them (mjepa, scene_clip_from_checkpoint, cs_aligner_from_checkpoint,
+    soft_target_clip_from_jepa_checkpoint) pin the encoder shape to their source
+    checkpoint's, so none relies on a partial load. The flag exists for ad-hoc
+    loads that knowingly transplant a subset.
 
     Returns a dict with ``missing``, ``unexpected``, ``n_loaded``, and
     ``dropped`` (non-encoder keys filtered out of the checkpoint).
@@ -267,14 +289,28 @@ def load_encoder_weights(
     sd = ckpt.get("model_state_dict", ckpt)
     sd = {k.replace("_orig_mod.", ""): v for k, v in sd.items()}
     prefix = "encoder."
-    enc_sd = {k[len(prefix):]: v for k, v in sd.items() if k.startswith(prefix)}
+    enc_sd = {k[len(prefix) :]: v for k, v in sd.items() if k.startswith(prefix)}
     dropped = [k for k in sd.keys() if not k.startswith(prefix)]
     missing, unexpected = encoder.load_state_dict(enc_sd, strict=False)
     logger.info(
         "Loaded %d encoder tensors from %s (missing=%d, unexpected=%d, "
         "dropped %d non-encoder keys)",
-        len(enc_sd), path, len(missing), len(unexpected), len(dropped),
+        len(enc_sd),
+        path,
+        len(missing),
+        len(unexpected),
+        len(dropped),
     )
+    stray = sorted(set(unexpected) - BENIGN_UNEXPECTED_ENCODER_KEYS)
+    if not allow_partial and (missing or stray):
+        raise RuntimeError(
+            f"Encoder-init checkpoint {path} does not match this encoder: "
+            f"{len(missing)} missing key(s) (e.g. {sorted(missing)[:3]}), "
+            f"{len(stray)} unexpected key(s) (e.g. {stray[:3]}). "
+            "Check encoder_depth / patch_size / patch_overlap / embed_dim "
+            "against the checkpoint's. Pass allow_partial=True only if the "
+            "partial load is intended."
+        )
     return {
         "missing": list(missing),
         "unexpected": list(unexpected),

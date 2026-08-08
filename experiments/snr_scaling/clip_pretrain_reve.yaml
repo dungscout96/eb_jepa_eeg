@@ -1,3 +1,71 @@
+# FROZEN CONFIG — experiments/snr_scaling, E0.4 (full-REVE arm)
+#
+# A copy of experiments/snr_scaling/clip_pretrain.yaml -- itself a snapshot of
+# config/clip_pretrain.yaml as it stood at commit eb22b48 -- taken 2026-08-08 to
+# give E0.4 its own frozen shape. The E0.3 snapshot is frozen (see its line 18)
+# and is NOT edited to make room for this arm.
+#
+# Scripts in this folder read THIS file, not config/clip_pretrain.yaml, so E0.4
+# keeps reproducing regardless of what the shared template does later. That
+# fragility was real and had already bitten once: see the comment in
+# scene_clip_fromscratch/autoresearch/_submit_iter.py about iter8 being broken
+# by a template change mid-experiment.
+#
+# Do not "update" this file. If you want new defaults, use the shared template.
+#
+# Exactly three fields differ from the E0.3 snapshot, and none is a free choice
+# -- they are reve-base's own geometry:
+#
+#     encoder_depth   12 -> 22
+#     patch_size     400 -> 200
+#     patch_overlap    0 -> 20
+#
+# They are not forced the same way, and the difference is what matters if anyone
+# ever edits this file.
+#
+# patch_size is a hard state_dict constraint. The warm-start checkpoint's
+# to_patch_embedding.weight is (512, 200), so loading it into a patch_size=400
+# model raises RuntimeError on the size mismatch -- strict=False relaxes missing
+# and unexpected KEYS, never shapes. Patch 400 is not available in this arm.
+#
+# encoder_depth is a state_dict constraint too, but the one that does NOT fail
+# loudly in stock PyTorch: a depth-22 checkpoint into a depth-12 encoder reports
+# missing=0 and the 10 surplus blocks merely as unexpected keys, then trains a
+# truncated REVE that yields plausible loss curves and so is not caught by
+# inspection. The guard in
+# eb_jepa/training_utils.py::load_encoder_weights turns that into a hard error.
+# Do not relax it for this arm (meta.encoder_init_allow_partial stays false; it
+# is absent here, and the loader defaults to strict).
+#
+# patch_overlap is NOT a state_dict constraint. No parameter shape depends on it
+# -- at patch_size=200, overlap 0 and overlap 20 produce byte-identical key and
+# shape sets -- so a wrong value loads clean and trains to completion. It is
+# pinned to 20 because that is the stride reve-base's patch embedding was
+# pretrained on. Wrong here is quietly worse numbers, not a crash, and nothing
+# downstream will flag it.
+#
+# Consequences, not knobs: at 129 channels, n_windows=1, n_times=400, with
+# P = (n_times - patch_size) // (patch_size - patch_overlap) + 1, P goes 1 -> 2,
+# tokens/sample go 129 -> 258, and params go 37.9M -> 69.2M.
+#
+# The stride also truncates the window. unfold(size=200, step=180) emits patches
+# at t=0 and t=180, so samples 380..399 -- 20 of every 400, the last 100 ms of
+# each 2 s window -- are never seen by the model, where E0.3's 400/0 covered the
+# window exactly. That is the price of matching reve-base's stride: overlap=0
+# would give the same 258 tokens at full coverage, but a stride the pretrained
+# weights never saw. It is a real E0.3-vs-E0.4 difference; do not report it as
+# pure depth scaling.
+#
+# Cost: 6.6 -> 11.5 s/epoch for the geometry change vs 1.56x for the extra 10
+# layers (PLAN_e04_reve.md §5), so geometry is the budget driver. Note 2x tokens
+# buys only 1.74x wall -- at n=258 the O(n^2) attention term is not what
+# dominates, the linear-in-tokens FFN is.
+#
+# Everything else is pinned to E0.3 so the rows compare: loss recipe, lr, batch
+# size, and n_windows=1 -- the last of which is load-bearing (RESULTS.md 2.10).
+# _submit_e04.py patches loss.mode, soft_alpha, soft_tau_teacher, data.task, the
+# scaling knobs and meta.encoder_init_from, and passes --optim.epochs on the CLI.
+
 # EEG CLIP Training Configuration
 # Train an EEG encoder via symmetric InfoNCE against V-JEPA-2 frame embeddings.
 # No masking, no predictor, no anti-collapse — the CLIP objective is the only loss.
@@ -8,20 +76,11 @@ meta:
   # Path to a JEPA checkpoint (or any model with `encoder.*` state-dict keys).
   # When set, only encoder weights are copied; optimizer / LR / step start fresh.
   encoder_init_from: null
-  # The warm-start load is strict: any missing/unexpected encoder key aborts the
-  # run, because a shape mismatch (e.g. depth-22 checkpoint into a depth-12
-  # model) otherwise trains on a truncated backbone and still produces plausible
-  # curves. Set true only for a deliberate partial transplant.
-  encoder_init_allow_partial: false
 
 data:
   batch_size: 64
   num_workers: 4
-  task: ThePresent     # TP-only. jul7 3.3: multi-movie helps the JOINT metric
-                       # but costs per-movie performance, and jul2's diagnostics
-                       # trace that to domain shift between the two V-JEPA-2
-                       # target distributions, not capacity or compute. Scripts
-                       # wanting both movies pass --data.task='[ThePresent,DespicableMe]'.
+  task: [ThePresent, DespicableMe]
   n_windows: 1
   window_size_seconds: 2
   temporal_stride: 1
@@ -38,14 +97,15 @@ model:
   # REVE encoder — same fields as jepa_pretrain.yaml so a JEPA checkpoint loads
   # cleanly via encoder_init_from. Predictor / masking blocks are intentionally
   # absent since the CLIP path doesn't use them.
-  # jul1 iter12 winning config (see scene_clip_fromscratch/autoresearch/RESULTS.md).
-  # jul2 multimovie reuses this shape.
+  # jul1 iter12's winning shape (scene_clip_fromscratch/autoresearch/RESULTS.md)
+  # already agreed with reve-base on embed_dim, heads, head_dim, freqs and
+  # mlp_dim_ratio; only depth and the patch geometry below had to move.
   encoder_embed_dim: 512
-  encoder_depth: 12
+  encoder_depth: 22
   encoder_heads: 8
   encoder_head_dim: 64
-  patch_size: 400     # jul1 iter 11-12: 1 patch per 2s window per channel; matches CLIP alignment granularity
-  patch_overlap: 0
+  patch_size: 200     # reve-base geometry, forced by its (512, 200) to_patch_embedding; 2 patches per 2s window per channel
+  patch_overlap: 20   # reve-base's pretraining stride. Invisible to the state_dict load -- see header.
   freqs: 4            # min for embed_dim=512 (freqs^4 >= 256)
   mlp_dim_ratio: 2.66
 
@@ -60,13 +120,7 @@ loss:
   #                  (Yin et al. 2025, arXiv:2502.17028). Directly attacks the
   #                  modality gap that pairwise InfoNCE cannot close. Ignores
   #                  scene_id; keeps the 2 s temporal buffer on the InfoNCE half.
-  # CURRENT BEST FROM-SCRATCH (2026-08-04): soft_target_clip, TP-only,
-  # alpha=0.5, tau=0.05, lr=1e-4, 400 ep. Source: RESULTS_jul7.md 3.4 (best
-  # single-seed from-scratch) and snr_scaling/RESULTS.md 2.12 (test r=0.190 at
-  # S=1863 under probe_traintest, vs 0.133 for the previous from-scratch best).
-  # Historical autoresearch scripts that relied on the old `scene_clip` default
-  # now pass --loss.mode=scene_clip explicitly, so they still reproduce.
-  mode: soft_target_clip
+  mode: scene_clip
   # Recipe knobs (used when mode in {scene_clip, soft_target_clip, cs_aligner}):
   mean_center: true            # subtract V-JEPA-2 global mean at dataset init
   target_kind: per_window      # {per_window, shot_mean}; per_window keeps the
@@ -76,9 +130,7 @@ loss:
   temporal_buffer_s: 2.0       # mask cross-scene pairs with |Δt|<2s from denom
   # Soft-target knobs (only used when mode=soft_target_clip):
   soft_alpha: 0.5              # blend weight: t = (1-α)·diag + α·teacher_softmax(V V^T / τ_t)
-  soft_tau_teacher: 0.05       # jul7 3.2/3.4: tau=0.05 beat 0.1 -- the best
-                               # single-seed from-scratch run. Lower → sharper
-                               # (near one-hot),
+  soft_tau_teacher: 0.1        # teacher temperature; lower → sharper (near one-hot),
                                # higher → smoother. See centered-cosine range in
                                # experiments/.../clip_design_observations_vjepa2.md §2.
   # CS-Aligner knobs (only used when mode=cs_aligner):
@@ -99,10 +151,7 @@ loss:
   drop_proj: 0.5       # dropout inside the EEG-side residual block
 
 optim:
-  epochs: 400          # jul7 recipe. Note snr_scaling/RESULTS.md 2.10: the
-                       # smoothed val diagnostic peaks near epoch 325, so 400 is
-                       # mildly past the optimum -- 2-8% below peak, not the
-                       # 15-31% an earlier noisy-argmax analysis suggested.
+  epochs: 50
   lr: 1.0e-4           # jul1 iter4/17: from-scratch prefers lr=1e-4 across shapes (single AND multi-movie confirmed jul2 iter3)
   lr_min: 1.0e-6
   warmup_epochs: 5  # iter9: revert iter7 (10 hurt). Back to fresh500 default.

@@ -37,7 +37,10 @@ import sys
 from pathlib import Path
 
 CKPT_ROOT = "/work/hdd/bbnv/dtyoung/eb_jepa/e03_scaling"
-OUT_DIR = Path("experiments/snr_scaling")
+# Where the e03 result JSONs live since 6cabc01, and where analyse_e03.py reads
+# them from. Relative because this script already assumes the repo root as cwd
+# -- see the probe.py path in main().
+RAW_DIR = Path("experiments/snr_scaling/raw_results")
 SELECT_KEY = "val/clip_scene_auc"
 # Rolling window for smoothing the selection metric, ~ the checkpoint spacing.
 SMOOTH_WINDOW = 25
@@ -46,20 +49,36 @@ SMOOTH_WINDOW = 25
 def _rolling_mean(v: list[float], w: int) -> list[float]:
     """Centred rolling mean; edges shrink the window rather than pad."""
     import statistics as _st
-    return [_st.fmean(v[max(0, i - w // 2):min(len(v), i + w // 2 + 1)])
-            for i in range(len(v))]
+
+    return [
+        _st.fmean(v[max(0, i - w // 2) : min(len(v), i + w // 2 + 1)])
+        for i in range(len(v))
+    ]
+
 
 CELLS = [
-    (701, 101), (400, 101), (200, 101), (100, 101), (50, 101),
-    (701, 50), (701, 25), (701, 13),
-    (400, 50), (200, 25), (100, 13),
+    (701, 101),
+    (400, 101),
+    (200, 101),
+    (100, 101),
+    (50, 101),
+    (701, 50),
+    (701, 25),
+    (701, 13),
+    (400, 50),
+    (200, 25),
+    (100, 13),
 ]
 
 # Extended-cohort S axis (R7-R10). 400 and 701 overlap the R1-R4 curve on
 # purpose -- they are the calibration points that decide whether the two
 # segments can be plotted as one curve.
 EXTENDED_CELLS = [
-    (400, 101), (701, 101), (1000, 101), (1400, 101), (1863, 101),
+    (400, 101),
+    (701, 101),
+    (1000, 101),
+    (1400, 101),
+    (1863, 101),
 ]
 
 
@@ -123,8 +142,10 @@ def select_epoch(cell_dir: Path, key: str) -> dict:
         return {"error": f"no '{key}' in history (checked {len(files)} run dir(s))"}
     skipped = [Path(f).parent.name for f, v in histories if f != best_file]
     if skipped:
-        logger_msg = (f"  [{cell_dir.name}] using {Path(best_file).parent.name} "
-                      f"({len(vals)} points); ignored {skipped}")
+        logger_msg = (
+            f"  [{cell_dir.name}] using {Path(best_file).parent.name} "
+            f"({len(vals)} points); ignored {skipped}"
+        )
         print(logger_msg)
     # SMOOTH before argmax. val/clip_scene_auc is an AUC over 29 windows
     # (eval.val_recording_fraction=0.1), with sd ~0.10 and adjacent-epoch swings
@@ -150,14 +171,17 @@ def select_epoch(cell_dir: Path, key: str) -> dict:
     if not saved:
         # Only latest.pth.tar exists -- the endpoint protocol. Say so loudly
         # rather than silently probing the final checkpoint again.
-        return {"error": "no periodic checkpoints; re-run with --save-every",
-                "best_epoch": best_ep, "best_value": best}
+        return {
+            "error": "no periodic checkpoints; re-run with --save-every",
+            "best_epoch": best_ep,
+            "best_value": best,
+        }
     nearest_ep, nearest_path = min(saved, key=lambda t: abs(t[0] - best_ep))
     return {
         "best_epoch": best_ep,
-        "best_value": best,                 # smoothed
-        "raw_best_value": raw_best,         # noisy argmax, for comparison only
-        "final_value": sm[-1],              # smoothed, comparable to best
+        "best_value": best,  # smoothed
+        "raw_best_value": raw_best,  # noisy argmax, for comparison only
+        "final_value": sm[-1],  # smoothed, comparable to best
         "raw_final_value": vals[-1],
         "n_epochs_logged": len(vals),
         "smooth_window": SMOOTH_WINDOW,
@@ -171,16 +195,25 @@ def select_epoch(cell_dir: Path, key: str) -> dict:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--suffix", default="_es")
-    p.add_argument("--extended", action="store_true",
-                   help="Use the extended-cohort S-axis cell list.")
-    p.add_argument("--cells-glob", default=None,
-                   help="Discover cells by directory glob instead of the cell "
-                        "lists, e.g. 'e03_s*_a101_nd*'. Needed for replicate "
-                        "sweeps where the slug carries a draw seed.")
+    p.add_argument(
+        "--extended",
+        action="store_true",
+        help="Use the extended-cohort S-axis cell list.",
+    )
+    p.add_argument(
+        "--cells-glob",
+        default=None,
+        help="Discover cells by directory glob instead of the cell "
+        "lists, e.g. 'e03_s*_a101_nd*'. Needed for replicate "
+        "sweeps where the slug carries a draw seed.",
+    )
     p.add_argument("--key", default=SELECT_KEY)
-    p.add_argument("--probe", action="store_true",
-                   help="Actually run the probes (otherwise select and report).")
-    p.add_argument("--output", default="experiments/snr_scaling/e03_selection.json")
+    p.add_argument(
+        "--probe",
+        action="store_true",
+        help="Actually run the probes (otherwise select and report).",
+    )
+    p.add_argument("--output", default=str(RAW_DIR / "e03_selection.json"))
     args = p.parse_args()
 
     if args.cells_glob:
@@ -199,18 +232,23 @@ def main() -> None:
         slugs = [f"e03_s{s_}_a{a_}{args.suffix}" for s_, a_ in cells]
     sel = {}
     print(f"selection metric: {args.key}\n")
-    print(f"  {'cell':<26}{'best_ep':>8}{'best':>8}{'final':>8}{'drop%':>7}"
-          f"{'sel_ep':>8}{'snap':>6}")
+    print(
+        f"  {'cell':<26}{'best_ep':>8}{'best':>8}{'final':>8}{'drop%':>7}"
+        f"{'sel_ep':>8}{'snap':>6}"
+    )
     for slug in slugs:
         info = select_epoch(Path(CKPT_ROOT) / slug, args.key)
         sel[slug] = info
         if "error" in info and "selected_epoch" not in info:
             print(f"  {slug:<26}  {info['error']}")
             continue
-        print(f"  {slug:<26}{info['best_epoch']:>8}{info['best_value']:>8.4f}"
-              f"{info['final_value']:>8.4f}{info['drop_pct']:>7.1f}"
-              f"{info['selected_epoch']:>8}{info['snap_distance']:>6}")
+        print(
+            f"  {slug:<26}{info['best_epoch']:>8}{info['best_value']:>8.4f}"
+            f"{info['final_value']:>8.4f}{info['drop_pct']:>7.1f}"
+            f"{info['selected_epoch']:>8}{info['snap_distance']:>6}"
+        )
 
+    Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     Path(args.output).write_text(json.dumps(sel, indent=2))
     print(f"\nWrote {args.output}")
 
@@ -223,14 +261,24 @@ def main() -> None:
         if "checkpoint" not in info:
             print(f"SKIP {slug}: {info.get('error')}")
             continue
-        out = OUT_DIR / f"e03_probe_val_{slug}_best.json"
+        out = RAW_DIR / f"e03_probe_val_{slug}_best.json"
         cmd = [
-            "uv", "run", "--group", "eeg", "python",
+            "uv",
+            "run",
+            "--group",
+            "eeg",
+            "python",
             "eb_jepa/evaluation/clip_probe/probe.py",
-            "--checkpoint", info["checkpoint"],
-            "--config", f"{CKPT_ROOT}/{slug}/config_probe.yaml",
-            "--split", "val", "--cv-splits", "5",
-            "--output", str(out),
+            "--checkpoint",
+            info["checkpoint"],
+            "--config",
+            f"{CKPT_ROOT}/{slug}/config_probe.yaml",
+            "--split",
+            "val",
+            "--cv-splits",
+            "5",
+            "--output",
+            str(out),
         ]
         print(f"\n=== probing {slug} @ epoch {info['selected_epoch']} ===")
         r = subprocess.run(cmd)

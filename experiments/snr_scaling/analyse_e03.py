@@ -18,11 +18,20 @@ import json
 import math
 import re
 import statistics as st
+import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+# Result JSONs were moved here in 6cabc01; trees written before that keep them
+# beside this script, so reads fall back to HERE. Writes always land in RAW_DIR.
+RAW_DIR = HERE / "raw_results"
 
 FULL_S, FULL_A = 701, 101
+
+
+def _raw(name: str) -> Path:
+    p = RAW_DIR / name
+    return p if p.exists() else HERE / name
 
 
 def _mean_r2(path: Path) -> tuple[float, dict]:
@@ -41,13 +50,35 @@ def load(suffix: str = "") -> tuple[dict, float, dict]:
     checkpoint). The random baseline is shared -- it is an untrained encoder, so
     it has no stopping point.
     """
-    rand_mean, rand_per = _mean_r2(HERE / "e03_probe_val_random.json")
+    rand_mean, rand_per = _mean_r2(_raw("e03_probe_val_random.json"))
     cells = {}
-    pat = f"e03_probe_val_e03_s*_a*{suffix}.json" if suffix else "e03_probe_val_e03_s*_a*.json"
-    for f in glob.glob(str(HERE / pat)):
-        if not suffix and ("_es" in Path(f).stem):
-            continue          # do not mix protocols
-        if suffix and not Path(f).stem.endswith(suffix):
+    pat = (
+        f"e03_probe_val_e03_s*_a*{suffix}.json"
+        if suffix
+        else "e03_probe_val_e03_s*_a*.json"
+    )
+    raw_hits = glob.glob(str(RAW_DIR / pat))
+    legacy_hits = glob.glob(str(HERE / pat))
+    if raw_hits and legacy_hits:
+        # All-or-nothing precedence: a cell re-probed into the legacy top-level
+        # location would otherwise be read as its stale raw_results/ copy with
+        # no sign that a newer file exists.
+        print(
+            f"WARNING: ignoring {len(legacy_hits)} top-level match(es) of "
+            f"{pat!r}; raw_results/ takes precedence",
+            file=sys.stderr,
+        )
+    for f in raw_hits or legacy_hits:
+        stem = Path(f).stem
+        # The fixed-budget protocol is the 11 BARE cells: the stem must end at
+        # _a<digits>. The later _es_best / _ext_best / _nd_d*_best sweeps sit in
+        # the same directory and match the same glob, and this loop is
+        # last-write-wins, so an unfiltered pass silently replaces S400_A101 and
+        # S701_A101 with a different-depth encoder scored against a null of the
+        # E0.3 shape -- and which one wins depends on glob (filesystem) order.
+        if not suffix and not re.fullmatch(r"e03_probe_val_e03_s\d+_a\d+", stem):
+            continue  # do not mix protocols
+        if suffix and not stem.endswith(suffix):
             continue
         m = re.search(r"_s(\d+)_a(\d+)", f)
         s, a = int(m.group(1)), int(m.group(2))
@@ -79,11 +110,15 @@ def local_slope(x0, y0, x1, y1) -> float:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--suffix", default="",
-                    help='"" = fixed-budget final checkpoint; "_es_best" = '
-                         "early-stopped selected checkpoint.")
-    ap.add_argument("--compare-to", default=None,
-                    help="Second suffix to diff against, e.g. \"\" .")
+    ap.add_argument(
+        "--suffix",
+        default="",
+        help='"" = fixed-budget final checkpoint; "_es_best" = '
+        "early-stopped selected checkpoint.",
+    )
+    ap.add_argument(
+        "--compare-to", default=None, help='Second suffix to diff against, e.g. "" .'
+    )
     args = ap.parse_args()
     cells, rand_mean, _ = load(args.suffix)
     print(f"protocol: {args.suffix or 'fixed-budget (final checkpoint)'}\n")
@@ -92,10 +127,13 @@ def main() -> None:
     n_win = {c["n_win"] for c in cells.values()}
     assert len(n_rec) == 1 and len(n_win) == 1, (
         f"cells were evaluated on different data ({n_rec}, {n_win}) -- the "
-        "surface is not comparable")
+        "surface is not comparable"
+    )
     print(f"Random-init baseline (identical shape): mean r2 = {rand_mean:.5f}")
-    print(f"Every cell evaluated on {n_rec.pop()} val recordings / "
-          f"{n_win.pop()} windows -- identical, as E0.3 requires.\n")
+    print(
+        f"Every cell evaluated on {n_rec.pop()} val recordings / "
+        f"{n_win.pop()} windows -- identical, as E0.3 requires.\n"
+    )
 
     s_axis = [50, 100, 200, 400, FULL_S]
     a_axis = [13, 25, 50, FULL_A]
@@ -105,8 +143,11 @@ def main() -> None:
     prev = None
     for s in s_axis:
         c = cells[(s, FULL_A)]
-        loc = ("" if prev is None else
-               f"{local_slope(prev[0], prev[1], s, c['d_r2']):+.3f}")
+        loc = (
+            ""
+            if prev is None
+            else f"{local_slope(prev[0], prev[1], s, c['d_r2']):+.3f}"
+        )
         print(f"  {s:>5}{c['r2']:>10.5f}{c['d_r2']:>10.5f}   {loc}")
         prev = (s, c["d_r2"])
     b_s = loglog_slope(s_axis, [cells[(s, FULL_A)]["d_r2"] for s in s_axis])
@@ -117,8 +158,11 @@ def main() -> None:
     prev = None
     for a in a_axis:
         c = cells[(FULL_S, a)]
-        loc = ("" if prev is None else
-               f"{local_slope(prev[0], prev[1], a, c['d_r2']):+.3f}")
+        loc = (
+            ""
+            if prev is None
+            else f"{local_slope(prev[0], prev[1], a, c['d_r2']):+.3f}"
+        )
         print(f"  {a:>5}{c['r2']:>10.5f}{c['d_r2']:>10.5f}   {loc}")
         prev = (a, c["d_r2"])
     b_a = loglog_slope(a_axis, [cells[(FULL_S, a)]["d_r2"] for a in a_axis])
@@ -136,53 +180,70 @@ def main() -> None:
 
     print("Separability: does dr2 ~ S^b_s * A^b_a predict the diagonal?")
     print(f"  {'cell':>12}{'measured':>11}{'predicted':>11}{'ratio':>8}")
-    k = corner / (FULL_S ** b_s * FULL_A ** b_a)
+    k = corner / (FULL_S**b_s * FULL_A**b_a)
     for s, a in [(100, 13), (200, 25), (400, 50), (FULL_S, FULL_A)]:
         meas = cells[(s, a)]["d_r2"]
-        pred = k * (s ** b_s) * (a ** b_a)
-        print(f"  {'S%d A%d' % (s, a):>12}{meas:>11.5f}{pred:>11.5f}"
-              f"{meas / pred:>8.2f}")
+        pred = k * (s**b_s) * (a**b_a)
+        print(
+            f"  {'S%d A%d' % (s, a):>12}{meas:>11.5f}{pred:>11.5f}"
+            f"{meas / pred:>8.2f}"
+        )
 
     # The cleanest statement available: hold the (subjects x anchors) budget
     # roughly fixed and ask which axis to spend it on. This needs no fitted
     # model at all -- it is a direct comparison of measured cells.
     print("\nIso-budget: same number of (subject x anchor) pairs, spent differently")
-    print(f"  {'subject-heavy':>18}{'pairs':>8}{'d_r2':>9}   "
-          f"{'anchor-heavy':>16}{'pairs':>8}{'d_r2':>9}   gain")
-    iso = [((200, 25), (50, FULL_A)),
-           ((FULL_S, 13), (100, FULL_A)),
-           ((400, 50), (200, FULL_A)),
-           ((FULL_S, 50), (400, FULL_A))]
+    print(
+        f"  {'subject-heavy':>18}{'pairs':>8}{'d_r2':>9}   "
+        f"{'anchor-heavy':>16}{'pairs':>8}{'d_r2':>9}   gain"
+    )
+    iso = [
+        ((200, 25), (50, FULL_A)),
+        ((FULL_S, 13), (100, FULL_A)),
+        ((400, 50), (200, FULL_A)),
+        ((FULL_S, 50), (400, FULL_A)),
+    ]
     gains = []
     for (s1, a1), (s2, a2) in iso:
         d1, d2 = cells[(s1, a1)]["d_r2"], cells[(s2, a2)]["d_r2"]
         p1, p2 = s1 * a1, s2 * a2
         gains.append(d1 / d2)
-        print(f"  {'S%d A%d' % (s1, a1):>18}{p1:>8}{d1:>9.5f}   "
-              f"{'S%d A%d' % (s2, a2):>16}{p2:>8}{d2:>9.5f}   {d1 / d2:>4.2f}x")
-    print(f"  subject-heavy wins all {len(iso)}/{len(iso)} comparisons, "
-          f"median {st.median(gains):.2f}x")
+        print(
+            f"  {'S%d A%d' % (s1, a1):>18}{p1:>8}{d1:>9.5f}   "
+            f"{'S%d A%d' % (s2, a2):>16}{p2:>8}{d2:>9.5f}   {d1 / d2:>4.2f}x"
+        )
+    print(
+        f"  subject-heavy wins all {len(iso)}/{len(iso)} comparisons, "
+        f"median {st.median(gains):.2f}x"
+    )
 
     out = {
         "random_baseline_mean_r2": rand_mean,
         "iso_budget": [
-            {"subject_heavy": f"S{s1}_A{a1}", "anchor_heavy": f"S{s2}_A{a2}",
-             "pairs_subject_heavy": s1 * a1, "pairs_anchor_heavy": s2 * a2,
-             "d_r2_subject_heavy": cells[(s1, a1)]["d_r2"],
-             "d_r2_anchor_heavy": cells[(s2, a2)]["d_r2"],
-             "gain": cells[(s1, a1)]["d_r2"] / cells[(s2, a2)]["d_r2"]}
+            {
+                "subject_heavy": f"S{s1}_A{a1}",
+                "anchor_heavy": f"S{s2}_A{a2}",
+                "pairs_subject_heavy": s1 * a1,
+                "pairs_anchor_heavy": s2 * a2,
+                "d_r2_subject_heavy": cells[(s1, a1)]["d_r2"],
+                "d_r2_anchor_heavy": cells[(s2, a2)]["d_r2"],
+                "gain": cells[(s1, a1)]["d_r2"] / cells[(s2, a2)]["d_r2"],
+            }
             for (s1, a1), (s2, a2) in iso
         ],
         "exponent_S": b_s,
         "exponent_A": b_a,
         "local_exponent_S_at_corner": s_loc,
         "local_exponent_A_at_corner": a_loc,
-        "cells": {f"S{s}_A{a}": {"r2": c["r2"], "d_r2": c["d_r2"]}
-                  for (s, a), c in sorted(cells.items())},
+        "cells": {
+            f"S{s}_A{a}": {"r2": c["r2"], "d_r2": c["d_r2"]}
+            for (s, a), c in sorted(cells.items())
+        },
     }
     name = f"e03_surface{args.suffix or ''}.json"
-    (HERE / name).write_text(json.dumps(out, indent=2))
-    print(f"\nWrote {HERE / name}")
+    RAW_DIR.mkdir(exist_ok=True)
+    (RAW_DIR / name).write_text(json.dumps(out, indent=2))
+    print(f"\nWrote {RAW_DIR / name}")
 
     if args.compare_to is not None:
         other, _, _ = load(args.compare_to)
@@ -192,8 +253,7 @@ def main() -> None:
         for k in sorted(cells, key=lambda t: (-t[1], -t[0])):
             if k in other:
                 a_, b_ = cells[k]["d_r2"], other[k]["d_r2"]
-                print(f"  {'S%d A%d' % k:>12}{a_:>10.5f}{b_:>10.5f}"
-                      f"{a_ / b_:>8.2f}")
+                print(f"  {'S%d A%d' % k:>12}{a_:>10.5f}{b_:>10.5f}" f"{a_ / b_:>8.2f}")
 
 
 if __name__ == "__main__":

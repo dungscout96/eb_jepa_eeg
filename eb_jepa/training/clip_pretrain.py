@@ -6,6 +6,7 @@ anti-collapse. Optionally warm-starts the encoder from a JEPA checkpoint via
 `--meta.encoder_init_from=<path>`; in that case the optimizer / LR schedule /
 step counter are still fresh.
 """
+
 import math
 import random
 from pathlib import Path
@@ -121,6 +122,7 @@ def evaluate_recipe(model, val_loader, device, *, max_windows: int = 2000) -> di
     metrics: dict[str, float] = {}
     try:
         from sklearn.metrics import roc_auc_score
+
         if shot_eq.sum() > 0 and shot_eq.sum() < shot_eq.shape[0]:
             metrics["val/vision_shot_auc"] = float(roc_auc_score(shot_eq, S_vv[iu]))
             metrics["val/clip_shot_auc"] = float(roc_auc_score(shot_eq, sym_ev[iu]))
@@ -285,8 +287,11 @@ def run(
         logger.info(
             "E0.3 scaling cell: max_subjects=%s max_anchors=%s epoch_size=%s "
             "-> %d recordings, %d items/epoch, %d steps/epoch",
-            max_subjects, max_anchors, epoch_size,
-            len(train_set._fif_paths), len(train_set),
+            max_subjects,
+            max_anchors,
+            epoch_size,
+            len(train_set._fif_paths),
+            len(train_set),
             math.ceil(len(train_set) / cfg.data.batch_size),
         )
     if train_set.frame_embedding_dim == 0:
@@ -347,28 +352,45 @@ def run(
         )
         logger.info(
             "Val diagnostics enabled: %d/%d val recordings sampled, cap=%d windows",
-            n_val_rec, len(val_set), val_max_windows,
+            n_val_rec,
+            len(val_set),
+            val_max_windows,
         )
 
     n_chans = train_set.n_chans
     chs_info = train_set.get_chs_info()
     n_times = train_set.n_times
-    logger.info("EEG channels: %d, V-JEPA-2 dim: %d", n_chans, train_set.frame_embedding_dim)
+    logger.info(
+        "EEG channels: %d, V-JEPA-2 dim: %d", n_chans, train_set.frame_embedding_dim
+    )
 
     # ------------------------------------------------------------------
     # Model
     # ------------------------------------------------------------------
     logger.info("Initializing CLIP model...")
     encoder = build_encoder(
-        cfg, n_chans=n_chans, n_times=n_times, chs_info=chs_info,
+        cfg,
+        n_chans=n_chans,
+        n_times=n_times,
+        chs_info=chs_info,
         n_windows=cfg.data.n_windows,
     )
     encoder_init_from = cfg.meta.get("encoder_init_from")
     resume_from = cfg.meta.get("resume_from")
     if encoder_init_from and resume_from:
-        raise ValueError("Set either meta.encoder_init_from or meta.resume_from, not both.")
+        raise ValueError(
+            "Set either meta.encoder_init_from or meta.resume_from, not both."
+        )
     if encoder_init_from:
-        load_encoder_weights(encoder, encoder_init_from, device=torch.device("cpu"))
+        # Strict by default: every warm-start recipe in this repo pins the model
+        # block to its source checkpoint's shape, so a key mismatch means the
+        # config drifted and the run would train on a truncated backbone.
+        load_encoder_weights(
+            encoder,
+            encoder_init_from,
+            device=torch.device("cpu"),
+            allow_partial=bool(cfg.meta.get("encoder_init_allow_partial", False)),
+        )
     clip_head = MovieCLIPHead(
         eeg_in_dim=cfg.model.encoder_embed_dim,
         vision_in_dim=train_set.frame_embedding_dim,
@@ -409,8 +431,12 @@ def run(
         model.encoder.eval()  # disable dropout/etc in frozen encoder
         n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
         n_total = sum(p.numel() for p in model.parameters())
-        logger.info("encoder frozen: %d / %d params trainable (%.1f%%)",
-                    n_trainable, n_total, 100 * n_trainable / n_total)
+        logger.info(
+            "encoder frozen: %d / %d params trainable (%.1f%%)",
+            n_trainable,
+            n_total,
+            100 * n_trainable / n_total,
+        )
 
     log_model_info(
         model,
@@ -434,18 +460,27 @@ def run(
                 no_decay_p.append(p)
             else:
                 decay_p.append(p)
-        optimizer = AdamW([
-            {"params": decay_p, "weight_decay": weight_decay},
-            {"params": no_decay_p, "weight_decay": 0.0},
-        ], lr=cfg.optim.lr)
-        logger.info("AdamW: %d decay params, %d no-decay params, wd=%.3g",
-                    len(decay_p), len(no_decay_p), weight_decay)
+        optimizer = AdamW(
+            [
+                {"params": decay_p, "weight_decay": weight_decay},
+                {"params": no_decay_p, "weight_decay": 0.0},
+            ],
+            lr=cfg.optim.lr,
+        )
+        logger.info(
+            "AdamW: %d decay params, %d no-decay params, wd=%.3g",
+            len(decay_p),
+            len(no_decay_p),
+            weight_decay,
+        )
     elif optim_name == "adam":
         # Filter to requires_grad params so frozen encoders don't get optimizer state.
         trainable = [p for p in model.parameters() if p.requires_grad]
         optimizer = Adam(trainable, lr=cfg.optim.lr)
     else:
-        raise ValueError(f"Unknown optim.optimizer={optim_name!r}; expected adam or adamw.")
+        raise ValueError(
+            f"Unknown optim.optimizer={optim_name!r}; expected adam or adamw."
+        )
 
     lr_min = cfg.optim.get("lr_min", 0.0)
     warmup_epochs = cfg.optim.get("warmup_epochs", 0)
@@ -468,11 +503,19 @@ def run(
     # learning rate. Useful for continuation runs from a converged checkpoint.
     start_step = 0
     if resume_from:
-        state = load_checkpoint(resume_from, model=model, optimizer=optimizer,
-                                device=torch.device("cpu"), strict=True)
+        state = load_checkpoint(
+            resume_from,
+            model=model,
+            optimizer=optimizer,
+            device=torch.device("cpu"),
+            strict=True,
+        )
         start_step = int(state.get("step", 0))
-        logger.info("Resumed from %s (step=%d). New LR schedule applies fresh.",
-                    resume_from, start_step)
+        logger.info(
+            "Resumed from %s (step=%d). New LR schedule applies fresh.",
+            resume_from,
+            start_step,
+        )
 
     log_config(cfg)
 
@@ -492,7 +535,15 @@ def run(
 
         for batch in pbar:
             if recipe_mode:
-                eeg, _features, embeds, _shot_ids, scene_ids, t_starts, _probe_labels = batch
+                (
+                    eeg,
+                    _features,
+                    embeds,
+                    _shot_ids,
+                    scene_ids,
+                    t_starts,
+                    _probe_labels,
+                ) = batch
                 eeg = eeg.to(device, non_blocking=True)
                 embeds = embeds.to(device, non_blocking=True)
                 scene_ids = scene_ids.to(device, non_blocking=True)
@@ -505,8 +556,10 @@ def run(
             if channel_dropout_p > 0.0:
                 # eeg: [B, T, C, W]. Zero entire (window, channel) tiles.
                 mask = (
-                    torch.rand(eeg.shape[0], eeg.shape[1], eeg.shape[2], 1,
-                               device=eeg.device) > channel_dropout_p
+                    torch.rand(
+                        eeg.shape[0], eeg.shape[1], eeg.shape[2], 1, device=eeg.device
+                    )
+                    > channel_dropout_p
                 )
                 eeg = eeg * mask
 
@@ -522,14 +575,17 @@ def run(
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
-            pbar.set_postfix({
-                "loss": f"{loss.item():.4f}",
-                "e2v":  f"{loss_dict['clip_top1_e2v']:.3f}",
-                "v2e":  f"{loss_dict['clip_top1_v2e']:.3f}",
-            })
+            pbar.set_postfix(
+                {
+                    "loss": f"{loss.item():.4f}",
+                    "e2v": f"{loss_dict['clip_top1_e2v']:.3f}",
+                    "v2e": f"{loss_dict['clip_top1_v2e']:.3f}",
+                }
+            )
 
             if wandb_run:
                 import wandb
+
                 wandb.log(
                     {f"train_step/{k}": float(v) for k, v in loss_dict.items()},
                     step=global_step,
@@ -549,13 +605,14 @@ def run(
             }
             if wandb_run:
                 import wandb
+
                 wandb.log(epoch_metrics, step=global_step)
             log_epoch(
                 epoch,
                 {
                     "loss": loss.item(),
-                    "e2v":  loss_dict["clip_top1_e2v"],
-                    "v2e":  loss_dict["clip_top1_v2e"],
+                    "e2v": loss_dict["clip_top1_e2v"],
+                    "v2e": loss_dict["clip_top1_v2e"],
                 },
                 total_epochs=cfg.optim.epochs,
             )
@@ -563,16 +620,22 @@ def run(
         # Per-epoch val diagnostics (recipe-mode only).
         if val_loader is not None and (epoch % val_every == 0):
             val_metrics = evaluate_recipe(
-                model, val_loader, device,
+                model,
+                val_loader,
+                device,
                 max_windows=int(cfg.eval.val_max_windows),
             )
             if val_metrics:
                 logger.info(
-                    "val/ep%d: %s", epoch,
-                    " ".join(f"{k.split('/')[-1]}={v:.3f}" for k, v in val_metrics.items()),
+                    "val/ep%d: %s",
+                    epoch,
+                    " ".join(
+                        f"{k.split('/')[-1]}={v:.3f}" for k, v in val_metrics.items()
+                    ),
                 )
                 if wandb_run:
                     import wandb
+
                     wandb.log(val_metrics, step=global_step)
 
         save_checkpoint(
@@ -595,6 +658,7 @@ def run(
 
     if wandb_run:
         import wandb
+
         wandb.finish()
 
     logger.info("CLIP pretraining complete!")
