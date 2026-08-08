@@ -39,7 +39,10 @@ for S in "${NESTED_S[@]}"; do
     N=$((N + 1))
     echo "[$N] S=$S A=$ANCHORS draw=$D"
     if [ -z "${DRY:-}" ]; then
-        SUBJECTS="$S" ANCHORS="$ANCHORS" DRAW="$D" sbatch "$SBATCH"
+        # Per-cell job name: squeue is unreadable when 13 rows share one name,
+        # and it is what makes `scancel --name=<cell>` target a single cell.
+        SUBJECTS="$S" ANCHORS="$ANCHORS" DRAW="$D" \
+            sbatch --job-name="e04_s${S}_d${D}" "$SBATCH"
         sleep 2   # stagger: avoids wandb-init and file-creation races
     fi
   done
@@ -49,7 +52,8 @@ done
 N=$((N + 1))
 echo "[$N] S=$FULL_POOL_S A=$ANCHORS draw=none (whole pool)"
 if [ -z "${DRY:-}" ]; then
-    SUBJECTS="$FULL_POOL_S" ANCHORS="$ANCHORS" sbatch "$SBATCH"
+    SUBJECTS="$FULL_POOL_S" ANCHORS="$ANCHORS" \
+        sbatch --job-name="e04_s${FULL_POOL_S}" "$SBATCH"
 fi
 
 echo "Submitted $N jobs."
