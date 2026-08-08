@@ -83,6 +83,12 @@ CKPT_ROOT = "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling"
 # experiments/clip_pretraining/scene_clip_from_checkpoint/prepare_reve_checkpoint.py.
 REVE_CKPT = "/work/hdd/bbnv/kkokate/eb_jepa/reve_base_eet_init.pth.tar"
 
+# On this account uv lives inside the conda env rather than ~/.local/bin, and the
+# generated batch script sources no shell profile, so the compute node starts with
+# a bare PATH. Without this every stage dies instantly with "uv: command not found"
+# and the job still exits 0, which reads as a 7-second success in sacct.
+PATH_EXPORT = 'export PATH="$HOME/.conda/envs/eb_jepa/bin:$HOME/.local/bin:$PATH"'
+
 # jul7 best from-scratch (RESULTS_jul7.md 3.4): TP-only soft target, tau=0.05.
 ARM = "soft_target_clip"
 ALPHA = 0.5
@@ -211,6 +217,7 @@ def build_job(
         partition=partition,
         time_limit=time_limit,
         command=(
+            f"{PATH_EXPORT} && "
             f"mkdir -p {exp_dir} && "
             f"cp experiments/snr_scaling/clip_pretrain_reve.yaml {exp_dir}/config.yaml && "
             f'PYTHONPATH=. uv run --group eeg python -c "{patch}" && '
@@ -249,6 +256,10 @@ def build_job(
         branch="",
         env_vars={
             "WANDB_PROJECT": "eb_jepa",
+            # uv hardlinks fail across Delta's filesystems, and the cells share one
+            # .venv: run `uv sync --group eeg` once before submitting so concurrent
+            # jobs read a warm venv instead of each rebuilding eb-jepa into it.
+            "UV_LINK_MODE": "copy",
             # The unified root (R1-R6 symlinked, R7-R10 real) only when
             # extended; otherwise the original root, so existing cells stay
             # bit-comparable. The extended tree belongs to another user but is
