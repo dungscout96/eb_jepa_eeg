@@ -214,7 +214,14 @@ def main() -> None:
         help="Actually run the probes (otherwise select and report).",
     )
     p.add_argument("--output", default=str(RAW_DIR / "e03_selection.json"))
+    p.add_argument(
+        "--ckpt-root",
+        default=CKPT_ROOT,
+        help="Cell directory root. Override for E0.4, whose full-REVE cells "
+        "live under a different tree; the default keeps E0.3 reproducing.",
+    )
     args = p.parse_args()
+    ckpt_root = args.ckpt_root
 
     if args.cells_glob:
         # Discover slugs from disk. Enumerating them instead would mean keeping
@@ -222,7 +229,7 @@ def main() -> None:
         # a cell that failed to produce a directory -- the glob makes a missing
         # cell visible as a missing row.
         slugs = sorted(
-            (Path(d).name for d in glob.glob(f"{CKPT_ROOT}/{args.cells_glob}")),
+            (Path(d).name for d in glob.glob(f"{ckpt_root}/{args.cells_glob}")),
             key=lambda n: (int(re.search(r"_s(\d+)_", n).group(1)), n),
         )
         if not slugs:
@@ -237,7 +244,7 @@ def main() -> None:
         f"{'sel_ep':>8}{'snap':>6}"
     )
     for slug in slugs:
-        info = select_epoch(Path(CKPT_ROOT) / slug, args.key)
+        info = select_epoch(Path(ckpt_root) / slug, args.key)
         sel[slug] = info
         if "error" in info and "selected_epoch" not in info:
             print(f"  {slug:<26}  {info['error']}")
@@ -272,7 +279,7 @@ def main() -> None:
             "--checkpoint",
             info["checkpoint"],
             "--config",
-            f"{CKPT_ROOT}/{slug}/config_probe.yaml",
+            f"{ckpt_root}/{slug}/config_probe.yaml",
             "--split",
             "val",
             "--cv-splits",
