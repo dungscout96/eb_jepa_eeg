@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --gpus-per-task=1
 #SBATCH --mem=32G
-#SBATCH --time=02:00:00
+#SBATCH --time=04:00:00
 #SBATCH --output=logs/e04_readout_%j.out
 #SBATCH --error=logs/e04_readout_%j.err
 # ---------------------------------------------------------------
@@ -16,6 +16,11 @@
 # Run select_and_probe_e03.py --ckpt-root <e04 root> FIRST: the checkpoint must
 # be the epoch chosen by the smoothed val diagnostic, not latest.pth.tar.
 # Probing the endpoint instead is the bias RESULTS.md 2.10 documents.
+#
+# Time limit 04:00:00 (this account's A40 cap, delta-deploy SKILL.md 3). Measured:
+# ~45 min per stage, and BOTH probe_traintest calls re-encode the full 1863-
+# recording train pool to fit the head, so the four stages run ~2h45 -- a 2h
+# limit times out after stage 2 with no retrieval number.
 #
 # Required env vars:
 #   SLUG (e.g. e04_s701_a101_nd_d11)
