@@ -74,14 +74,27 @@ fi
 
 mkdir -p "$OUT" logs
 
+# Each stage is skipped when its output already exists, so a job killed at the
+# walltime resumes instead of recomputing ~1.5 h of finished readouts. Set
+# FORCE=1 to recompute regardless.
+have() { [ -z "${FORCE:-}" ] && [ -s "$1" ]; }
+
 # (1) 12-feature CV probe on val -- the Δr² readout.
-PYTHONPATH=. uv run --group eeg python eb_jepa/evaluation/clip_probe/probe.py \
-    --checkpoint "$CKPT" --config "$CONFIG" \
-    --split val --cv-splits 5 \
-    --output "${OUT}/e04_probe_val_${SLUG}.json"
+if have "${OUT}/e04_probe_val_${SLUG}.json"; then
+    echo "skip probe_val (exists)"
+else
+    PYTHONPATH=. uv run --group eeg python eb_jepa/evaluation/clip_probe/probe.py \
+        --checkpoint "$CKPT" --config "$CONFIG" \
+        --split val --cv-splits 5 \
+        --output "${OUT}/e04_probe_val_${SLUG}.json"
+fi
 
 # (2) train->test ridge probe, both splits, with bootstrap CIs.
 for SPLIT in val test; do
+    if have "${OUT}/e04_tt_${SPLIT}_${SLUG}.json"; then
+        echo "skip tt_${SPLIT} (exists)"
+        continue
+    fi
     PYTHONPATH=. uv run --group eeg python \
         eb_jepa/evaluation/clip_probe/probe_traintest.py \
         --checkpoint "$CKPT" --config "$CONFIG" \
@@ -92,11 +105,15 @@ done
 # (3) Scene-level retrieval, TEST only: a random encoder scores 3.79x chance at
 # scene level on val while sitting below chance on test, so val invites a
 # wrong read.
-PYTHONPATH=. uv run --group eeg python \
-    eb_jepa/evaluation/clip_probe/retrieval.py \
-    --checkpoint "$CKPT" --config "$CONFIG" \
-    --split test --topks 1 5 10 \
-    --output "${OUT}/e04_retr_test_${SLUG}.json"
+if have "${OUT}/e04_retr_test_${SLUG}.json"; then
+    echo "skip retr_test (exists)"
+else
+    PYTHONPATH=. uv run --group eeg python \
+        eb_jepa/evaluation/clip_probe/retrieval.py \
+        --checkpoint "$CKPT" --config "$CONFIG" \
+        --split test --topks 1 5 10 \
+        --output "${OUT}/e04_retr_test_${SLUG}.json"
+fi
 
 for f in "${OUT}/e04_probe_val_${SLUG}.json" "${OUT}/e04_tt_val_${SLUG}.json" \
          "${OUT}/e04_tt_test_${SLUG}.json" "${OUT}/e04_retr_test_${SLUG}.json"; do
