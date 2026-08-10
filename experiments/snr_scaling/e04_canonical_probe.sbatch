@@ -29,8 +29,13 @@
 # corrca_filters=null, and probe_eval pools with keep_channels=False, giving a
 # 512-d readout rather than the guide's 320-d CorrCA-5 default.
 #
+# N_PASSES defaults to the protocol's 20. Set it lower ONLY to validate the path
+# or measure cost: evaluation_guide fixes n_passes=20 for any reported number.
+#
 # Required env vars:
 #   SLUG, CKPT
+# Optional:
+#   N_PASSES, TAG (output suffix, so a validation run cannot overwrite a real one)
 # ---------------------------------------------------------------
 
 set -euo pipefail
@@ -66,7 +71,8 @@ export WANDB_DISABLED=true
 CKPT_ROOT=/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling
 CONFIG="${CKPT_ROOT}/${SLUG}/config_probe.yaml"
 OUT=experiments/snr_scaling/raw_results
-PRED="${CKPT_ROOT}/${SLUG}/canonical_preds"
+TAG="${TAG:-}"
+PRED="${CKPT_ROOT}/${SLUG}/canonical_preds${TAG}"
 
 echo "Job $SLURM_JOB_ID  Node: $SLURM_NODELIST"
 echo "cfg: slug=${SLUG} ckpt=${CKPT}"
@@ -85,18 +91,18 @@ PYTHONPATH=. uv run --group eeg python -m eb_jepa.evaluation.probe_eval \
     --window_size_seconds=2 \
     --norm_mode=per_recording \
     --corrca_filters= \
-    --n_passes=20 \
+    --n_passes="${N_PASSES:-20}" \
     --probe_seed=42 \
     --save_predictions_dir="$PRED" \
-    --out_json="${OUT}/e04_canonical_${SLUG}.json"
+    --out_json="${OUT}/e04_canonical_${SLUG}${TAG}.json"
 
 # Bootstrap is mandatory (evaluation_guide.md 3): a bare L1 is diagnostic only.
 PYTHONPATH=. uv run --group eeg python -m eb_jepa.evaluation.bootstrap \
     --predictions_npz="${PRED}/test_seed42.npz" \
-    --out_json="${OUT}/e04_canonical_boot_${SLUG}.json" \
+    --out_json="${OUT}/e04_canonical_boot_${SLUG}${TAG}.json" \
     --n_bootstrap=2000
 
-for f in "${OUT}/e04_canonical_${SLUG}.json" "${OUT}/e04_canonical_boot_${SLUG}.json"; do
+for f in "${OUT}/e04_canonical_${SLUG}${TAG}.json" "${OUT}/e04_canonical_boot_${SLUG}${TAG}.json"; do
     if [ ! -f "$f" ]; then echo "ERROR: missing $f" >&2; exit 1; fi
 done
 
