@@ -21,7 +21,7 @@
 # Optional:
 #   DRAW (int)      — data.subsample_seed. Omit for the S=1863 whole-pool cell,
 #                     which has only one possible draw.
-#   EPOCHS, SAVE_EVERY, SUFFIX, INIT_CKPT
+#   EPOCHS, SAVE_EVERY, SUFFIX, INIT_CKPT, SEED
 #
 # Time limit: measured ~10 s/epoch steady state, ~80 min for 400 epochs.
 # 03:00:00 clears the guide's 1.5x safety margin; 04:00:00 is this account's cap.
@@ -39,6 +39,11 @@ if [ -z "${ANCHORS:-}" ]; then
 fi
 
 EPOCHS="${EPOCHS:-400}"
+# meta.seed is 2026 for every cell by protocol: only the COHORT varies, via
+# data.subsample_seed, so model init and batch order are held fixed. Override
+# only to rescue a cell whose optimisation failed to leave chance -- a dead run
+# is not a sample of that cohort, and the override must be recorded.
+SEED="${SEED:-2026}"
 SAVE_EVERY="${SAVE_EVERY:-25}"
 SUFFIX="${SUFFIX:-_nd}"
 INIT_CKPT="${INIT_CKPT:-/work/hdd/bbnv/kkokate/eb_jepa/reve_base_eet_init.pth.tar}"
@@ -74,7 +79,7 @@ fi
 EXP_DIR="/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/${EXP_ID}"
 
 echo "Job $SLURM_JOB_ID  Node: $SLURM_NODELIST  Cell: $EXP_ID"
-echo "cfg: S=${SUBJECTS} A=${ANCHORS} draw=${DRAW:-none} epochs=${EPOCHS} init=${INIT_CKPT}"
+echo "cfg: S=${SUBJECTS} A=${ANCHORS} draw=${DRAW:-none} epochs=${EPOCHS} seed=${SEED} init=${INIT_CKPT}"
 
 mkdir -p logs "$EXP_DIR"
 
@@ -115,7 +120,7 @@ OmegaConf.save(c, '${EXP_DIR}/config_probe.yaml')
 PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.clip_pretrain \
     --fname="${EXP_DIR}/config.yaml" \
     --optim.epochs="${EPOCHS}" \
-    --meta.seed=2026 \
+    --meta.seed="${SEED}" \
     --meta.encoder_init_from="${INIT_CKPT}" \
     --folder="${EXP_DIR}" \
     --logging.save_every="${SAVE_EVERY}" \
