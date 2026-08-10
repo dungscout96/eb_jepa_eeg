@@ -79,9 +79,15 @@ mkdir -p "$OUT" logs
 # FORCE=1 to recompute regardless.
 have() { [ -z "${FORCE:-}" ] && [ -s "$1" ]; }
 
+# STAGE selects which readout this job computes. One stage per job keeps each
+# under ~1 h, which backfills into scheduler gaps; the monolithic 4 h form sat
+# unstarted for 6.5 h behind a 1500-job queue. STAGE=all keeps the old behaviour.
+STAGE="${STAGE:-all}"
+want() { [ "$STAGE" = "all" ] || [ "$STAGE" = "$1" ]; }
+
 # (1) 12-feature CV probe on val -- the Δr² readout.
-if have "${OUT}/e04_probe_val_${SLUG}.json"; then
-    echo "skip probe_val (exists)"
+if ! want probe_val || have "${OUT}/e04_probe_val_${SLUG}.json"; then
+    echo "skip probe_val"
 else
     PYTHONPATH=. uv run --group eeg python eb_jepa/evaluation/clip_probe/probe.py \
         --checkpoint "$CKPT" --config "$CONFIG" \
@@ -91,8 +97,8 @@ fi
 
 # (2) train->test ridge probe, both splits, with bootstrap CIs.
 for SPLIT in val test; do
-    if have "${OUT}/e04_tt_${SPLIT}_${SLUG}.json"; then
-        echo "skip tt_${SPLIT} (exists)"
+    if ! want "tt_${SPLIT}" || have "${OUT}/e04_tt_${SPLIT}_${SLUG}.json"; then
+        echo "skip tt_${SPLIT}"
         continue
     fi
     PYTHONPATH=. uv run --group eeg python \
@@ -105,8 +111,8 @@ done
 # (3) Scene-level retrieval, TEST only: a random encoder scores 3.79x chance at
 # scene level on val while sitting below chance on test, so val invites a
 # wrong read.
-if have "${OUT}/e04_retr_test_${SLUG}.json"; then
-    echo "skip retr_test (exists)"
+if ! want retr_test || have "${OUT}/e04_retr_test_${SLUG}.json"; then
+    echo "skip retr_test"
 else
     PYTHONPATH=. uv run --group eeg python \
         eb_jepa/evaluation/clip_probe/retrieval.py \
@@ -115,9 +121,14 @@ else
         --output "${OUT}/e04_retr_test_${SLUG}.json"
 fi
 
-for f in "${OUT}/e04_probe_val_${SLUG}.json" "${OUT}/e04_tt_val_${SLUG}.json" \
-         "${OUT}/e04_tt_test_${SLUG}.json" "${OUT}/e04_retr_test_${SLUG}.json"; do
-    if [ ! -f "$f" ]; then
+if [ "$STAGE" = "all" ]; then
+    CHECK=("${OUT}/e04_probe_val_${SLUG}.json" "${OUT}/e04_tt_val_${SLUG}.json"
+           "${OUT}/e04_tt_test_${SLUG}.json" "${OUT}/e04_retr_test_${SLUG}.json")
+else
+    CHECK=("${OUT}/e04_${STAGE}_${SLUG}.json")
+fi
+for f in "${CHECK[@]}"; do
+    if [ ! -s "$f" ]; then
         echo "ERROR: missing readout $f" >&2
         exit 1
     fi
