@@ -178,6 +178,11 @@ def main() -> None:
                         "lists, e.g. 'e03_s*_a101_nd*'. Needed for replicate "
                         "sweeps where the slug carries a draw seed.")
     p.add_argument("--key", default=SELECT_KEY)
+    p.add_argument("--skip-existing", action="store_true",
+                   help="Skip cells whose probe output already exists. Makes a "
+                        "broad --cells-glob idempotent: the glob that matches "
+                        "new cells also matches already-probed ones, and "
+                        "re-probing those is pure waste.")
     p.add_argument("--probe", action="store_true",
                    help="Actually run the probes (otherwise select and report).")
     p.add_argument("--output", default="experiments/snr_scaling/e03_selection.json")
@@ -224,6 +229,9 @@ def main() -> None:
             print(f"SKIP {slug}: {info.get('error')}")
             continue
         out = OUT_DIR / f"e03_probe_val_{slug}_best.json"
+        if args.skip_existing and out.exists():
+            print(f"SKIP {slug}: {out.name} already exists")
+            continue
         cmd = [
             "uv", "run", "--group", "eeg", "python",
             "eb_jepa/evaluation/clip_probe/probe.py",

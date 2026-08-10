@@ -61,24 +61,26 @@ the record of what has been measured. Commits `b4492fe`, `6dd992d`, `fdf0b3b`.
    a 3 % difference — and the δ/θ-over-α ratio replicates at 3.06 vs 2.84. The
    cohorts are 98.9 % shared, so stimulus is the only thing varying. Say
    "replicates across movies within HBN," not "replicates."
-11. **The 12-feature linear probe saturates at ~700 subjects; CLIP-space
-   retrieval does not** (§2.11, §2.12). With nested draws, 3 draws per S and
-   smoothed selection, Δr² rises steeply to 701 (exponent **+0.441**, 8 sd) then
-   flattens. **Three scalar readouts agree** — CV-val Δr² **+4.9 %**,
-   train→test val *r* **+2.5 %**, train→test **test** *r* **+1.9 %** over
-   701 → 1863 — while **e→v scene retrieval gains +26 % (top-1) / +18 %
-   (top-5)** on the same checkpoints and the same test split. The split is by
-   *readout*, not by split, so never write "the subject axis saturates" without
-   naming the metric. Caveat: R7–R10 subjects are worth **8–15 % less** than
-   R1–R4 at matched count, so part of the probe flattening may be dilution.
-12. **Anchors stay flat, and subjects beat anchors at matched budget** (§2.10).
+11. **Learning starts below 10 subjects and has no knee; the probe saturates at ~700 while
+   retrieval does not** (§2.11–§2.13). Down at the bottom, *every* cell at *every* S ≥ 10
+   clears random on all three draws, on both the probe and retrieval — onset is **gradual,
+   not a threshold**, so "how many subjects before it works" has no threshold answer on this
+   recipe. At the top the two readouts split: over 701 → 1863 the scalar readouts gain
+   **+2–5 %** (CV-val Δr² +4.9 %, train→test test *r* +1.9 %) while e→v scene retrieval gains
+   **+18–26 %**. Onset is a property of the data; saturation is a property of the *readout* —
+   never write "the subject axis saturates" without naming the metric. Caveat: R7–R10
+   subjects are worth **8–15 % less** than R1–R4 at matched count.
+12. **v→e retrieval is at chance at every subject count tested** (§2.13). 1.00× at S=10 and
+   1.00× at S=1863 — 186× more subjects moves it not at all, so the modality-gap failure is
+   **not a data-quantity problem** and will not be fixed by collecting more people.
+13. **Anchors stay flat, and subjects beat anchors at matched budget** (§2.10).
    Δr² is flat in anchors (**−0.007** over A=50→101), and subject-heavy beats
    anchor-heavy **4/4, median 1.30×** at a matched (subjects × anchors) budget —
    model-free, and stable under every protocol tried. Two measurement problems
    were found and corrected en route: the "overfitting worsens with less data"
    motivation was an artifact of `argmax`-ing a 29-window AUC (§2.10 protocol
    note), and the S-axis draws were originally not nested (§2.11).
-13. Two artifacts found and fixed that would have corrupted the headline: a flat
+14. Two artifacts found and fixed that would have corrupted the headline: a flat
    reference channel faking ISC ≈ 0.4, and CorrCA component 1 failing to
    generalise despite the largest in-sample eigenvalue — the latter now known to
    be **rank-unstable across movies** (§2.9), which is a stronger reason to avoid
@@ -848,6 +850,65 @@ on two splits and two protocols. It does **not** hold for retrieval, which keeps
 improving to 1863. The honest headline is narrower than "the subject axis
 saturates at ~700": scalar-feature readout saturates there; CLIP-space retrieval
 does not.
+
+### 2.13 Low-S: learning starts below 10 subjects, and there is no knee
+
+15 further cells at **S ∈ {10, 20, 50, 100, 200} × 3 draws**, nesting into the existing
+curve (10 ⊂ 20 ⊂ … ⊂ 1400, verified per seed), same protocol throughout: extended 1863 pool,
+`epoch_size=703` so all cells run 4400 steps, `save_every=25`.
+
+**Threshold pre-registered before looking:** a cell *learns* at S if **all three draws
+individually** beat the matched random baseline. This asks where learning is *reliable*, not
+merely possible, and cannot be carried by one lucky cohort. Only readouts with 3 draws can
+set it — the CV-val probe and retrieval. `probe_traintest` ran at 1 draw per S and is
+**corroborating only**.
+
+| S | probe Δr² | sd | retrieval scene e→v top-1 (test) | sd | × random |
+|---:|---:|---:|---:|---:|---:|
+| 10 | 0.00414 | 0.00075 | 0.0502 | 0.0054 | 3.44 |
+| 20 | 0.00441 | 0.00061 | 0.0546 | 0.0050 | 3.75 |
+| 50 | 0.00941 | 0.00040 | 0.0631 | 0.0020 | 4.33 |
+| 100 | 0.01667 | 0.00172 | 0.0737 | 0.0045 | 5.06 |
+| 200 | 0.02480 | 0.00043 | 0.0800 | 0.0073 | 5.49 |
+| 400 | 0.03434 | 0.00057 | 0.1063 | — | 7.30 |
+
+> **Every cell at every S clears the bar, including S=10 — on both instruments,
+> all three draws.** The learning threshold is *below the tested range*. Corroborated by
+> `probe_traintest` on test: *r* = 0.1078 at S=10 against a random baseline of 0.1022.
+
+**There is no knee at the bottom.** Both curves rise smoothly and monotonically from 10 to
+1400; learning onset is **gradual, not a phase transition**. So "how many subjects before it
+works" has no threshold answer on this recipe — the honest form is a rate: Δr² roughly
+doubles from S=10 to S=50 and again from 50 to 200.
+
+**Probe and retrieval agree here**, which is worth stating because they *disagree* about
+saturation (§2.12). Onset is a property of the data; saturation is a property of the readout.
+
+**The one place the low-S cells differ methodologically.** At S ≤ 200 the smoothed val
+diagnostic is **flat** — no peak to select. Trajectories (smoothed, window 25):
+
+| cell | @50 | @150 | @250 | @325 |
+|---|---:|---:|---:|---:|
+| S=10 d11 | 0.5563 | 0.5658 | 0.5454 | 0.5460 |
+| S=200 d11 | 0.6437 | 0.6850 | 0.6538 | 0.6576 |
+| **S=400 d11** | 0.6300 | 0.7094 | 0.7219 | **0.7544** |
+
+At S≥400 the curve rises monotonically and smoothed argmax lands on epoch 330 every time; at
+S≤200 it wanders inside ~0.05 and argmax lands arbitrarily (25, 98, 118, 135, 154, 166, 197,
+225, 254, 294). **This does not distort the result** — the three S=50 draws selected epochs
+30, 25 and 254 yet scored 0.0098 / 0.0090 / 0.0095, so the probe is insensitive to epoch in
+that range, exactly as a flat curve implies. But it means an early selected epoch at low S is
+*not* evidence of a cell failing to learn, and should not be read that way.
+
+**That flatness is itself informative:** at S≤20 the diagnostic does not improve over training
+at all (S=10 d11 ends *below* where it started), while at S=400 it climbs throughout. The
+model extracts what little it can from 10 subjects almost immediately and then stops
+improving.
+
+**v→e remains at chance at every S.** 1.00× at 10 subjects and 1.00× at 1863 (occasional
+2.00× on single draws is within the granularity of a 35-entry pool). Since 186× more subjects
+moves it not at all, **the v→e failure is not a data-quantity problem** and will not be fixed
+by collecting more people — the most actionable negative in this section.
 
 ## §3. Two artifacts that would have corrupted the headline
 
