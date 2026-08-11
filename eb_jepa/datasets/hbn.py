@@ -86,7 +86,7 @@ else:
             "R3": "ds005507",  # 184 subjects
             "R4": "ds005508",  # 324 subjects
         },
-        "val": {"R5": "ds005509"},  # 136 subjects
+        "val": {"R5": "ds005509"},  # 330 subjects
         "test": {"R6": "ds005510"},  # 134 subjects
     }
 
