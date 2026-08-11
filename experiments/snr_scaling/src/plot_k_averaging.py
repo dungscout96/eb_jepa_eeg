@@ -37,7 +37,10 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parent          # experiments/snr_scaling/src
+ROOT = HERE.parent                              # experiments/snr_scaling
+RAW = ROOT / "raw_results"                      # measured JSONs
+FIGS = ROOT / "figures"                         # rendered figures
 
 # Reference categorical palette, light mode (see references/palette.md).
 BLUE = "#2a78d6"      # slot 1 -- the measured / headline curve
@@ -69,7 +72,7 @@ def _style(ax):
 
 
 def main() -> None:
-    d = json.loads((HERE / "k_averaging_val.json").read_text())
+    d = json.loads((RAW / "k_averaging_val.json").read_text())
     ks = d["ks"]
     emp = d["empirical_reliability"]
     emb = d["probe_r_embedding_space"]
@@ -165,8 +168,8 @@ def main() -> None:
         color=INK, fontsize=11.5, y=0.99, x=0.008, ha="left")
     fig.tight_layout(rect=(0, 0, 1, 0.94))
     for ext in ("png", "pdf"):
-        fig.savefig(HERE / f"k_averaging.{ext}", dpi=200, facecolor=SURFACE)
-    print(f"Wrote {HERE}/k_averaging.{{png,pdf}}")
+        fig.savefig(FIGS / f"k_averaging.{ext}", dpi=200, facecolor=SURFACE)
+    print(f"Wrote {FIGS}/k_averaging.{{png,pdf}}")
     print(f"  (a) measured R(1)={r1:.4f}; measured/predicted ratio at K={k_meas[-1]}: "
           f"{y_meas[-1] / y_pred[-1]:.3f}")
     print(f"  (b) embedding {y_emb[0]:.3f} -> {y_emb[-1]:.3f} "

@@ -18,8 +18,8 @@ The headline quantity is a **subject-scaling exponent** `dr / d log S` compared
 *across objectives*, not an absolute *r*. See "Related work — the delta" below
 for why the exponent, not the curve, has to be the contribution.
 
-Calculator: [`scaling_calculator.py`](scaling_calculator.py) →
-[`snr_scaling.png`](snr_scaling.png).
+Calculator: [`src/scaling_calculator.py`](src/scaling_calculator.py) →
+[`figures/snr_scaling.png`](figures/snr_scaling.png).
 
 ---
 

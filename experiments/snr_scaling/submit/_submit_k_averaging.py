@@ -12,8 +12,8 @@ Defaults to the **val** split (293 subjects), not test:
     downward-biased by CorrCA fit-set size (RESULTS.md 2.5).
 
 Usage:
-    uv run --group eeg python experiments/snr_scaling/_submit_k_averaging.py         # dry run
-    uv run --group eeg python experiments/snr_scaling/_submit_k_averaging.py submit
+    uv run --group eeg python experiments/snr_scaling/submit/_submit_k_averaging.py         # dry run
+    uv run --group eeg python experiments/snr_scaling/submit/_submit_k_averaging.py submit
 """
 import argparse
 import sys
@@ -22,7 +22,7 @@ from neurolab.jobs import Job
 
 REPO = "/u/dtyoung/eb_jepa_eeg"
 OUT_DIR = "/work/hdd/bbnv/dtyoung/eb_jepa/snr_scaling"
-RESULTS_DIR = "experiments/snr_scaling"
+RESULTS_DIR = "experiments/snr_scaling/raw_results"   # jobs write measured JSONs straight here
 
 # jul7 best from-scratch: soft-target tau=0.05, TP-only, seed 2026
 # (RESULTS_jul7.md 3.4 -- test mean r = 0.1517).
@@ -44,7 +44,7 @@ def build_job(split: str, ks: str, n_draws: int, seed: int, partition: str,
     cmd = (
         f"mkdir -p {OUT_DIR} && "
         "PYTHONPATH=. uv run --group eeg python "
-        "experiments/snr_scaling/k_averaging.py "
+        "experiments/snr_scaling/src/k_averaging.py "
         f"--checkpoint {EXP}/latest.pth.tar --config {EXP}/config_TP.yaml "
         f"--eval-split={split} --device=cuda "
         f"--ks {ks} --n-draws={n_draws} --seed={seed} {cap}{skip}"

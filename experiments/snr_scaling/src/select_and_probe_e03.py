@@ -22,7 +22,7 @@ val. These are different metrics on overlapping data, so this is early stopping
 on validation -- standard, but not free. The clean version selects on val and
 reports on test; worth doing before the number goes in a paper.
 
-    uv run --group eeg python experiments/snr_scaling/select_and_probe_e03.py \
+    uv run --group eeg python experiments/snr_scaling/src/select_and_probe_e03.py \
         --suffix=_es --probe
 """
 
@@ -37,7 +37,7 @@ import sys
 from pathlib import Path
 
 CKPT_ROOT = "/work/hdd/bbnv/dtyoung/eb_jepa/e03_scaling"
-OUT_DIR = Path("experiments/snr_scaling")
+OUT_DIR = Path("experiments/snr_scaling/raw_results")   # jobs write measured JSONs straight here   # repo-relative; jobs run from the repo root
 SELECT_KEY = "val/clip_scene_auc"
 # Rolling window for smoothing the selection metric, ~ the checkpoint spacing.
 SMOOTH_WINDOW = 25

@@ -28,7 +28,7 @@ stimulus-general or movie-specific.
 |---|---|
 | Checkpoints | E0.3 cells, TP-trained, epoch 325 (smoothed selection), one draw per S |
 | DM data | train 1841 (R1–R4 + R7–R10), val 299 after filtering, test 108 |
-| Eval config | one shared `config_probe_DM.yaml` — `data.task=DespicableMe`, scaling knobs cleared |
+| Eval config | one shared `config/config_probe_DM.yaml` — `data.task=DespicableMe`, scaling knobs cleared |
 | Features | all 12 present in DM's parquet, none constant (checked against TP) |
 
 **Two readouts, deliberately answering different questions:**
@@ -144,6 +144,6 @@ subject-scaling is only sampled at two points.
 
 - `raw_results/xtask_probe_DMval_*.json` — CV probe on DM val, 10 TP cells + random + 2 DM-native
 - `raw_results/xtask_retr_DMtest_*.json` — zero-shot retrieval on DM test, same set
-- `config_probe_DM.yaml` — the shared eval config all of the above used
+- `config/config_probe_DM.yaml` — the shared eval config all of the above used
 - DM-native checkpoints: `/work/hdd/bbnv/dtyoung/eb_jepa/e03_scaling/e03_s{701,1841}_a85_dm/`
 - Submitted via `_submit_e03.py --dm-reference` (adds `--task`, `DM_CELLS`)

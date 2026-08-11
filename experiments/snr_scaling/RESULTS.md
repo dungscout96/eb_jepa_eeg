@@ -344,7 +344,7 @@ Top-K retrieval from
 — by pooling more EEG into the **query** while holding the candidate pool
 byte-identical. Same centroids, same N, so chance stays `K/N` and every row is
 comparable. Implementation:
-[`aggregation_curves.py`](aggregation_curves.py).
+[`src/aggregation_curves.py`](src/aggregation_curves.py).
 
 Three regimes, in increasing order of what they assume:
 
@@ -447,12 +447,12 @@ first guesses landing on one pool entry is not visible in Top-K.
 
 Job 20654647, R5 val, 293 subjects, 101 anchors, 20 draws per K, best
 from-scratch checkpoint (soft τ=0.05 seed 2026). Ridge heads fit on the full
-train split. Artifacts: [`k_averaging_val.json`](k_averaging_val.json), code
-[`k_averaging.py`](k_averaging.py), figure
-[`k_averaging.png`](k_averaging.png) / [`.pdf`](k_averaging.pdf) via
-[`plot_k_averaging.py`](plot_k_averaging.py).
+train split. Artifacts: [`raw_results/k_averaging_val.json`](raw_results/k_averaging_val.json), code
+[`src/k_averaging.py`](src/k_averaging.py), figure
+[`figures/k_averaging.png`](figures/k_averaging.png) / [`.pdf`](figures/k_averaging.pdf) via
+[`src/plot_k_averaging.py`](src/plot_k_averaging.py).
 
-![K-averaging curves](k_averaging.png)
+![K-averaging curves](figures/k_averaging.png)
 
 *Panel (a) tests SHAPE only: the prediction is anchored at the measured R(1),
 so K=1 agrees by construction. Panel (b)'s ceiling uses the E0.1 CorrCA
@@ -543,7 +543,7 @@ across movies within HBN," not "replicates."
 **Do not pair the DM ceiling with any TP probe number.** No probe has been
 trained or evaluated on DespicableMe, so there is no CC_norm for this column.
 The first DM run printed one anyway, because `OBSERVED_PROBE_R` in
-[`measure_isc.py`](measure_isc.py) is hardcoded to R6-test/ThePresent values —
+[`src/measure_isc.py`](src/measure_isc.py) is hardcoded to R6-test/ThePresent values —
 the same split-mismatch class of error as §2.2, now in the task axis too. The
 script now refuses to emit CC_norm unless the run's `(split, task)` matches
 where those probe numbers came from, with tests covering all three mismatch
@@ -620,7 +620,7 @@ SNR-combined statistics used throughout are unaffected.
 gradient steps** — `data.epoch_size=703` fixes steps/epoch at 11 regardless of
 how many subjects survive, so data scale is never confounded with optimisation
 budget. **Every cell is evaluated on the identical full val set** (293
-recordings, 29 593 windows), verified in [`analyse_e03.py`](analyse_e03.py)
+recordings, 29 593 windows), verified in [`src/analyse_e03.py`](src/analyse_e03.py)
 rather than assumed.
 
 Metric is **Δr² above a random encoder of identical shape** (measured:
@@ -667,7 +667,7 @@ the anchor-heavy arm it beats. At a fixed data budget, spend it on subjects.
 This is the most robust claim in the section: it held under both protocols
 (median 1.34× endpoint, 1.30× early-stopped) and needs no fitted model.
 
-![E0.3 scaling surface](e03_scaling.png)
+![E0.3 scaling surface](figures/e03_scaling.png)
 
 *(a) plots Δr² **relative to each axis's own full-data value** — absolute Δr²
 would put anchors above subjects everywhere (at A=13 the model still has all 701
@@ -675,7 +675,7 @@ subjects) and a reader would take the higher line for the better axis. The claim
 is about slope, so the level is normalised away; both curves therefore reach 1.0
 by construction and only the shapes are comparable. Error bars are jul7's
 seed noise, not a within-run error. (b) is model-free. Produced by
-[`plot_e03.py`](plot_e03.py).*
+[`src/plot_e03.py`](src/plot_e03.py).*
 
 **The axes are not cleanly separable.** A multiplicative `Δr² ~ S^0.636 · A^0.349`
 anchored at the corner under-predicts every diagonal cell by 5–43 %, so
@@ -1028,12 +1028,12 @@ ssh delta "srun --account=bbnv-delta-gpu --partition=gpuA40x4-interactive \
 Single split directly:
 
 ```bash
-PYTHONPATH=. uv run --group eeg python experiments/snr_scaling/measure_isc.py \
+PYTHONPATH=. uv run --group eeg python experiments/snr_scaling/src/measure_isc.py \
     --split=val --task=ThePresent --n-components=5 --seed=2025 \
     --output=experiments/snr_scaling/isc_val_ThePresent.json
 ```
 
-Batch submission (`_submit_isc.py`) packs both splits into one job. Note it
+Batch submission (`submit/_submit_isc.py`) packs both splits into one job. Note it
 defaults to a **gpu** partition deliberately: `sinfo` lists Delta's `cpu`
 partition but this account holds only `bbnv-delta-gpu`, so a `cpu` submit is
 rejected.
@@ -1043,7 +1043,7 @@ The CorrCA subject split is seeded; re-runs reproduce the numbers exactly.
 Analytic design calculator (no cluster needed):
 
 ```bash
-uv run --group eeg python experiments/snr_scaling/scaling_calculator.py
+uv run --group eeg python experiments/snr_scaling/src/scaling_calculator.py
 ```
 
 Aggregation curves (§2.6, §2.7). Runs locally in seconds — it consumes the
@@ -1055,9 +1055,9 @@ python demo/_submit_export.py interactive
 
 # Then locally, per split:
 PYTHONPATH=. uv run --group eeg python \
-    experiments/snr_scaling/aggregation_curves.py \
+    experiments/snr_scaling/src/aggregation_curves.py \
     --npz demo/data/demo_val.npz \
-    --output experiments/snr_scaling/aggregation_val_ThePresent.json
+    --output experiments/snr_scaling/raw_results/aggregation_val_ThePresent.json
 ```
 
 Subject draws are seeded (`--seed`, default 0); the `n ≤ 16` rows are means over
@@ -1068,7 +1068,7 @@ Subject draws are seeded (`--seed`, default 0); the `n ≤ 16` rows are means ov
 ## §6. Artifacts
 
 **Results:**
-- `k_averaging_val.json` — E0.2: empirical R(K), Spearman-Brown prediction, and
+- `raw_results/k_averaging_val.json` — E0.2: empirical R(K), Spearman-Brown prediction, and
   probe *r* vs K in both embedding- and signal-space.
 - `isc_val_ThePresent.json`, `isc_test_ThePresent.json` — per-channel waveform
   and band ISC, cross-validated CorrCA, all three literature ceilings,
@@ -1076,32 +1076,32 @@ Subject draws are seeded (`--seed`, default 0); the `n ≤ 16` rows are means ov
 - `isc_val_DespicableMe.json` — §2.9, the same-cohort second-movie replication.
   Carries **no** CC_norm by design: `OBSERVED_PROBE_R` is R6-test/ThePresent, so
   the script suppresses it and records `cc_norm_skipped_because` instead.
-- `snr_scaling.png` / `.pdf` — ceiling vs K, and the (anchors × subjects)
+- `figures/snr_scaling.png` / `.pdf` — ceiling vs K, and the (anchors × subjects)
   design space.
-- `k_averaging.png` / `.pdf` — E0.2 two-panel figure (Spearman-Brown
+- `figures/k_averaging.png` / `.pdf` — E0.2 two-panel figure (Spearman-Brown
   validation; probe *r* vs K, embedding- vs signal-space).
 - `e03_probe_val_e03_s*_a*.json` (11 cells) + `e03_probe_val_random.json` — E0.3
   raw probes. `e03_surface.json` — fitted exponents, corner slopes, iso-budget.
-- `e03_scaling.png` / `.pdf` — E0.3 two-panel figure (normalised slope contrast;
+- `figures/e03_scaling.png` / `.pdf` — E0.3 two-panel figure (normalised slope contrast;
   iso-budget dumbbell).
-- `aggregation_val_ThePresent.json`, `aggregation_test_ThePresent.json` — §2.6
+- `raw_results/aggregation_val_ThePresent.json`, `raw_results/aggregation_test_ThePresent.json` — §2.6
   temporal / oracle-segment / n-subject curves at shot and scene level, plus the
   §2.7 modal-answer shares. Produced from the shared-space export, so the
   checkpoint provenance travels inside the file.
 
 **Code:**
-- [`measure_isc.py`](measure_isc.py) — the E0.1 measurement.
-- [`k_averaging.py`](k_averaging.py) + [`_submit_k_averaging.py`](_submit_k_averaging.py)
-  + [`plot_k_averaging.py`](plot_k_averaging.py) — E0.2.
-- [`_submit_e03.py`](_submit_e03.py) + [`analyse_e03.py`](analyse_e03.py)
-  + [`plot_e03.py`](plot_e03.py) — E0.3. Subsampling knobs live in
+- [`src/measure_isc.py`](src/measure_isc.py) — the E0.1 measurement.
+- [`src/k_averaging.py`](src/k_averaging.py) + [`submit/_submit_k_averaging.py`](submit/_submit_k_averaging.py)
+  + [`src/plot_k_averaging.py`](src/plot_k_averaging.py) — E0.2.
+- [`submit/_submit_e03.py`](submit/_submit_e03.py) + [`src/analyse_e03.py`](src/analyse_e03.py)
+  + [`src/plot_e03.py`](src/plot_e03.py) — E0.3. Subsampling knobs live in
   `JEPAMovieDataset`; see [`tests/unit/test_scaling_subsample.py`](../../tests/unit/test_scaling_subsample.py) (15).
-- [`aggregation_curves.py`](aggregation_curves.py) — §2.6 / §2.7 curves.
+- [`src/aggregation_curves.py`](src/aggregation_curves.py) — §2.6 / §2.7 curves.
   Depends on `demo/export_retrieval_npz.py` for *data* only; it imports nothing
   from `demo/`.
-- [`noise_ceiling.py`](noise_ceiling.py) — Sahani-Linden, split-half, Schoppe.
-- [`scaling_calculator.py`](scaling_calculator.py) — analytic design calculator.
-- [`_submit_isc.py`](_submit_isc.py) — Delta submission.
+- [`src/noise_ceiling.py`](src/noise_ceiling.py) — Sahani-Linden, split-half, Schoppe.
+- [`src/scaling_calculator.py`](src/scaling_calculator.py) — analytic design calculator.
+- [`submit/_submit_isc.py`](submit/_submit_isc.py) — Delta submission.
 - [`tests/test_isc_estimator.py`](../../tests/test_isc_estimator.py) (15),
   [`tests/test_noise_ceiling.py`](../../tests/test_noise_ceiling.py) (40),
   [`tests/test_k_averaging.py`](../../tests/test_k_averaging.py) (20) —

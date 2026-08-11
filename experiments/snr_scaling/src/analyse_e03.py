@@ -20,7 +20,10 @@ import re
 import statistics as st
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parent          # experiments/snr_scaling/src
+ROOT = HERE.parent                              # experiments/snr_scaling
+RAW = ROOT / "raw_results"                      # measured JSONs
+FIGS = ROOT / "figures"                         # rendered figures
 
 FULL_S, FULL_A = 701, 101
 
@@ -41,10 +44,10 @@ def load(suffix: str = "") -> tuple[dict, float, dict]:
     checkpoint). The random baseline is shared -- it is an untrained encoder, so
     it has no stopping point.
     """
-    rand_mean, rand_per = _mean_r2(HERE / "e03_probe_val_random.json")
+    rand_mean, rand_per = _mean_r2(RAW / "e03_probe_val_random.json")
     cells = {}
     pat = f"e03_probe_val_e03_s*_a*{suffix}.json" if suffix else "e03_probe_val_e03_s*_a*.json"
-    for f in glob.glob(str(HERE / pat)):
+    for f in glob.glob(str(RAW / pat)):
         if not suffix and ("_es" in Path(f).stem):
             continue          # do not mix protocols
         if suffix and not Path(f).stem.endswith(suffix):
@@ -181,8 +184,8 @@ def main() -> None:
                   for (s, a), c in sorted(cells.items())},
     }
     name = f"e03_surface{args.suffix or ''}.json"
-    (HERE / name).write_text(json.dumps(out, indent=2))
-    print(f"\nWrote {HERE / name}")
+    (RAW / name).write_text(json.dumps(out, indent=2))
+    print(f"\nWrote {RAW / name}")
 
     if args.compare_to is not None:
         other, _, _ = load(args.compare_to)

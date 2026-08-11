@@ -45,7 +45,10 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parent          # experiments/snr_scaling/src
+ROOT = HERE.parent                              # experiments/snr_scaling
+RAW = ROOT / "raw_results"                      # measured JSONs
+FIGS = ROOT / "figures"                         # rendered figures
 
 BLUE = "#2a78d6"      # slot 1 -- subjects, the axis that keeps paying
 ORANGE = "#eb6834"    # slot 2 -- anchors, the axis that saturates
@@ -74,7 +77,7 @@ def _style(ax):
 
 
 def main() -> None:
-    d = json.loads((HERE / "e03_surface_es_best.json").read_text())
+    d = json.loads((RAW / "e03_surface_es_best.json").read_text())
     cells = d["cells"]
 
     s_axis = [50, 100, 200, 400, FULL_S]
@@ -184,8 +187,8 @@ def main() -> None:
         color=INK, fontsize=11.5, y=0.985, x=0.008, ha="left")
     fig.tight_layout(rect=(0, 0, 1, 0.93))
     for ext in ("png", "pdf"):
-        fig.savefig(HERE / f"e03_scaling.{ext}", dpi=200, facecolor=SURFACE)
-    print(f"Wrote {HERE}/e03_scaling.{{png,pdf}}")
+        fig.savefig(FIGS / f"e03_scaling.{ext}", dpi=200, facecolor=SURFACE)
+    print(f"Wrote {FIGS}/e03_scaling.{{png,pdf}}")
     print(f"  (a) S {s_y[0]:.4f} -> {s_y[-1]:.4f} (corner exp "
           f"{d['local_exponent_S_at_corner']:+.3f});  "
           f"A {a_y[0]:.4f} -> {a_y[-1]:.4f} (corner exp "

@@ -29,16 +29,16 @@ no sampling-mode confound between the corner cell and the rest of the surface.
 Passing ``max_anchors`` on every cell keeps that explicit.
 
 Usage:
-    uv run --group eeg python experiments/snr_scaling/_submit_e03.py          # dry run
-    uv run --group eeg python experiments/snr_scaling/_submit_e03.py submit
-    uv run --group eeg python experiments/snr_scaling/_submit_e03.py --only=703x101 submit
+    uv run --group eeg python experiments/snr_scaling/submit/_submit_e03.py          # dry run
+    uv run --group eeg python experiments/snr_scaling/submit/_submit_e03.py submit
+    uv run --group eeg python experiments/snr_scaling/submit/_submit_e03.py --only=703x101 submit
 """
 import argparse
 
 from neurolab.jobs import Job
 
 REPO = "/u/dtyoung/eb_jepa_eeg"
-EXP_DIR = "experiments/snr_scaling"
+EXP_DIR = "experiments/snr_scaling/raw_results"   # jobs write measured JSONs straight here
 CKPT_ROOT = "/work/hdd/bbnv/dtyoung/eb_jepa/e03_scaling"
 
 # jul7 best from-scratch (RESULTS_jul7.md 3.4): TP-only soft target, tau=0.05.
@@ -149,7 +149,7 @@ def build_job(subjects: int, anchors: int, partition: str,
         time_limit=time_limit,
         command=(
             f"mkdir -p {exp_dir} && "
-            f"cp experiments/snr_scaling/clip_pretrain.yaml {exp_dir}/config.yaml && "
+            f"cp experiments/snr_scaling/config/clip_pretrain.yaml {exp_dir}/config.yaml && "
             f"PYTHONPATH=. uv run --group eeg python -c \"{patch}\" && "
             f"PYTHONPATH=. uv run --group eeg python -c \"{probe_patch}\" && "
             "PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.clip_pretrain"

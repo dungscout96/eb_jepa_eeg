@@ -525,7 +525,7 @@ so compare the ×chance column, never the raw percentage.
 val predicted vs 4.0 % true). A large share of first guesses is landing on one
 pool entry, and no Top-K figure above reveals that. Quote the modal-answer share
 alongside Top-K; measured by
-[`snr_scaling/aggregation_curves.py`](../../snr_scaling/aggregation_curves.py),
+[`snr_scaling/aggregation_curves.py`](../../snr_scaling/src/aggregation_curves.py),
 detail in [`snr_scaling` §2.7](../../snr_scaling/RESULTS.md).
 
 A qualitative view of this section — the retrieved video frames next to the EEG

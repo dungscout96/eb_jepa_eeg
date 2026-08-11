@@ -30,8 +30,8 @@ All presets evaluate **epoch 325**, the checkpoint chosen by smoothed selection
 diagnostic is too noisy to use (RESULTS.md 2.10).
 
 Usage:
-    uv run --group eeg python experiments/snr_scaling/_submit_retrieval.py tp
-    uv run --group eeg python experiments/snr_scaling/_submit_retrieval.py cross submit
+    uv run --group eeg python experiments/snr_scaling/submit/_submit_retrieval.py tp
+    uv run --group eeg python experiments/snr_scaling/submit/_submit_retrieval.py cross submit
 """
 import argparse
 
@@ -39,7 +39,7 @@ from neurolab.jobs import Job
 
 REPO = "/u/dtyoung/eb_jepa_eeg"
 CKPT_ROOT = "/work/hdd/bbnv/dtyoung/eb_jepa/e03_scaling"
-OUT_DIR = "experiments/snr_scaling"
+OUT_DIR = "experiments/snr_scaling/raw_results"   # jobs write measured JSONs straight here
 EPOCH = 325
 TOPKS = "1 5 10"
 DM_CONFIG = f"{CKPT_ROOT}/config_probe_DM.yaml"
@@ -140,7 +140,7 @@ def main() -> None:
         repo_path=REPO,
         partition=args.partition,
         time_limit=args.time_limit,
-        command=build_command(args.preset),
+        command="mkdir -p experiments/snr_scaling/raw_results && " + build_command(args.preset),
         venv="__none__",
         branch="",
         env_vars={

@@ -14,9 +14,9 @@ is ~6.2 GB; train (~703) would be ~15 GB, so train is capped by default.
 The cluster default of mem_gb=64 covers all of these.
 
 Usage:
-    uv run --group eeg python experiments/snr_scaling/_submit_isc.py            # dry run
-    uv run --group eeg python experiments/snr_scaling/_submit_isc.py submit
-    uv run --group eeg python experiments/snr_scaling/_submit_isc.py \
+    uv run --group eeg python experiments/snr_scaling/submit/_submit_isc.py            # dry run
+    uv run --group eeg python experiments/snr_scaling/submit/_submit_isc.py submit
+    uv run --group eeg python experiments/snr_scaling/submit/_submit_isc.py \
         --tasks=ThePresent,DespicableMe submit
 
 NOTE: ``branch=""`` -- the job runs no git operations, so
@@ -29,7 +29,7 @@ from neurolab.jobs import Job
 
 REPO = "/u/dtyoung/eb_jepa_eeg"
 OUT_DIR = "/work/hdd/bbnv/dtyoung/eb_jepa/snr_scaling"
-RESULTS_DIR = "experiments/snr_scaling"
+RESULTS_DIR = "experiments/snr_scaling/raw_results"   # jobs write measured JSONs straight here
 
 COMMON_ENV = {
     "WANDB_MODE": "disabled",
@@ -52,7 +52,7 @@ def _step(split: str, task: str, seed: int, n_components: int) -> str:
     cap = f"--max-recordings={max_rec} " if max_rec else ""
     return (
         "PYTHONPATH=. uv run --group eeg python "
-        "experiments/snr_scaling/measure_isc.py "
+        "experiments/snr_scaling/src/measure_isc.py "
         f"--split={split} --task={task} "
         f"--n-components={n_components} --seed={seed} {cap}"
         f"--output={out} && cp {out} {OUT_DIR}/"
