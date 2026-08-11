@@ -46,7 +46,7 @@ ARM = "soft_target_clip"
 ALPHA = 0.5
 TAU = 0.05
 SEED = 2026
-TASK = "ThePresent"
+TASK = "ThePresent"          # default; override with --task
 EPOCHS = 400
 # Measured on Delta, not assumed: the TP train split is 703 recordings from 701
 # distinct subjects (two subjects contribute two recordings each). The S axis is
@@ -86,6 +86,18 @@ NESTED_S = [400, 701, 1000, 1400]
 # signal, so a single draw would be uninterpretable. Nesting still holds
 # (10 subset 20 subset 50 ... subset 1400 within a draw seed).
 LOW_S = [10, 20, 50, 100, 200]
+
+# DM-native reference cells (cross-task study). Trained on DespicableMe with the
+# identical recipe so that TP->DM transfer can be reported as a FRACTION of
+# DM-native performance rather than only against random -- random cannot
+# distinguish "transfers well" from "DM is easy".
+#
+# max_anchors=85, not 101: DM is 170.6 s, so its 2 s grid holds ~85 anchors
+# (RESULTS.md 2.9 measured exactly 85 on R5 val). 101 would be a silent no-op;
+# 85 states the anchor count explicitly, as the TP cells do.
+# epoch_size stays 703 so these run the same 4400 steps as every TP cell -- the
+# comparison is about data CONTENT, not budget.
+DM_CELLS = [(701, 85), (1841, 85)]
 NESTED_DRAW_SEEDS = [11, 22, 33]
 FULL_POOL_S = 1863
 
@@ -99,7 +111,7 @@ CELLS = [
 def build_job(subjects: int, anchors: int, partition: str,
               time_limit: str, epochs: int, save_every: int = 99999,
               skip_probe: bool = False, extended: bool = False,
-              draw_seed: int | None = None) -> Job:
+              draw_seed: int | None = None, task: str = TASK) -> Job:
     slug = f"e03_s{subjects}_a{anchors}{SUFFIX}"
     if draw_seed is not None:
         slug += f"_d{draw_seed}"
@@ -113,7 +125,7 @@ def build_job(subjects: int, anchors: int, partition: str,
         f"c.loss.mode = '{ARM}'; "
         f"c.loss.soft_alpha = {ALPHA}; "
         f"c.loss.soft_tau_teacher = {TAU}; "
-        f"c.data.task = '{TASK}'; "
+        f"c.data.task = '{task}'; "
         f"c.data.max_subjects = {subjects}; "
         f"c.data.max_anchors = {anchors}; "
         f"c.data.epoch_size = {FULL_RECORDINGS}; "
@@ -187,6 +199,11 @@ def main() -> None:
     p.add_argument("--skip-probe", action="store_true",
                    help="Train only. Under the early-stopped protocol the probe "
                         "runs later, on the selected checkpoint, not on latest.")
+    p.add_argument("--task", default=TASK,
+                   help="Training movie. Default ThePresent.")
+    p.add_argument("--dm-reference", action="store_true",
+                   help="Train the DM-native reference cells (implies "
+                        "--task=DespicableMe --extended).")
     p.add_argument("--low-s", action="store_true",
                    help="Low-S arm: LOW_S x NESTED_DRAW_SEEDS. Implies "
                         "--extended so draws come from the same 1863 pool and "
@@ -206,7 +223,11 @@ def main() -> None:
 
     global SUFFIX
     SUFFIX = args.suffix
-    if args.low_s:
+    if args.dm_reference:
+        args.extended = True
+        args.task = "DespicableMe"
+        cells = [(s_, a_, None) for s_, a_ in DM_CELLS]
+    elif args.low_s:
         args.extended = True
         cells = [(s_, 101, d) for s_ in LOW_S for d in NESTED_DRAW_SEEDS]
     elif args.nested_draws:
@@ -233,13 +254,14 @@ def main() -> None:
         s_, a_, d = cells[0]
         print(build_job(s_, a_, args.partition, args.time_limit,
                         args.epochs, args.save_every, args.skip_probe,
-                        args.extended, d).command)
+                        args.extended, d, args.task).command)
         print("\nDry run. Re-run with 'submit' to sbatch.")
         return
 
     for s_, a_, d in cells:
         job = build_job(s_, a_, args.partition, args.time_limit, args.epochs,
-                        args.save_every, args.skip_probe, args.extended, d)
+                        args.save_every, args.skip_probe, args.extended, d,
+                        args.task)
         print(f"submitted {job.name}: {job.submit()}")
 
 

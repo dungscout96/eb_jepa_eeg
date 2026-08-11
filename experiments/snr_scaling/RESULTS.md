@@ -7,7 +7,11 @@ Establishes what fraction of the achievable signal the CLIP/JEPA checkpoints in
 so results can be reported as *r*/ceiling rather than raw *r*.
 
 Forward-looking experiment design lives in [`PLAN.md`](PLAN.md); this file is
-the record of what has been measured. Commits `b4492fe`, `6dd992d`, `fdf0b3b`.
+the record of what has been measured **within ThePresent**. Cross-movie
+generalization — the same checkpoints evaluated on DespicableMe — is in
+[`RESULTS_cross_task.md`](RESULTS_cross_task.md): the features transfer at
+**58 % of DM-native** and improve with subjects (2 % → 58 % from S=10 to 1863),
+while zero-shot CLIP alignment does **not** transfer at all. Commits `b4492fe`, `6dd992d`, `fdf0b3b`.
 
 ---
 
