@@ -98,7 +98,7 @@ PYTHONPATH=. uv run --group eeg python -m eb_jepa.evaluation.probe_eval \
 
 # Bootstrap is mandatory (evaluation_guide.md 3): a bare L1 is diagnostic only.
 PYTHONPATH=. uv run --group eeg python -m eb_jepa.evaluation.bootstrap \
-    --predictions_npz="${PRED}/test_seed42.npz" \
+    --predictions_npz="${PRED}/preds_seed42.npz" \
     --out_json="${OUT}/e04_canonical_boot_${SLUG}${TAG}.json" \
     --n_bootstrap=2000
 
