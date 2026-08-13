@@ -59,6 +59,31 @@ export EXP_PREFIX=e05
 export INIT_CKPT=none
 export CKPT_ROOT=/work/hdd/bbnv/kkokate/eb_jepa/e05_random_scaling
 
+# MEASURED 2026-08-13, not a guess: at 400 epochs 11 of 13 cells with S>=400
+# peaked at ep399 on val/clip_scene_auc -- still climbing when the run ended.
+# At 800 the same cells peak at ~690 and then decay ~4%, the converged shape.
+# So the random-init arm needs ~2x the schedule a warm-started one does
+# (E0.4: only 6 of 14 cells at S>=400 peaked late).
+#
+# EPOCHS applies to the WHOLE grid or none of it. Running small S at 400 and
+# large S at 800 would confound the S axis with optimisation budget, and the
+# slope is the entire contribution of this experiment.
+EPOCHS="${EPOCHS:-400}"
+SUFFIX="${SUFFIX:-_nd}"
+export EPOCHS SUFFIX
+WALL="${WALL:-03:00:00}"
+
+# Idempotent: a cell that already has latest.pth.tar is not resubmitted, so
+# this script doubles as the rescue/top-up path. Set FORCE=1 to override.
+submitted_or_skipped() {
+    local exp_id="$1"
+    if [ -z "${FORCE:-}" ] && [ -f "${CKPT_ROOT}/${exp_id}/latest.pth.tar" ]; then
+        echo "     skip (latest.pth.tar exists)"
+        return 0
+    fi
+    return 1
+}
+
 if [ ! -f "$SBATCH" ]; then
     echo "ERROR: must be run with cwd=repo root (cwd=$(pwd))" >&2
     exit 1
@@ -70,10 +95,11 @@ N=0
 for S in "${NESTED_S[@]}"; do
   for D in "${DRAWS[@]}"; do
     N=$((N + 1))
-    echo "[$N] S=$S A=$ANCHORS draw=$D  (random init, 400 ep)"
+    echo "[$N] S=$S A=$ANCHORS draw=$D  (random init, ${EPOCHS} ep)"
+    submitted_or_skipped "e05_s${S}_a${ANCHORS}${SUFFIX}_d${D}" && continue
     if [ -z "${DRY:-}" ]; then
         SUBJECTS="$S" ANCHORS="$ANCHORS" DRAW="$D" \
-            sbatch --job-name="e05_s${S}_d${D}" "$SBATCH"
+            sbatch --job-name="e05_s${S}_d${D}" --time="$WALL" "$SBATCH"
         sleep 2   # stagger: avoids wandb-init and file-creation races
     fi
   done
@@ -81,11 +107,13 @@ done
 
 # The whole-pool cell takes no DRAW: there is only one possible draw of 1863.
 N=$((N + 1))
-echo "[$N] S=$FULL_POOL_S A=$ANCHORS draw=none (whole pool, random init, 400 ep)"
-if [ -z "${DRY:-}" ]; then
+echo "[$N] S=$FULL_POOL_S A=$ANCHORS draw=none (whole pool, random init, ${EPOCHS} ep)"
+if ! submitted_or_skipped "e05_s${FULL_POOL_S}_a${ANCHORS}${SUFFIX}"; then
+  if [ -z "${DRY:-}" ]; then
     SUBJECTS="$FULL_POOL_S" ANCHORS="$ANCHORS" \
-        sbatch --job-name="e05_s${FULL_POOL_S}" "$SBATCH"
+        sbatch --job-name="e05_s${FULL_POOL_S}" --time="$WALL" "$SBATCH"
     sleep 2
+  fi
 fi
 
 # --- Convergence check -------------------------------------------------------
@@ -99,7 +127,11 @@ fi
 # (at which point E0.4 needs the same treatment to stay comparable). If it ties
 # or loses -- what RESULTS.md 3.2 predicts -- 400 stands, and we have measured
 # that rather than assumed it.
-for S in 701 1400; do
+# ALREADY RUN and already answered -- see the EPOCHS note above. Kept for the
+# record, skipped unless CONVERGENCE_CHECK=1, and never fired when the grid is
+# itself running at 800 (it would duplicate two cells of it).
+if [ "${CONVERGENCE_CHECK:-0}" = "1" ] && [ "$SUFFIX" = "_nd" ]; then
+  for S in 701 1400; do
     N=$((N + 1))
     echo "[$N] S=$S A=$ANCHORS draw=11 (random init, 800 ep, CONVERGENCE CHECK)"
     if [ -z "${DRY:-}" ]; then
@@ -107,7 +139,8 @@ for S in 701 1400; do
             sbatch --job-name="e05_s${S}_d11_ep800" --time=04:00:00 "$SBATCH"
         sleep 2
     fi
-done
+  done
+fi
 
 echo "Submitted $N jobs."
 echo
