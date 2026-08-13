@@ -68,11 +68,13 @@ if [ -f "$HOME/.wandb_key" ]; then
 fi
 export WANDB_DISABLED=true
 
-CKPT_ROOT=/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling
+CKPT_ROOT="${CKPT_ROOT:-/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling}"
 CONFIG="${CKPT_ROOT}/${SLUG}/config_probe.yaml"
 OUT=experiments/snr_scaling/raw_results
 TAG="${TAG:-}"
-PRED="${CKPT_ROOT}/${SLUG}/canonical_preds${TAG}"
+# Defaults beside the checkpoint, but must be overridable: a reader running
+# against someone else's group-readable CKPT_ROOT cannot write into it.
+PRED="${PRED:-${CKPT_ROOT}/${SLUG}/canonical_preds${TAG}}"
 
 echo "Job $SLURM_JOB_ID  Node: $SLURM_NODELIST"
 echo "cfg: slug=${SLUG} ckpt=${CKPT}"

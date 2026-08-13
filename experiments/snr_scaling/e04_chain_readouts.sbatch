@@ -41,7 +41,7 @@ if [ ! -d eb_jepa/training ]; then
     exit 1
 fi
 
-CKPT_ROOT=/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling
+CKPT_ROOT="${CKPT_ROOT:-/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling}"
 SEL=experiments/snr_scaling/raw_results/e04_selection_${SLUG}.json
 OUT=experiments/snr_scaling/raw_results
 

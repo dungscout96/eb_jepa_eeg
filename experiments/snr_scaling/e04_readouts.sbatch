@@ -56,7 +56,7 @@ if [ -f "$HOME/.wandb_key" ]; then
     export WANDB_API_KEY=$(cat "$HOME/.wandb_key")
 fi
 
-CKPT_ROOT=/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling
+CKPT_ROOT="${CKPT_ROOT:-/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling}"
 CONFIG="${CKPT_ROOT}/${SLUG}/config_probe.yaml"
 OUT=experiments/snr_scaling/raw_results
 

@@ -46,7 +46,12 @@ EPOCHS="${EPOCHS:-400}"
 SEED="${SEED:-2026}"
 SAVE_EVERY="${SAVE_EVERY:-25}"
 SUFFIX="${SUFFIX:-_nd}"
+# INIT_CKPT=none runs the E0.5 random-init control: same shape, same recipe, no
+# warm start. It is the only arm that varies init alone -- E0.4 moved depth,
+# patch geometry AND init together, so nothing in it isolates the warm start.
 INIT_CKPT="${INIT_CKPT:-/work/hdd/bbnv/kkokate/eb_jepa/reve_base_eet_init.pth.tar}"
+EXP_PREFIX="${EXP_PREFIX:-e04}"
+CKPT_ROOT="${CKPT_ROOT:-/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling}"
 
 # The extended pool (R7-R10) lives in a collaborator's tree; group-readable.
 export HBN_PREPROCESS_DIR="${HBN_PREPROCESS_DIR:-/work/hdd/bbnv/dtyoung/hbn_preprocessed}"
@@ -72,11 +77,11 @@ export WANDB_PROJECT="${WANDB_PROJECT:-eb_jepa}"
 
 # EXP_ID carries every varying knob or cells collide and overwrite each other.
 if [ -n "${DRAW:-}" ]; then
-    EXP_ID="e04_s${SUBJECTS}_a${ANCHORS}${SUFFIX}_d${DRAW}"
+    EXP_ID="${EXP_PREFIX}_s${SUBJECTS}_a${ANCHORS}${SUFFIX}_d${DRAW}"
 else
-    EXP_ID="e04_s${SUBJECTS}_a${ANCHORS}${SUFFIX}"
+    EXP_ID="${EXP_PREFIX}_s${SUBJECTS}_a${ANCHORS}${SUFFIX}"
 fi
-EXP_DIR="/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/${EXP_ID}"
+EXP_DIR="${CKPT_ROOT}/${EXP_ID}"
 
 echo "Job $SLURM_JOB_ID  Node: $SLURM_NODELIST  Cell: $EXP_ID"
 echo "cfg: S=${SUBJECTS} A=${ANCHORS} draw=${DRAW:-none} epochs=${EPOCHS} seed=${SEED} init=${INIT_CKPT}"
@@ -117,14 +122,23 @@ c.data.epoch_size = None
 OmegaConf.save(c, '${EXP_DIR}/config_probe.yaml')
 "
 
+# Omit the flag entirely for the random arm -- the frozen config already carries
+# meta.encoder_init_from: null, and passing the string "none" would be read as a
+# path. The ${A[@]+"${A[@]}"} form is required: under `set -u`, expanding an
+# empty array unquoted is an unbound-variable error on bash < 4.4.
+INIT_ARG=(--meta.encoder_init_from="${INIT_CKPT}")
+if [ "${INIT_CKPT}" = "none" ]; then
+    INIT_ARG=()
+fi
+
 PYTHONPATH=. uv run --group eeg python -m eb_jepa.training.clip_pretrain \
     --fname="${EXP_DIR}/config.yaml" \
     --optim.epochs="${EPOCHS}" \
     --meta.seed="${SEED}" \
-    --meta.encoder_init_from="${INIT_CKPT}" \
+    ${INIT_ARG[@]+"${INIT_ARG[@]}"} \
     --folder="${EXP_DIR}" \
     --logging.save_every="${SAVE_EVERY}" \
-    --logging.wandb_group="e04_reve_scaling_${EXP_ID}"
+    --logging.wandb_group="${EXP_PREFIX}_scaling_${EXP_ID}"
 
 # Honest exit code. Under the neurolab path a job that died instantly still
 # reported COMPLETED 0:0, because a trailing echo reset $?. Check the artifact.

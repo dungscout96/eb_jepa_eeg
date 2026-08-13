@@ -34,7 +34,7 @@ export HBN_TRAIN_RELEASES="${HBN_TRAIN_RELEASES:-R1,R2,R3,R4,R7,R8,R9,R10}"
 export UV_LINK_MODE=copy
 export PATH="$HOME/.conda/envs/eb_jepa/bin:$HOME/.local/bin:$PATH"
 
-CKPT_ROOT=/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling
+CKPT_ROOT="${CKPT_ROOT:-/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling}"
 CONFIG="${CONFIG:-${CKPT_ROOT}/e04_s1863_a101_nd/config_probe.yaml}"
 OUT=experiments/snr_scaling/raw_results
 
