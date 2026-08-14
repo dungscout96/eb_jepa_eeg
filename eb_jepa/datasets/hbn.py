@@ -95,9 +95,19 @@ else:
     # deliberately so: ~66 existing submit scripts pin the R1-R4 train split
     # implicitly, and silently retraining them on twice the data would
     # invalidate every recorded result in the repo without touching a line of
-    # their code. Opt in per run instead:
+    # their code. Opt in per run:
     #
     #     HBN_TRAIN_RELEASES=R1,R2,R3,R4,R7,R8,R9,R10
+    #
+    # Prefer the config field over this env var where the caller has a cfg
+    # available (HBNMovieDataset/JEPAMovieDataset do) -- set
+    # ``data.train_releases: [R1, R2, R3, R4, R7, R8, R9, R10]`` in the YAML
+    # instead. It is read by ``_cfg_train_releases``/``_resolve_releases``
+    # below and takes precedence over this env var. The env var is silent and
+    # process-global (forget to set it in one of several job submitters and
+    # that submitter's runs quietly train on R1-R4 while its siblings don't);
+    # the config field is versioned with the run and visible in the same file
+    # that already declares S/A/architecture for that cell.
     #
     # val (R5) and test (R6) are intentionally NOT extensible here -- every
     # measured number in experiments/snr_scaling is on R5 val, and moving that
@@ -179,8 +189,43 @@ _MOVIE_PATHS = {
 # ---------------------------------------------------------------------------
 
 
-def _resolve_releases(split: str) -> dict:
-    """Return the release mapping for the given split."""
+def _cfg_train_releases(cfg) -> list[str] | None:
+    """``data.train_releases`` from the run's own config, if declared.
+
+    Config-driven and versioned with the run, unlike the HBN_TRAIN_RELEASES
+    env var (module import time, set by whoever launched the job and easy to
+    forget -- see the SPLIT_RELEASES comment above). Prefer this for anything
+    that should be reproducible from the config file alone. Accepts either a
+    YAML list (``["R1", "R2", ...]``) or a comma-separated string.
+    """
+    val = cfg.get("train_releases") if hasattr(cfg, "get") else getattr(cfg, "train_releases", None)
+    if val is None:
+        return None
+    if isinstance(val, str):
+        return [r.strip() for r in val.split(",") if r.strip()]
+    return list(val)
+
+
+def _resolve_releases(split: str, override: list[str] | None = None) -> dict:
+    """Return the release mapping for the given split.
+
+    ``override`` -- typically ``_cfg_train_releases(cfg)`` -- takes precedence
+    over both the module-level default and the HBN_TRAIN_RELEASES env var.
+    Only valid for split="train"; val/test are intentionally not overridable
+    here (see the SPLIT_RELEASES comment: moving those targets would break
+    comparability with numbers already measured against R5/R6).
+    """
+    if override is not None:
+        if split != "train":
+            raise ValueError(
+                f"train_releases override only applies to split='train', got {split!r}"
+            )
+        unknown = [r for r in override if r not in ALL_RELEASES]
+        if unknown:
+            raise ValueError(
+                f"train_releases names unknown release(s) {unknown}. "
+                f"Known: {sorted(ALL_RELEASES)}")
+        return {r: ALL_RELEASES[r] for r in override}
     if split not in SPLIT_RELEASES:
         raise ValueError(
             f"Invalid split '{split}'. Must be one of {list(SPLIT_RELEASES.keys())}."
@@ -861,7 +906,9 @@ class HBNMovieDataset(Dataset):
         for t in tasks:
             self.movie_features.update(_preload_movie_features(t))
         self.visual_processing_delay_s = visual_processing_delay_s
-        releases = _resolve_releases(split)
+        releases = _resolve_releases(
+            split, override=_cfg_train_releases(cfg) if split == "train" else None
+        )
 
         self.sfreq = None
         # Lightweight storage: file paths + absolute sample indices per recording

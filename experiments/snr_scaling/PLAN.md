@@ -291,6 +291,65 @@ Together the two close the anchor-count objection from both sides —
 not help* — which is a sharper claim than either alone, and converts jul2's
 negative-transfer dead end into a result this paper needs.
 
+### E0.4 — Depth as a second axis: does capacity change the subject-scaling curve? (in progress, 2026-08-13)
+Every experiment above holds the encoder fixed at `encoder_depth=12` (e03's
+architecture) and varies only `S`. kkokate independently trained the same S-grid
+— `S ∈ {10, 20, 50, 100, 200, 400, 701, 1000, 1400, 1863}`, 3 draws each plus
+the full-pool cell — at `encoder_depth=22`
+(`/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling`, experiment tag
+`e04_reve_scaling`), everything else held bit-identical to e03 except
+`patch_size`/`patch_overlap` (200/20 vs 400/0, required by the deeper stack).
+28 cells total (2 failed-and-abandoned reruns and 3 smoke-test dirs excluded;
+one alternate-seed full-pool replicate, `e04_s1863_a101_seed7`, also excluded
+from the main sweep pending a decision on whether to fold it in as a
+robustness check).
+
+**Question:** is the subject-scaling exponent from E1.1's framing a property of
+the *objective*, or does it also shift with model capacity? A depth-22 encoder
+could convert subjects into SNR more efficiently (more capacity to extract the
+shared response) or less efficiently (more capacity to overfit
+subject-specific fingerprint at low `S`) — the S-sweep at both depths is the
+only way to tell them apart. `figures/depth-12-vs-22-subject-scaling.pdf` is
+the first cut at this comparison.
+
+**Protocol difference from e03's own published tables, deliberate:** e03's
+`RESULTS.md` 2.12/2.13 numbers all evaluate a single fixed epoch (325) across
+every cell. For the depth-22 arm we instead run per-cell smoothed epoch
+selection — the same `select_epoch` logic as `select_and_probe_e03.py`
+(rolling-mean-smoothed `val/clip_scene_auc`, argmax, snap to nearest saved
+checkpoint) — via `src/select_e04.py`, writing
+`experiments/snr_scaling/e04_selection.json`. Selected epochs range 75-375
+across cells, so a single shared epoch would have been wrong for several of
+them. If the depth-12 arm is re-compared against these numbers later, the
+comparison should ideally use the same per-cell-selection protocol on both
+arms rather than epoch 325 vs a selected epoch — currently that is *not* yet
+the case, and is a caveat on any depth-12-vs-22 delta until e03 is
+re-selected the same way.
+
+Infra added this pass, all depth-22-specific (mirrors the e03 scripts one for
+one, see each file's docstring for the exact deltas):
+- `src/select_e04.py` — per-cell epoch selection (run on Delta; needs the
+  wandb datastore files on local disk).
+- `config/config_probe_DM_e04.yaml` — DespicableMe cross-task eval config at
+  the depth-22 architecture (repo-relative, not copied into kkokate's
+  checkpoint root — this pipeline only *reads* from
+  `/work/hdd/bbnv/kkokate/...`, never writes there).
+- `submit/_submit_traintest_e04.py`, `submit/_submit_retrieval_e04.py` — job
+  submitters, `within` (ThePresent) and `cross` (DespicableMe) presets, both
+  val+test for probe, val+test (within) / test-only (cross) for retrieval,
+  matching e03's split convention.
+- `src/aggregate_e04.py` — collects the raw JSONs into the S-curve tables.
+
+Deliverable: `RESULTS_model_scaling.md` (in progress as of this entry) — full
+12-feature Pearson-r probe and time/shot/scene top-{1,5,10} e2v/v2e retrieval,
+val and test, plus DespicableMe cross-task transfer, across all 28 depth-22
+cells. Output files land in `raw_results/` as `e04_tt_*`, `e04_retr_*`,
+`xtask_tt_DM*_e04_*`, `xtask_retr_DMtest_e04_*`.
+
+### E0.5 - Does subject scaling facilitate cross-task transfer?
+
+Question: would model initialized with naturalistically trained data in one task perform better when finetuned in another task compared to training on that new task from scratch?
+
 ---
 
 ## Tier 1 — the method. Cross-subject JEPA as a subject-efficiency claim.
