@@ -73,7 +73,7 @@ def mean_sd(vals: list[float]) -> str:
 # Probe (Pearson r) tables
 # ---------------------------------------------------------------------------
 
-def probe_table(prefix: str, split: str, is_dm: bool) -> str:
+def probe_table(prefix: str, split: str, is_dm: bool, epoch_suffix: str = "") -> str:
     """One row per S, one column per feature, mean +/- sd across draws."""
     tag = f"{prefix}{split}" if is_dm else f"{prefix}_{split}"
     header = "| S | " + " | ".join(FEATURES) + " | mean(12) |"
@@ -82,7 +82,7 @@ def probe_table(prefix: str, split: str, is_dm: bool) -> str:
     for s in S_VALUES:
         per_feature: dict[str, list[float]] = {f: [] for f in FEATURES}
         for slug in CELLS_BY_S[s]:
-            d = load_json(RAW / f"{tag}_{slug}.json")
+            d = load_json(RAW / f"{tag}_{slug}{epoch_suffix}.json")
             if d is None:
                 continue
             for f in FEATURES:
@@ -94,7 +94,8 @@ def probe_table(prefix: str, split: str, is_dm: bool) -> str:
         all_means = [st.fmean(per_feature[f]) for f in FEATURES if per_feature[f]]
         overall = f"{st.fmean(all_means):.4f}" if all_means else "-"
         rows.append(f"| {s} | " + " | ".join(cells) + f" | **{overall}** |")
-    # random baseline
+    # random baseline (epoch-independent -- no checkpoint loaded, always the
+    # non-suffixed file, see build_steps in the submitters)
     rb = load_json(RAW / f"{tag}_random.json") if not is_dm else load_json(RAW / f"{tag}_random_e04.json")
     if rb:
         cells = [f"{rb['features'][f]['pearson_r']:.4f}" if f in rb["features"] else "-" for f in FEATURES]
@@ -107,7 +108,7 @@ def probe_table(prefix: str, split: str, is_dm: bool) -> str:
 # Retrieval tables
 # ---------------------------------------------------------------------------
 
-def retrieval_table(prefix: str, split: str, level: str, is_dm: bool) -> str:
+def retrieval_table(prefix: str, split: str, level: str, is_dm: bool, epoch_suffix: str = "") -> str:
     tag = f"{prefix}{split}" if is_dm else f"{prefix}_{split}"
     header = ("| S | e2v@1 | e2v@5 | e2v@10 | e2v@1 (xChance) | "
               "v2e@1 | v2e@5 | v2e@10 | v2e@1 (xChance) | N_pool |")
@@ -118,7 +119,7 @@ def retrieval_table(prefix: str, split: str, level: str, is_dm: bool) -> str:
         v2e = {k: [] for k in TOPKS}
         e2v_rel1, v2e_rel1, npool = [], [], None
         for slug in CELLS_BY_S[s]:
-            d = load_json(RAW / f"{tag}_{slug}.json")
+            d = load_json(RAW / f"{tag}_{slug}{epoch_suffix}.json")
             if d is None:
                 continue
             lv = d["levels"][level]
@@ -148,6 +149,70 @@ def retrieval_table(prefix: str, split: str, level: str, is_dm: bool) -> str:
             + " | ".join(f"{lv['v2e_top_k'][k]:.3f}" for k in TOPKS) + " | "
             + f"{lv['v2e_relative']['1']:.2f}x | {lv['n_vision_pool_N']} |"
         )
+    return "\n".join(rows)
+
+
+# ---------------------------------------------------------------------------
+# depth-12 (e03) vs depth-22 (e04, fixed epoch 325) comparison
+# ---------------------------------------------------------------------------
+
+def e03_slug(s: int) -> str:
+    return "e03_s1863_a101_nd" if s == 1863 else f"e03_s{s}_a101_nd_d11"
+
+
+def e03_probe_r(prefix: str, split: str, is_dm: bool, s: int) -> float | None:
+    tag = f"{prefix}{split}" if is_dm else f"{prefix}_{split}"
+    d = load_json(RAW / f"{tag}_{e03_slug(s)}.json")
+    if d is None:
+        return None
+    vals = [d["features"][f]["pearson_r"] for f in FEATURES if f in d["features"]]
+    return st.fmean(vals) if vals else None
+
+
+def e03_retrieval_e2v1(prefix: str, split: str, level: str, is_dm: bool, s: int) -> float | None:
+    tag = f"{prefix}{split}" if is_dm else f"{prefix}_{split}"
+    d = load_json(RAW / f"{tag}_{e03_slug(s)}.json")
+    return d["levels"][level]["e2v_top_k"]["1"] if d else None
+
+
+def e04_probe_r_mean(prefix: str, split: str, is_dm: bool, s: int, epoch_suffix: str) -> float | None:
+    tag = f"{prefix}{split}" if is_dm else f"{prefix}_{split}"
+    vals = []
+    for slug in CELLS_BY_S[s]:
+        d = load_json(RAW / f"{tag}_{slug}{epoch_suffix}.json")
+        if d is None:
+            continue
+        fv = [d["features"][f]["pearson_r"] for f in FEATURES if f in d["features"]]
+        if fv:
+            vals.append(st.fmean(fv))
+    return st.fmean(vals) if vals else None
+
+
+def e04_retrieval_e2v1_mean(prefix: str, split: str, level: str, is_dm: bool, s: int,
+                             epoch_suffix: str) -> float | None:
+    tag = f"{prefix}{split}" if is_dm else f"{prefix}_{split}"
+    vals = []
+    for slug in CELLS_BY_S[s]:
+        d = load_json(RAW / f"{tag}_{slug}{epoch_suffix}.json")
+        if d is not None:
+            vals.append(d["levels"][level]["e2v_top_k"]["1"])
+    return st.fmean(vals) if vals else None
+
+
+def comparison_table(e03_fn, e04_fn, fmt: str = "{:.4f}") -> str:
+    """S | e03 depth-12 | e04 depth-22 | delta. Rows where BOTH sides have
+    data (e03's own tables cover a subset of S -- see the methodology note)."""
+    header = "| S | e03 depth-12 (epoch 325) | e04 depth-22 (epoch 325) | delta (22 - 12) |"
+    sep = "|---|---|---|---|"
+    rows = [header, sep]
+    for s in S_VALUES:
+        a, b = e03_fn(s), e04_fn(s)
+        if a is None and b is None:
+            continue
+        a_s = fmt.format(a) if a is not None else "-"
+        b_s = fmt.format(b) if b is not None else "-"
+        d_s = f"{fmt.format(b - a)}" if (a is not None and b is not None) else "-"
+        rows.append(f"| {s} | {a_s} | {b_s} | {d_s} |")
     return "\n".join(rows)
 
 
@@ -361,6 +426,164 @@ never saw during pretraining?
 
 ---
 
+## 5. Within-task (ThePresent) probe -- FIXED epoch 325
+
+Same as section 1, but every cell forced to epoch 325 (not its own
+smoothed-selection epoch) so this is directly comparable to e03's own
+published `RESULTS.md` 2.12/2.13 numbers, which also evaluate epoch 325 on
+every cell. See section 9 for the head-to-head.
+
+### 5.1 Validation split
+
+{probe_table("e04_tt", "val", is_dm=False, epoch_suffix="_ep325")}
+
+### 5.2 Test split
+
+{probe_table("e04_tt", "test", is_dm=False, epoch_suffix="_ep325")}
+
+---
+
+## 6. Within-task retrieval -- FIXED epoch 325
+
+### 6.1 Time-bucket pools
+
+**Validation**
+
+{retrieval_table("e04_retr", "val", "time", is_dm=False, epoch_suffix="_ep325")}
+
+**Test**
+
+{retrieval_table("e04_retr", "test", "time", is_dm=False, epoch_suffix="_ep325")}
+
+### 6.2 Shot pools
+
+**Validation**
+
+{retrieval_table("e04_retr", "val", "shot", is_dm=False, epoch_suffix="_ep325")}
+
+**Test**
+
+{retrieval_table("e04_retr", "test", "shot", is_dm=False, epoch_suffix="_ep325")}
+
+### 6.3 Scene pools
+
+**Validation**
+
+{retrieval_table("e04_retr", "val", "scene", is_dm=False, epoch_suffix="_ep325")}
+
+**Test**
+
+{retrieval_table("e04_retr", "test", "scene", is_dm=False, epoch_suffix="_ep325")}
+
+---
+
+## 7. Cross-task (DespicableMe) probe -- FIXED epoch 325
+
+### 7.1 Validation split
+
+{probe_table("xtask_tt_DM", "val", is_dm=True, epoch_suffix="_ep325")}
+
+### 7.2 Test split
+
+{probe_table("xtask_tt_DM", "test", is_dm=True, epoch_suffix="_ep325")}
+
+---
+
+## 8. Cross-task retrieval -- FIXED epoch 325
+
+Test split only.
+
+### 8.1 Time-bucket pools
+
+{retrieval_table("xtask_retr_DM", "test", "time", is_dm=True, epoch_suffix="_ep325")}
+
+### 8.2 Shot pools
+
+{retrieval_table("xtask_retr_DM", "test", "shot", is_dm=True, epoch_suffix="_ep325")}
+
+### 8.3 Scene pools
+
+{retrieval_table("xtask_retr_DM", "test", "scene", is_dm=True, epoch_suffix="_ep325")}
+
+---
+
+## 9. Depth-12 vs depth-22, head-to-head at matched epoch 325
+
+The comparison sections 1-8 exist to make possible: e03 (depth-12,
+`e03_scaling`) evaluated at epoch 325 vs e04 (depth-22, `e04_reve_scaling`,
+section 5-8 above) evaluated at the SAME fixed epoch, so any delta below is
+attributable to architecture, not to the two arms using different
+early-stopping protocols.
+
+**Coverage caveat**: e03's own `e03_tt_val_*` (within-task probe,
+VALIDATION split) artifacts only cover S in {{400, 701, 1000, 1400, 1863}} --
+that is e03's `tp` preset; its `low-s` preset (S in {{10..200}}) is TEST split
+only. So 9.1 (test) has full S coverage and 9.2 (val) does not. Retrieval and
+cross-task tables have full S coverage on both splits. e03 rows are a single
+draw (`_d11`, e03's own convention at epoch 325); e04 rows are a mean over 3
+draws -- so a delta near the e04 draw-to-draw spread (see sections 1-4) is not
+distinguishable from noise.
+
+### 9.1 Within-task probe, mean Pearson r over 12 features (test split)
+
+{comparison_table(lambda s: e03_probe_r("e03_tt", "test", False, s), lambda s: e04_probe_r_mean("e04_tt", "test", False, s, "_ep325"))}
+
+### 9.2 Within-task probe, mean Pearson r over 12 features (val split)
+
+{comparison_table(lambda s: e03_probe_r("e03_tt", "val", False, s), lambda s: e04_probe_r_mean("e04_tt", "val", False, s, "_ep325"))}
+
+### 9.3 Within-task retrieval, time-pool e2v top-1 accuracy (test split)
+
+{comparison_table(lambda s: e03_retrieval_e2v1("e03_retr", "test", "time", False, s), lambda s: e04_retrieval_e2v1_mean("e04_retr", "test", "time", False, s, "_ep325"), fmt="{:.3f}")}
+
+### 9.4 Within-task retrieval, time-pool e2v top-1 accuracy (val split)
+
+{comparison_table(lambda s: e03_retrieval_e2v1("e03_retr", "val", "time", False, s), lambda s: e04_retrieval_e2v1_mean("e04_retr", "val", "time", False, s, "_ep325"), fmt="{:.3f}")}
+
+### 9.5 Cross-task probe, mean Pearson r over 12 features (test split)
+
+{comparison_table(lambda s: e03_probe_r("xtask_tt_DM", "test", True, s), lambda s: e04_probe_r_mean("xtask_tt_DM", "test", True, s, "_ep325"))}
+
+### 9.6 Cross-task probe, mean Pearson r over 12 features (val split)
+
+{comparison_table(lambda s: e03_probe_r("xtask_tt_DM", "val", True, s), lambda s: e04_probe_r_mean("xtask_tt_DM", "val", True, s, "_ep325"))}
+
+### 9.7 Cross-task retrieval, time-pool e2v top-1 accuracy (test split)
+
+{comparison_table(lambda s: e03_retrieval_e2v1("xtask_retr_DM", "test", "time", True, s), lambda s: e04_retrieval_e2v1_mean("xtask_retr_DM", "test", "time", True, s, "_ep325"), fmt="{:.3f}")}
+
+### 9.8 Summary
+
+Depth-22 beats depth-12 on **every single row** of both probe tables
+(within-task 9.1/9.2 and cross-task transfer 9.5/9.6, both splits -- 35/35
+rows with e03 data have a positive delta). The advantage is not flat: it
+grows roughly 4-5x from S=10 (delta ~0.02-0.03) to S=1400 (delta ~0.08-0.10),
+i.e. the deeper encoder does not just have a head start, it converts
+additional subjects into probe r *more efficiently* than the depth-12
+encoder does -- consistent with the E1.1 framing in `PLAN.md` (subject-scaling
+exponent varies by architecture, not just by S). Within-task retrieval
+(9.3/9.4) shows the same growing-advantage pattern on an entirely independent
+readout (zero-shot cosine similarity, not a fit ridge head) once S is past
+~200 -- so this is not an artifact of the probe's head capacity -- but at
+S=20 and S=100 the test-split delta is flat/slightly negative (-0.001,
+-0.000), meaning at low S the two architectures are indistinguishable by
+retrieval even though the probe already shows a clear gap there. Retrieval's
+much coarser resolution (a handful of percentage points, vs the probe's
+continuous r) plausibly just can't resolve a 0.02-0.03 probe-r advantage at
+low S -- not evidence that the effect itself is probe-specific.
+
+**Cross-task retrieval (9.7) is the outlier**: the depth-22 advantage nearly
+vanishes (deltas -0.001 to +0.004, near the retrieval jitter floor), even
+though cross-task *probe* (9.5/9.6, linear transfer, same checkpoints, same
+task) shows the full-sized advantage. Both depth arms show the same qualitative
+pattern e03's own `RESULTS_cross_task.md` documents: DespicableMe features
+transfer through a refit linear head but zero-shot *alignment* does not. Extra
+depth improves the features enough for a refit head to exploit, but not
+enough to close the zero-shot alignment gap on a movie neither depth arm's
+target space was ever trained against.
+
+---
+
 ## Provenance
 
 - Checkpoints: `/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling` (read-only;
@@ -370,11 +593,19 @@ never saw during pretraining?
   `submit/_submit_retrieval_e04.py` (`within`/`cross` presets). Both support
   a `verify` action that checks `n_train_recordings` (probe only) against the
   expected pool size, and re-running either submitter is idempotent (every
-  step is skip-if-output-exists).
+  step is skip-if-output-exists). Pass `--epoch 325` to either submitter for
+  the fixed-epoch runs behind sections 5-9 -- outputs get an `_ep325` filename
+  suffix so they never collide with the per-cell-selected ones behind
+  sections 1-4.
 - Configs: `config/config_probe_TP_e04.yaml` (ThePresent, shared across all
   cells), `config/config_probe_DM_e04.yaml` (DespicableMe cross-task).
 - Raw JSONs: `raw_results/e04_tt_*`, `raw_results/e04_retr_*`,
-  `raw_results/xtask_tt_DM*_e04_*`, `raw_results/xtask_retr_DMtest_e04_*`.
+  `raw_results/xtask_tt_DM*_e04_*`, `raw_results/xtask_retr_DMtest_e04_*`
+  (per-cell selected epoch); the same prefixes with an `_ep325` suffix before
+  `.json` (fixed epoch); `raw_results/e03_tt_*`, `raw_results/e03_retr_*`,
+  `raw_results/xtask_tt_DM*_e03_*`, `raw_results/xtask_retr_DMtest_e03_*`
+  (depth-12 comparison side, all at epoch 325, produced by e03's own
+  `_submit_traintest.py`/`_submit_retrieval.py`).
 """)
     OUT.write_text("".join(parts))
     print(f"Wrote {OUT} ({OUT.stat().st_size} bytes)")

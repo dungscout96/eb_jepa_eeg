@@ -5,11 +5,16 @@ Depth-22 counterpart of _submit_traintest.py, pointed at kkokate's
 e04_reve_scaling checkpoints instead of e03_scaling. Two differences from the
 e03 submitter, both deliberate:
 
-  - **Per-cell epoch, not a fixed EPOCH.** e03's submitters hardcode epoch 325
-    for every cell. Here each cell uses its OWN smoothed-selection epoch from
-    ``experiments/snr_scaling/e04_selection.json`` (produced by
-    ``src/select_e04.py``), so both depth arms are early-stopped the same way
-    without assuming they land on the same epoch.
+  - **Per-cell epoch by default, not a fixed EPOCH.** e03's submitters
+    hardcode epoch 325 for every cell. By default here each cell uses its OWN
+    smoothed-selection epoch from ``experiments/snr_scaling/e04_selection.json``
+    (produced by ``src/select_e04.py``), so both depth arms are early-stopped
+    the same way without assuming they land on the same epoch. Pass
+    ``--epoch 325`` to instead reproduce e03's fixed-epoch convention exactly
+    -- needed for a depth-12 vs depth-22 delta that isn't confounded by the
+    two arms using different selection protocols (see RESULTS_model_scaling.md's
+    methodology caveat). Fixed-epoch outputs get an ``_ep<N>`` filename suffix
+    so they never collide with the per-cell-selected ones.
   - **The DM config is a repo-relative path**, not a file living under
     kkokate's checkpoint root -- this submitter only reads from
     /work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling, never writes there.
@@ -30,6 +35,7 @@ Presets:
 Usage:
     uv run --group eeg python experiments/snr_scaling/submit/_submit_traintest_e04.py within
     uv run --group eeg python experiments/snr_scaling/submit/_submit_traintest_e04.py cross submit --chunks 6
+    uv run --group eeg python experiments/snr_scaling/submit/_submit_traintest_e04.py within submit --epoch 325 --chunks 8
 """
 import argparse
 import json
@@ -48,6 +54,33 @@ SELECTION = ROOT / "e04_selection.json"
 DM_CONFIG = "experiments/snr_scaling/config/config_probe_DM_e04.yaml"
 TP_CONFIG = "experiments/snr_scaling/config/config_probe_TP_e04.yaml"
 BOOTSTRAP = 2000
+
+# --- arms -------------------------------------------------------------------
+# Both arms are the SAME depth-22 architecture evaluated by the same code
+# against the same two configs, so they share every step-builder below; only
+# the checkpoint root and the cell->epoch map differ.
+#
+#   e04      kkokate's e04_reve_scaling, 28 cells, per-cell smoothed selection
+#            from e04_selection.json (or --epoch N to override).
+#   addval   e05_addval -- the same recipe retrained with R5 folded into the
+#            pretraining pool (see submit/_submit_e05_addval.py). R5 is no
+#            longer held out for these cells, so smoothed val selection is
+#            unavailable and they are pinned to a FIXED epoch (375, where 4 of
+#            4 high-S e04 cells' own selection landed). Their slugs start with
+#            `e05_`, so output filenames never collide with the e04 arm's.
+#
+# EXPECTED_TRAIN_RECORDINGS is deliberately NOT per-arm: the ridge head is fit
+# on [R1..R4, R7..R10] for every cell in both arms, so 1863/1832 must hold for
+# the addval cells too. If an addval artifact ever reports 2156, the probe
+# read the pretraining config instead of the eval config and the comparison is
+# void.
+E05_CKPT_ROOT = "/work/hdd/bbnv/dtyoung/eb_jepa/e05_addval"
+E05_DEFAULT_EPOCH = 375
+E05_CELLS = (
+    [f"e05_s1400_a101_av_d{d}" for d in (11, 22, 33)]
+    + [f"e05_s1863_a101_av_d{d}" for d in (11, 22, 33)]
+    + ["e05_s2156_a101_av"]
+)
 
 ENV = {
     "WANDB_MODE": "disabled",
@@ -91,6 +124,23 @@ def load_selection() -> dict[str, int]:
     return epochs
 
 
+def resolve_arm(arm: str, epoch: int | None) -> tuple[str, dict[str, int], str, str]:
+    """-> (ckpt_root, {slug: epoch}, filename_suffix, human description)."""
+    if arm == "e04":
+        if epoch is not None:
+            return (CKPT_ROOT, {s: epoch for s in load_selection()},
+                    f"_ep{epoch}", f"fixed epoch {epoch}")
+        return CKPT_ROOT, load_selection(), "", "per-cell selected epoch"
+    # addval: no held-out val to select on, so a fixed epoch is the protocol,
+    # not a fallback. Default 375; --epoch overrides. No filename suffix at the
+    # default -- these slugs are unique to this arm, so nothing can collide,
+    # and an unsuffixed name keeps the primary artifact obvious.
+    ep = E05_DEFAULT_EPOCH if epoch is None else epoch
+    return (E05_CKPT_ROOT, {s: ep for s in E05_CELLS},
+            "" if ep == E05_DEFAULT_EPOCH else f"_ep{ep}",
+            f"fixed epoch {ep} (no held-out val; see _submit_e05_addval.py)")
+
+
 PRESETS = {
     "within": dict(
         splits=["val", "test"],
@@ -114,22 +164,39 @@ def _tag(prefix: str, split: str) -> str:
     return f"{prefix}{split}" if prefix.endswith("DM") else f"{prefix}_{split}"
 
 
-def build_steps(preset: str, epochs: dict[str, int]) -> list[str]:
+# The addval arm reports TEST ONLY, on both presets. Its cells trained on R5,
+# so a "val" number would be measured on data the encoder saw -- not a weaker
+# result, a meaningless one. R6 is untouched by both arms and is the only split
+# on which the two are comparable at all.
+ARM_SPLITS = {"e04": None, "addval": ["test"]}
+
+
+def build_steps(preset: str, epochs: dict[str, int], epoch_suffix: str = "",
+                ckpt_root: str = CKPT_ROOT, arm: str = "e04") -> list[str]:
     p = PRESETS[preset]
+    allowed = ARM_SPLITS[arm]
+    splits = p["splits"] if allowed is None else [
+        s for s in p["splits"] if s in allowed]
     steps = []
-    for split in p["splits"]:
+    for split in splits:
         tag = _tag(p["prefix"], split)
         for slug, epoch in epochs.items():
-            out = f"{OUT_DIR}/{tag}_{slug}.json"
+            out = f"{OUT_DIR}/{tag}_{slug}{epoch_suffix}.json"
             steps.append(
                 f"([ -f {out} ] && echo 'SKIP {tag} {slug}') || "
                 "PYTHONPATH=. uv run --group eeg python "
                 "eb_jepa/evaluation/clip_probe/probe_traintest.py "
-                f"--checkpoint {CKPT_ROOT}/{slug}/epoch_{epoch}.pth.tar "
+                f"--checkpoint {ckpt_root}/{slug}/epoch_{epoch}.pth.tar "
                 f"--config {p['config']} --eval-split {split} --device cuda "
                 f"--bootstrap {BOOTSTRAP} --output {out}"
             )
-        out = f"{OUT_DIR}/{tag}_random.json" if preset == "within" else f"{OUT_DIR}/{tag}_random_e04.json"
+        # The random baseline loads no checkpoint and reads the same config, so
+        # it is identical across arms AND epochs -- the addval arm reuses the
+        # e04 artifact rather than recomputing a bit-identical one.
+        if arm != "e04":
+            continue
+        rand_base = f"{tag}_random" if preset == "within" else f"{tag}_random_e04"
+        out = f"{OUT_DIR}/{rand_base}.json"
         steps.append(
             f"([ -f {out} ] && echo 'SKIP {tag} random') || "
             "PYTHONPATH=. uv run --group eeg python "
@@ -151,7 +218,9 @@ def chunk(steps: list[str], n: int) -> list[list[str]]:
     return out
 
 
-def verify(preset: str, epochs: dict[str, int], raw_dir: Path) -> int:
+def verify(preset: str, epochs: dict[str, int], raw_dir: Path,
+           epoch_suffix: str = "", ckpt_root: str = CKPT_ROOT,
+           arm: str = "e04") -> int:
     """Check every artifact this preset should have produced. Returns n bad.
 
     `sacct COMPLETED 0:0` proves nothing (neurolab pitfall 8), and neither
@@ -166,7 +235,7 @@ def verify(preset: str, epochs: dict[str, int], raw_dir: Path) -> int:
     task = "DespicableMe" if p["config"] == DM_CONFIG else "ThePresent"
     want = EXPECTED_TRAIN_RECORDINGS[task]
     bad = 0
-    for step in build_steps(preset, epochs):
+    for step in build_steps(preset, epochs, epoch_suffix, ckpt_root, arm):
         out = _re.search(r"--output (\S+)", step).group(1)
         path = raw_dir / out.split("/")[-1]
         if not path.exists():
@@ -195,23 +264,35 @@ def main() -> None:
     ap.add_argument("--time-limit", default="04:00:00")
     ap.add_argument("--chunks", type=int, default=1,
                     help="Split the runs across this many parallel jobs.")
+    ap.add_argument("--epoch", type=int, default=None,
+                    help="Use this FIXED epoch for every cell instead of "
+                         "per-cell selection (e.g. 325, matching e03's own "
+                         "convention). Outputs get an _ep<N> filename suffix.")
+    ap.add_argument("--arm", default="e04", choices=["e04", "addval"],
+                    help="e04 = kkokate's e04_reve_scaling (default). "
+                         "addval = the e05_addval cells, trained with R5 in "
+                         "the pool; TEST SPLIT ONLY, fixed epoch "
+                         f"{E05_DEFAULT_EPOCH}.")
     args = ap.parse_args()
 
-    epochs = load_selection()
+    ckpt_root, epochs, epoch_suffix, epoch_desc = resolve_arm(args.arm, args.epoch)
 
     if args.action == "verify":
-        raise SystemExit(1 if verify(args.preset, epochs, RAW_DIR) else 0)
+        raise SystemExit(1 if verify(args.preset, epochs, RAW_DIR, epoch_suffix,
+                                     ckpt_root, args.arm) else 0)
 
-    steps = build_steps(args.preset, epochs)
+    steps = build_steps(args.preset, epochs, epoch_suffix, ckpt_root, args.arm)
     groups = chunk(steps, args.chunks)
     p = PRESETS[args.preset]
-    print(f"preset={args.preset}  splits={p['splits']}  cells={len(epochs)}  "
-          f"-> {len(steps)} probe run(s), per-cell selected epoch, in {len(groups)} job(s)")
+    splits = ARM_SPLITS[args.arm] or p["splits"]
+    print(f"arm={args.arm}  preset={args.preset}  splits={splits}  "
+          f"cells={len(epochs)}  "
+          f"-> {len(steps)} probe run(s), {epoch_desc}, in {len(groups)} job(s)")
     print(f"  config: {p['config'] or 'per-cell config_probe.yaml (ThePresent)'}\n")
 
     for i, group in enumerate(groups):
         job = Job(
-            name=f"tt_e04_{args.preset}" + (f"_{i}" if len(groups) > 1 else ""),
+            name=f"tt_{args.arm}_{args.preset}" + (f"_ep{args.epoch}" if args.epoch else "") + (f"_{i}" if len(groups) > 1 else ""),
             cluster="delta",
             repo_path=REPO,
             partition=args.partition,

@@ -18,9 +18,16 @@ Presets:
             (matching e03's cross retrieval preset), via config_probe_DM_e04.yaml.
             Zero-shot: nothing is refit, so this is the strictest transfer test.
 
+Pass ``--epoch 325`` to evaluate every cell's fixed epoch 325 checkpoint
+instead of its per-cell selected one, matching e03's own convention -- needed
+for a depth-12 vs depth-22 delta uncomplicated by the two arms using
+different selection protocols. Fixed-epoch outputs get an ``_ep<N>`` filename
+suffix so they never collide with the per-cell-selected ones.
+
 Usage:
     uv run --group eeg python experiments/snr_scaling/submit/_submit_retrieval_e04.py within
     uv run --group eeg python experiments/snr_scaling/submit/_submit_retrieval_e04.py cross submit --chunks 4
+    uv run --group eeg python experiments/snr_scaling/submit/_submit_retrieval_e04.py within submit --epoch 325 --chunks 6
 """
 import argparse
 import json
@@ -39,6 +46,20 @@ DM_CONFIG = "experiments/snr_scaling/config/config_probe_DM_e04.yaml"
 TOPKS = "1 5 10"
 RANDOM_BASELINE_CELL = "e04_s1863_a101_nd"
 
+# --- arms -------------------------------------------------------------------
+# See _submit_traintest_e04.py's ARMS block for the full rationale. Same two
+# arms, same split policy: the addval cells trained on R5, so only TEST is
+# reportable for them, and with no held-out val they are pinned to a fixed
+# epoch rather than a per-cell selected one.
+E05_CKPT_ROOT = "/work/hdd/bbnv/dtyoung/eb_jepa/e05_addval"
+E05_DEFAULT_EPOCH = 375
+E05_CELLS = (
+    [f"e05_s1400_a101_av_d{d}" for d in (11, 22, 33)]
+    + [f"e05_s1863_a101_av_d{d}" for d in (11, 22, 33)]
+    + ["e05_s2156_a101_av"]
+)
+ARM_SPLITS = {"e04": None, "addval": ["test"]}
+
 
 def load_selection() -> dict[str, int]:
     sel = json.loads(SELECTION.read_text())
@@ -53,33 +74,55 @@ def load_selection() -> dict[str, int]:
     return epochs
 
 
+def resolve_arm(arm: str, epoch: int | None) -> tuple[str, dict[str, int], str, str]:
+    """-> (ckpt_root, {slug: epoch}, filename_suffix, human description)."""
+    if arm == "e04":
+        if epoch is not None:
+            return (CKPT_ROOT, {s: epoch for s in load_selection()},
+                    f"_ep{epoch}", f"fixed epoch {epoch}")
+        return CKPT_ROOT, load_selection(), "", "per-cell selected epoch"
+    ep = E05_DEFAULT_EPOCH if epoch is None else epoch
+    return (E05_CKPT_ROOT, {s: ep for s in E05_CELLS},
+            "" if ep == E05_DEFAULT_EPOCH else f"_ep{ep}",
+            f"fixed epoch {ep} (no held-out val; see _submit_e05_addval.py)")
+
+
 PRESETS = {
     "within": dict(splits=["val", "test"], config=None, prefix="e04_retr"),
     "cross": dict(splits=["test"], config=DM_CONFIG, prefix="xtask_retr_DM"),
 }
 
 
-def build_steps(preset: str, epochs: dict[str, int]) -> list[str]:
+def build_steps(preset: str, epochs: dict[str, int], epoch_suffix: str = "",
+                ckpt_root: str = CKPT_ROOT, arm: str = "e04") -> list[str]:
     """One shell step per (split, checkpoint). Each step is independently
     idempotent (guarded by its own skip-if-exists test), so callers must NOT
     split these strings on " && " -- each step already contains that token
     internally as part of its skip guard.
     """
     p = PRESETS[preset]
+    allowed = ARM_SPLITS[arm]
+    splits = p["splits"] if allowed is None else [
+        s for s in p["splits"] if s in allowed]
     steps = []
-    for split in p["splits"]:
+    for split in splits:
         tag = f"{p['prefix']}{split}" if p["prefix"].endswith("DM") else f"{p['prefix']}_{split}"
         for slug, epoch in epochs.items():
-            cfg = p["config"] or f"{CKPT_ROOT}/{slug}/config_probe.yaml"
-            out = f"{OUT_DIR}/{tag}_{slug}.json"
+            cfg = p["config"] or f"{ckpt_root}/{slug}/config_probe.yaml"
+            out = f"{OUT_DIR}/{tag}_{slug}{epoch_suffix}.json"
             steps.append(
                 f"([ -f {out} ] && echo 'SKIP {slug}') || "
                 "PYTHONPATH=. uv run --group eeg python "
                 "eb_jepa/evaluation/clip_probe/retrieval.py "
-                f"--checkpoint {CKPT_ROOT}/{slug}/epoch_{epoch}.pth.tar "
+                f"--checkpoint {ckpt_root}/{slug}/epoch_{epoch}.pth.tar "
                 f"--config {cfg} --split {split} --device cuda "
                 f"--topks {TOPKS} --output {out}"
             )
+        # The random baseline loads no checkpoint, so it is identical across
+        # arms AND epochs -- the addval arm reuses the e04 artifact rather than
+        # recomputing a bit-identical one.
+        if arm != "e04":
+            continue
         if preset == "within":
             out = f"{OUT_DIR}/{tag}_random.json"
             cfg = f"{CKPT_ROOT}/{RANDOM_BASELINE_CELL}/config_probe.yaml"
@@ -114,19 +157,31 @@ def main() -> None:
     ap.add_argument("--partition", default="gpuA40x4")
     ap.add_argument("--time-limit", default="02:00:00")
     ap.add_argument("--chunks", type=int, default=1)
+    ap.add_argument("--epoch", type=int, default=None,
+                    help="Use this FIXED epoch for every cell instead of "
+                         "per-cell selection (e.g. 325, matching e03's own "
+                         "convention). Outputs get an _ep<N> filename suffix.")
+    ap.add_argument("--arm", default="e04", choices=["e04", "addval"],
+                    help="e04 = kkokate's e04_reve_scaling (default). "
+                         "addval = the e05_addval cells, trained with R5 in "
+                         "the pool; TEST SPLIT ONLY, fixed epoch "
+                         f"{E05_DEFAULT_EPOCH}.")
     args = ap.parse_args()
 
-    epochs = load_selection()
+    ckpt_root, epochs, epoch_suffix, epoch_desc = resolve_arm(args.arm, args.epoch)
+
     p = PRESETS[args.preset]
-    steps = build_steps(args.preset, epochs)
+    steps = build_steps(args.preset, epochs, epoch_suffix, ckpt_root, args.arm)
     groups = chunk(steps, args.chunks)
-    print(f"preset={args.preset}  splits={p['splits']}  cells={len(epochs)}  "
-          f"-> {len(steps)} retrieval run(s), per-cell selected epoch, in {len(groups)} job(s)")
+    splits = ARM_SPLITS[args.arm] or p["splits"]
+    print(f"arm={args.arm}  preset={args.preset}  splits={splits}  "
+          f"cells={len(epochs)}  "
+          f"-> {len(steps)} retrieval run(s), {epoch_desc}, in {len(groups)} job(s)")
     print(f"  config: {p['config'] or 'per-cell config_probe.yaml (ThePresent)'}\n")
 
     for i, group in enumerate(groups):
         job = Job(
-            name=f"retr_e04_{args.preset}" + (f"_{i}" if len(groups) > 1 else ""),
+            name=f"retr_{args.arm}_{args.preset}" + (f"_ep{args.epoch}" if args.epoch else "") + (f"_{i}" if len(groups) > 1 else ""),
             cluster="delta",
             repo_path=REPO,
             partition=args.partition,
