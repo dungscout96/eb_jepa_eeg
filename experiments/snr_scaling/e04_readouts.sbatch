@@ -57,6 +57,11 @@ if [ -f "$HOME/.wandb_key" ]; then
 fi
 
 CKPT_ROOT="${CKPT_ROOT:-/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling}"
+# Result-file prefix. Follows the ARM, not this script's name: the E0.5
+# random-init cells must not land in the e04_* namespace aggregate_nested.py
+# globs. The slug already carries the arm, so files read e05_probe_val_e05_*,
+# matching how E0.4 already doubles its own prefix.
+OUT_PREFIX="${OUT_PREFIX:-e04}"
 CONFIG="${CKPT_ROOT}/${SLUG}/config_probe.yaml"
 OUT=experiments/snr_scaling/raw_results
 
@@ -86,18 +91,18 @@ STAGE="${STAGE:-all}"
 want() { [ "$STAGE" = "all" ] || [ "$STAGE" = "$1" ]; }
 
 # (1) 12-feature CV probe on val -- the Δr² readout.
-if ! want probe_val || have "${OUT}/e04_probe_val_${SLUG}.json"; then
+if ! want probe_val || have "${OUT}/${OUT_PREFIX}_probe_val_${SLUG}.json"; then
     echo "skip probe_val"
 else
     PYTHONPATH=. uv run --group eeg python eb_jepa/evaluation/clip_probe/probe.py \
         --checkpoint "$CKPT" --config "$CONFIG" \
         --split val --cv-splits 5 \
-        --output "${OUT}/e04_probe_val_${SLUG}.json"
+        --output "${OUT}/${OUT_PREFIX}_probe_val_${SLUG}.json"
 fi
 
 # (2) train->test ridge probe, both splits, with bootstrap CIs.
 for SPLIT in val test; do
-    if ! want "tt_${SPLIT}" || have "${OUT}/e04_tt_${SPLIT}_${SLUG}.json"; then
+    if ! want "tt_${SPLIT}" || have "${OUT}/${OUT_PREFIX}_tt_${SPLIT}_${SLUG}.json"; then
         echo "skip tt_${SPLIT}"
         continue
     fi
@@ -105,27 +110,27 @@ for SPLIT in val test; do
         eb_jepa/evaluation/clip_probe/probe_traintest.py \
         --checkpoint "$CKPT" --config "$CONFIG" \
         --eval-split "$SPLIT" --bootstrap 2000 \
-        --output "${OUT}/e04_tt_${SPLIT}_${SLUG}.json"
+        --output "${OUT}/${OUT_PREFIX}_tt_${SPLIT}_${SLUG}.json"
 done
 
 # (3) Scene-level retrieval, TEST only: a random encoder scores 3.79x chance at
 # scene level on val while sitting below chance on test, so val invites a
 # wrong read.
-if ! want retr_test || have "${OUT}/e04_retr_test_${SLUG}.json"; then
+if ! want retr_test || have "${OUT}/${OUT_PREFIX}_retr_test_${SLUG}.json"; then
     echo "skip retr_test"
 else
     PYTHONPATH=. uv run --group eeg python \
         eb_jepa/evaluation/clip_probe/retrieval.py \
         --checkpoint "$CKPT" --config "$CONFIG" \
         --split test --topks 1 5 10 \
-        --output "${OUT}/e04_retr_test_${SLUG}.json"
+        --output "${OUT}/${OUT_PREFIX}_retr_test_${SLUG}.json"
 fi
 
 if [ "$STAGE" = "all" ]; then
-    CHECK=("${OUT}/e04_probe_val_${SLUG}.json" "${OUT}/e04_tt_val_${SLUG}.json"
-           "${OUT}/e04_tt_test_${SLUG}.json" "${OUT}/e04_retr_test_${SLUG}.json")
+    CHECK=("${OUT}/${OUT_PREFIX}_probe_val_${SLUG}.json" "${OUT}/${OUT_PREFIX}_tt_val_${SLUG}.json"
+           "${OUT}/${OUT_PREFIX}_tt_test_${SLUG}.json" "${OUT}/${OUT_PREFIX}_retr_test_${SLUG}.json")
 else
-    CHECK=("${OUT}/e04_${STAGE}_${SLUG}.json")
+    CHECK=("${OUT}/${OUT_PREFIX}_${STAGE}_${SLUG}.json")
 fi
 for f in "${CHECK[@]}"; do
     if [ ! -s "$f" ]; then
