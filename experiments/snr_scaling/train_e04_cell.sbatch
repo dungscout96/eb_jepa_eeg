@@ -50,6 +50,10 @@ SUFFIX="${SUFFIX:-_nd}"
 # warm start. It is the only arm that varies init alone -- E0.4 moved depth,
 # patch geometry AND init together, so nothing in it isolates the warm start.
 INIT_CKPT="${INIT_CKPT:-/work/hdd/bbnv/kkokate/eb_jepa/reve_base_eet_init.pth.tar}"
+# Frozen config snapshot to copy. E0.6 swaps in a width variant; the shape
+# fields live in the snapshot, never on the CLI, so a cell dir always records
+# exactly what it was trained with.
+CONFIG_SRC="${CONFIG_SRC:-experiments/snr_scaling/clip_pretrain_reve.yaml}"
 EXP_PREFIX="${EXP_PREFIX:-e04}"
 CKPT_ROOT="${CKPT_ROOT:-/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling}"
 
@@ -90,7 +94,7 @@ mkdir -p logs "$EXP_DIR"
 
 # Copy the FROZEN snapshot, then patch the copy -- never the on-disk template,
 # which concurrent cells share.
-cp experiments/snr_scaling/clip_pretrain_reve.yaml "$EXP_DIR/config.yaml"
+cp "$CONFIG_SRC" "$EXP_DIR/config.yaml"
 
 DRAW_PATCH=""
 if [ -n "${DRAW:-}" ]; then

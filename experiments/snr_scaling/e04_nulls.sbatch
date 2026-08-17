@@ -37,6 +37,14 @@ export PATH="$HOME/.conda/envs/eb_jepa/bin:$HOME/.local/bin:$PATH"
 CKPT_ROOT="${CKPT_ROOT:-/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling}"
 CONFIG="${CONFIG:-${CKPT_ROOT}/e04_s1863_a101_nd/config_probe.yaml}"
 OUT=experiments/snr_scaling/raw_results
+# Result prefix follows the ARM. Every encoder SHAPE needs its own null:
+# reusing the 512-wide null (r2=0.016572) for a 768/1216-wide readout would
+# silently inflate every Delta-r2, since probe capacity grows with dim.
+OUT_PREFIX="${OUT_PREFIX:-e04}"
+# STAGE=probe_val runs only the CV-probe null, which is all the E0.6 width
+# comparison reads. all = the original four.
+STAGE="${STAGE:-all}"
+want() { [ "$STAGE" = "all" ] || [ "$STAGE" = "$1" ]; }
 
 echo "Job $SLURM_JOB_ID on $SLURM_NODELIST | config=$CONFIG"
 
@@ -51,25 +59,30 @@ fi
 
 mkdir -p "$OUT" logs
 
+if want probe_val; then
 PYTHONPATH=. uv run --group eeg python eb_jepa/evaluation/clip_probe/probe.py \
     --random-baseline --config "$CONFIG" \
     --split val --cv-splits 5 \
-    --output "${OUT}/e04_probe_val_random.json"
+    --output "${OUT}/${OUT_PREFIX}_probe_val_random.json"
+fi
 
 for SPLIT in val test; do
+    want tt_${SPLIT} || continue
     PYTHONPATH=. uv run --group eeg python \
         eb_jepa/evaluation/clip_probe/probe_traintest.py \
         --random-baseline --config "$CONFIG" \
         --eval-split "$SPLIT" --bootstrap 2000 \
-        --output "${OUT}/e04_tt_${SPLIT}_random.json"
+        --output "${OUT}/${OUT_PREFIX}_tt_${SPLIT}_random.json"
 done
 
 # TEST only: a random encoder scores 3.79x chance at scene level on val while
 # sitting below chance on test, so a val retrieval null invites a wrong read.
+if want retr_test; then
 PYTHONPATH=. uv run --group eeg python \
     eb_jepa/evaluation/clip_probe/retrieval.py \
     --random-baseline --config "$CONFIG" \
     --split test --topks 1 5 10 \
-    --output "${OUT}/e04_retr_test_random.json"
+    --output "${OUT}/${OUT_PREFIX}_retr_test_random.json"
+fi
 
 echo "=== E0.4 nulls written to ${OUT} ==="
