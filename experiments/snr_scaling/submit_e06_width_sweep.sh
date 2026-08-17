@@ -102,7 +102,13 @@ for SPEC in "${WIDTHS[@]}"; do
                 continue
             fi
             [ -n "${DRY:-}" ] && continue
-            SUBJECTS="$S" ANCHORS="$ANCHORS" ${D:+DRAW="$D"} \
+            # Build the DRAW assignment as an array and hand the whole set to
+            # `env`. A bare ${D:+DRAW="$D"} does NOT work: assignment prefixes
+            # are parsed before expansion, so the expanded DRAW=11 is taken as
+            # the command name and the script dies under `set -e`.
+            DRAW_ENV=()
+            [ -n "$D" ] && DRAW_ENV=(DRAW="$D")
+            env SUBJECTS="$S" ANCHORS="$ANCHORS" "${DRAW_ENV[@]+${DRAW_ENV[@]}}" \
                 EPOCHS="$EPOCHS" SUFFIX="$SUFFIX" INIT_CKPT=none \
                 CONFIG_SRC="$CFG" EXP_PREFIX="e06w${W}" CKPT_ROOT="$CKPT_ROOT" \
                 sbatch --job-name="e06w${W}_s${S}${D:+_d$D}" --time="$WALL" "$SBATCH"
