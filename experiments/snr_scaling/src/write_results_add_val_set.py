@@ -449,6 +449,46 @@ def matched_epoch_table() -> str:
     return "\n".join(rows)
 
 
+def official_curve_table() -> str:
+    """The addval arm across the FULL axis at fixed epoch 325.
+
+    This is the curve the paper plots, and until now it had no table. The
+    sections above are keyed to epoch 375, which exists only for S >= 1400 --
+    the low-S cells (10..1000) were evaluated at 325 only, so they read as
+    absent everywhere above while being perfectly present in the figure. A
+    reader checking a plotted point against this file would have found nothing.
+
+    One pool (2156) and one epoch (325) at every S, so there is no splice seam
+    and no selection seam anywhere on the axis -- which is the property that
+    makes this, rather than the spliced e04+addval curve, the reportable one.
+    """
+    mean12 = lambda d: st.fmean([d["features"][f]["pearson_r"]
+                                 for f in FEATURES if f in d["features"]])
+    readouts = [
+        ("TP probe mean(12) r", "e04_tt", mean12),
+        ("TP retr time e2v@1", "e04_retr",
+         lambda d: d["levels"]["time"]["e2v_top_k"]["1"]),
+        ("TP retr scene e2v@1", "e04_retr",
+         lambda d: d["levels"]["scene"]["e2v_top_k"]["1"]),
+        ("DM probe mean(12) r", "xtask_tt_DM", mean12),
+        ("DM retr time e2v@1", "xtask_retr_DM",
+         lambda d: d["levels"]["time"]["e2v_top_k"]["1"]),
+    ]
+    axis = [s for a, s, _sl in ROWS if a == "addval"]
+    rows = ["| readout | " + " | ".join(f"S={s}" for s in axis) + " |",
+            "|---|" + "---|" * len(axis)]
+    for name, prefix, getter in readouts:
+        cells = []
+        for S in axis:
+            slugs = next(sl for a, s, sl in ROWS if a == "addval" and s == S)
+            vals = [getter(d) for d in
+                    (load(RAW / f"{tag(prefix)}_{sl}_ep325.json")
+                     for sl in slugs) if d is not None]
+            cells.append(fmt(vals, 4))
+        rows.append(f"| {name} | " + " | ".join(cells) + " |")
+    return "\n".join(rows)
+
+
 def coverage() -> str:
     """What is actually on disk, per (arm, S) x readout. An empty cell in a
     table above is indistinguishable from a zero unless it is stated."""
@@ -861,17 +901,63 @@ readout. Direction and size match `RESULTS.md` 2.11, which measured R7-R10
 subjects as worth 8-15 % less per subject than R1-R4: R5 belongs to the original
 block, so a draw from the 2156 pool is slightly richer in good subjects.
 
-**Consequence.** A curve spliced at S=1000/1400 is defensible for the probe and
-coarse retrieval with this calibration quoted, and calibrated stitching is
-already this experiment's convention (`_submit_e03.py`'s `EXTENDED_CELLS`
-stitched R1-R4 onto R1-R10 the same way). It is NOT defensible for time-pool
-retrieval, where it would put a visible ~10 % step at the seam. A single-pool
-curve requires training the low-S cells from the 2156 pool
-(`_submit_e05_addval.py --full-axis`).
+**Consequence — now moot, and that is the point.** Splicing was defensible for
+the probe and coarse retrieval with this calibration quoted, and NOT defensible
+for time-pool retrieval, where it would have put a visible ~10 % step at the
+seam. That is why the low-S cells were retrained from the 2156 pool
+(`_submit_e05_addval.py --full-axis`). They now exist, so **no splice is used
+anywhere**: section 2e is a single-pool, single-epoch curve and this table is
+demoted to a check on a decision already taken.
 
 **Do not read the S=1863 rows as calibration.** e04 has one draw there, so that
 delta mixes the pool effect with the single-draw artifact this file is about —
 it is the finding, restated at a second fixed epoch, not a control.
+
+---
+
+## 2e. The official curve — one pool, one epoch, full axis
+
+Every cell below is the addval arm (pool 2156) at fixed epoch 325, three draws
+except S=2156, which is the whole pool. **This is the curve the paper plots.**
+It is reported separately from sections 1-3 because those are keyed to epoch
+375, which only exists for S >= 1400 — so the low-S cells read as absent there
+while being present in the figure.
+
+{official_curve}
+
+**The S=50 draw spread is real and is not a failed cell.** `e05_s50_a101_av_d22`
+scores 0.1084 on the within-task probe against siblings' 0.1511 / 0.1581 and a
+random baseline of 0.1049 — at chance, on a readout where its siblings are
+clearly above it. It was screened on training loss and **passed**: 0.7882, which
+is 1.11x its S-group median, nowhere near the 1.30x threshold and nowhere near
+the collapsed value of ln(64) = 4.1589. Its loss descended normally; what it
+failed to do was generalise.
+
+That combination — healthy loss, chance-level readout — is not the collapse
+failure mode documented above, and it is the reason the cell is **kept**. At
+S=50 a single draw is 50 subjects out of 2156, and `RESULTS.md` 2.11 measured
+per-subject quality varying 8-15 % by release, so a draw this small can
+plausibly be a weak cohort rather than a broken run. Averaging over that is
+exactly what three draws are for. Dropping it because its score is low, having
+first noticed it *because* its score is low, would be selection on the outcome —
+the same trap the retry cap in the collapse section exists to prevent.
+
+The visible consequence: S=50 sits at 0.1392 against S=20's 0.1397, so the
+official curve is **non-monotonic at 20 -> 50 on 4 of the 5 readouts** above
+(every one except time-pool retrieval, which still rises). The S=50 band is also
+the widest anywhere on the axis — 0.0269 against a next-widest 0.0108 on the
+within-task probe (2.5x), 0.0468 against 0.0113 cross-task (4.1x). Both are
+honest depictions of low-S draw variance and neither is smoothed away.
+
+This is worth carrying into any monotonicity claim, and the claim has to be
+stated per readout rather than in aggregate. From S=50 upward, three of the five
+readouts rise on every interval: the within-task probe, the cross-task probe and
+time-pool within-task retrieval. The other two do not — scene-pool within-task
+retrieval falls at 1400 -> 1863, and cross-task time-pool retrieval falls at both
+701 -> 1000 and 1400 -> 1863, the latter being the study's negative control and
+expected to wander near chance. So e04's "8 of 8 intervals up" does not carry
+over to this single-pool ladder unchanged, and quoting it here without naming
+the readout would overstate what the curve does.
 
 ---
 
@@ -966,6 +1052,7 @@ def main() -> None:
         calibration=calibration_table(),
         decomposition=decomposition_table(),
         matched_epoch=matched_epoch_table(),
+        official_curve=official_curve_table(),
         per_draw=per_draw_table(),
         epoch_robustness=epoch_robustness_table(),
         tp_probe=probe_table("e04_tt"),

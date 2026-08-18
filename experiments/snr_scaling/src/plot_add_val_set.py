@@ -411,28 +411,31 @@ def e03_series(prefix: str, getter):
     return out
 
 
-# The from-scratch depth-22 arm. These are the artifacts of the first e05 sweep,
-# quarantined as `_invalid_e05_fromscratch` because they do NOT replicate e04's
-# warm-started recipe -- but they are perfectly valid measurements of the
-# from-scratch condition, which is exactly what this figure needs. Only S in
-# {1400, 1863, 2156} exist, and only at epoch 375: the checkpoints were
-# overwritten in place by the warm-start retrain, so they cannot be
-# re-evaluated at 325. That epoch difference is negligible here -- the
-# warm-start arm reads 0.2962 at both 325 and 375 at S=1400.
-FROMSCRATCH_DIR = W.RAW / "_invalid_e05_fromscratch"
+# The from-scratch depth-22 arm (`e05fs_`, pool 2156, no warm start) -- the
+# same 31 cells as the official curve, trained identically MINUS the REVE
+# initialisation, and evaluated at the same fixed epoch 325. This supersedes
+# the three-point stopgap that lived in `raw_results/_invalid_e05_fromscratch`
+# (the accidental first sweep, S>=1400 only, at epoch 375).
+#
+# Reading the real arm rather than the stopgap matters for more than coverage:
+# the stopgap was at a different epoch and had no low-S points, so it could not
+# show where the two curves CROSS -- which is the part of the comparison that
+# says the warm start is worthless at small cohorts.
+FROMSCRATCH_SUFFIX = "_ep325"
+FROMSCRATCH_S_AXIS = [10, 20, 50, 100, 200, 400, 701, 1000, 1400, 1863]
 
 
 def fromscratch_series(prefix: str, getter):
+    """-> [(S, mean, sd_or_None, n), ...] for the e05fs arm, full axis."""
     out = []
-    for S in [1400, 1863, 2156]:
+    for S in FROMSCRATCH_S_AXIS + [2156]:
+        slugs = ([f"e05fs_s{S}_a101_av_d{d}" for d in (11, 22, 33)]
+                 if S != 2156 else ["e05fs_s2156_a101_av"])
         vals = []
-        for d in (11, 22, 33):
-            f = FROMSCRATCH_DIR / f"{W.tag(prefix)}_e05_s{S}_a101_av_d{d}.json"
+        for sl in slugs:
+            f = W.RAW / f"{W.tag(prefix)}_{sl}{FROMSCRATCH_SUFFIX}.json"
             if f.exists():
                 vals.append(getter(W.load(f)))
-        f = FROMSCRATCH_DIR / f"{W.tag(prefix)}_e05_s{S}_a101_av.json"
-        if not vals and f.exists():
-            vals.append(getter(W.load(f)))
         if vals:
             out.append((S, st.fmean(vals),
                         st.stdev(vals) if len(vals) > 1 else None, len(vals)))
@@ -505,8 +508,8 @@ def fig_depth() -> None:
         fs = fromscratch_series(av_prefix, e03_get)
         if not fs:
             raise RuntimeError(
-                f"no from-scratch artifacts under {FROMSCRATCH_DIR}; the legend "
-                "would claim a series that is not drawn")
+                "no e05fs_*_ep325 artifacts found; the legend would claim a "
+                "series that is not drawn")
         fsb = [(x, y, sd) for x, y, sd, n in fs if sd is not None]
         if len(fsb) > 1:
             ax.fill_between([b[0] for b in fsb],
@@ -544,7 +547,7 @@ def fig_depth() -> None:
                label="depth-22, REVE WARM START — pool 2156, 3 draws"),
         Line2D([], [], color=GREEN, lw=2.0, linestyle="--", marker="D", ms=6,
                markerfacecolor=GREEN, markeredgecolor=GREEN,
-               label="depth-22, FROM SCRATCH — pool 2156, 3 draws (S≥1400 only)"),
+               label="depth-22, FROM SCRATCH — pool 2156, 3 draws"),
         Line2D([], [], color=BLUE, lw=1.8, linestyle="--", marker="o", ms=6,
                markerfacecolor=SURFACE, markeredgecolor=BLUE,
                label="depth-12, FROM SCRATCH — pool 1863, single draw, no band"),
@@ -722,7 +725,7 @@ def fig_combined() -> None:
                label="depth-22, REVE WARM START — pool 2156, 3 draws"),
         Line2D([], [], color=GREEN, lw=2.0, linestyle="--", marker="D", ms=6,
                markerfacecolor=GREEN, markeredgecolor=GREEN,
-               label="depth-22, FROM SCRATCH — pool 2156, 3 draws (S≥1400 only)"),
+               label="depth-22, FROM SCRATCH — pool 2156, 3 draws"),
         Line2D([], [], color=BLUE, lw=1.8, linestyle="--", marker="o", ms=6,
                markerfacecolor=SURFACE, markeredgecolor=BLUE,
                label="depth-12, FROM SCRATCH — pool 1863, single draw, no band"),

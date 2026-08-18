@@ -600,17 +600,69 @@ readout. Direction and size match `RESULTS.md` 2.11, which measured R7-R10
 subjects as worth 8-15 % less per subject than R1-R4: R5 belongs to the original
 block, so a draw from the 2156 pool is slightly richer in good subjects.
 
-**Consequence.** A curve spliced at S=1000/1400 is defensible for the probe and
-coarse retrieval with this calibration quoted, and calibrated stitching is
-already this experiment's convention (`_submit_e03.py`'s `EXTENDED_CELLS`
-stitched R1-R4 onto R1-R10 the same way). It is NOT defensible for time-pool
-retrieval, where it would put a visible ~10 % step at the seam. A single-pool
-curve requires training the low-S cells from the 2156 pool
-(`_submit_e05_addval.py --full-axis`).
+**Consequence — now moot, and that is the point.** Splicing was defensible for
+the probe and coarse retrieval with this calibration quoted, and NOT defensible
+for time-pool retrieval, where it would have put a visible ~10 % step at the
+seam. That is why the low-S cells were retrained from the 2156 pool
+(`_submit_e05_addval.py --full-axis`). They now exist, so **no splice is used
+anywhere**: section 2e is a single-pool, single-epoch curve and this table is
+demoted to a check on a decision already taken.
 
 **Do not read the S=1863 rows as calibration.** e04 has one draw there, so that
 delta mixes the pool effect with the single-draw artifact this file is about —
 it is the finding, restated at a second fixed epoch, not a control.
+
+---
+
+## 2e. The official curve — one pool, one epoch, full axis
+
+Every cell below is the addval arm (pool 2156) at fixed epoch 325, three draws
+except S=2156, which is the whole pool. **This is the curve the paper plots.**
+It is reported separately from sections 1-3 because those are keyed to epoch
+375, which only exists for S >= 1400 — so the low-S cells read as absent there
+while being present in the figure.
+
+| readout | S=10 | S=20 | S=50 | S=100 | S=200 | S=400 | S=701 | S=1000 | S=1400 | S=1863 | S=2156 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| TP probe mean(12) r | 0.1318 +/- 0.0092 | 0.1397 +/- 0.0018 | 0.1392 +/- 0.0269 | 0.1674 +/- 0.0108 | 0.1943 +/- 0.0069 | 0.2234 +/- 0.0093 | 0.2548 +/- 0.0093 | 0.2737 +/- 0.0042 | 0.2962 +/- 0.0034 | 0.3076 +/- 0.0008 | 0.3142 |
+| TP retr time e2v@1 | 0.0133 +/- 0.0020 | 0.0146 +/- 0.0006 | 0.0164 +/- 0.0034 | 0.0198 +/- 0.0030 | 0.0307 +/- 0.0014 | 0.0424 +/- 0.0037 | 0.0557 +/- 0.0025 | 0.0653 +/- 0.0022 | 0.0714 +/- 0.0046 | 0.0762 +/- 0.0054 | 0.0765 |
+| TP retr scene e2v@1 | 0.0621 +/- 0.0042 | 0.0622 +/- 0.0052 | 0.0560 +/- 0.0060 | 0.0705 +/- 0.0073 | 0.0805 +/- 0.0093 | 0.1043 +/- 0.0034 | 0.1281 +/- 0.0112 | 0.1436 +/- 0.0118 | 0.1574 +/- 0.0132 | 0.1429 +/- 0.0055 | 0.1470 |
+| DM probe mean(12) r | 0.1137 +/- 0.0027 | 0.1269 +/- 0.0006 | 0.1227 +/- 0.0468 | 0.1569 +/- 0.0113 | 0.1818 +/- 0.0024 | 0.2065 +/- 0.0065 | 0.2306 +/- 0.0038 | 0.2427 +/- 0.0039 | 0.2567 +/- 0.0032 | 0.2649 +/- 0.0049 | 0.2739 |
+| DM retr time e2v@1 | 0.0126 +/- 0.0017 | 0.0137 +/- 0.0018 | 0.0121 +/- 0.0003 | 0.0143 +/- 0.0003 | 0.0148 +/- 0.0012 | 0.0153 +/- 0.0022 | 0.0170 +/- 0.0016 | 0.0166 +/- 0.0013 | 0.0166 +/- 0.0006 | 0.0154 +/- 0.0006 | 0.0157 |
+
+**The S=50 draw spread is real and is not a failed cell.** `e05_s50_a101_av_d22`
+scores 0.1084 on the within-task probe against siblings' 0.1511 / 0.1581 and a
+random baseline of 0.1049 — at chance, on a readout where its siblings are
+clearly above it. It was screened on training loss and **passed**: 0.7882, which
+is 1.11x its S-group median, nowhere near the 1.30x threshold and nowhere near
+the collapsed value of ln(64) = 4.1589. Its loss descended normally; what it
+failed to do was generalise.
+
+That combination — healthy loss, chance-level readout — is not the collapse
+failure mode documented above, and it is the reason the cell is **kept**. At
+S=50 a single draw is 50 subjects out of 2156, and `RESULTS.md` 2.11 measured
+per-subject quality varying 8-15 % by release, so a draw this small can
+plausibly be a weak cohort rather than a broken run. Averaging over that is
+exactly what three draws are for. Dropping it because its score is low, having
+first noticed it *because* its score is low, would be selection on the outcome —
+the same trap the retry cap in the collapse section exists to prevent.
+
+The visible consequence: S=50 sits at 0.1392 against S=20's 0.1397, so the
+official curve is **non-monotonic at 20 -> 50 on 4 of the 5 readouts** above
+(every one except time-pool retrieval, which still rises). The S=50 band is also
+the widest anywhere on the axis — 0.0269 against a next-widest 0.0108 on the
+within-task probe (2.5x), 0.0468 against 0.0113 cross-task (4.1x). Both are
+honest depictions of low-S draw variance and neither is smoothed away.
+
+This is worth carrying into any monotonicity claim, and the claim has to be
+stated per readout rather than in aggregate. From S=50 upward, three of the five
+readouts rise on every interval: the within-task probe, the cross-task probe and
+time-pool within-task retrieval. The other two do not — scene-pool within-task
+retrieval falls at 1400 -> 1863, and cross-task time-pool retrieval falls at both
+701 -> 1000 and 1400 -> 1863, the latter being the study's negative control and
+expected to wander near chance. So e04's "8 of 8 intervals up" does not carry
+over to this single-pool ladder unchanged, and quoting it here without naming
+the readout would overstate what the curve does.
 
 ---
 
