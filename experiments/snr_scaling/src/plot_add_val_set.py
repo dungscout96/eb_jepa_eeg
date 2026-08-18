@@ -558,9 +558,8 @@ def fig_depth() -> None:
         t.set_color(INK_2)
 
     fig.suptitle(
-        "The REVE warm start, not depth, drives the gap — at matched init the two depths coincide\n"
-        "fixed epoch 325 (from-scratch depth-22 at 375; difference negligible at high S), "
-        "step-matched, test split",
+        "The REVE warm start, not depth: from scratch the two depths coincide at EVERY S,\n""and both saturate near S≈700 while the warm-started curve keeps rising\n"
+        "all three arms at fixed epoch 325, step-matched (4400 steps), test split (R6)",
         color=INK, fontsize=11, y=0.975, x=0.008, ha="left")
     fig.tight_layout(rect=(0, 0.17, 1, 0.90))
     for ext in ("png", "pdf"):
@@ -744,8 +743,7 @@ def fig_combined() -> None:
 
     fig.suptitle(
         "Subject scaling — top row within-task, bottom row cross-task; probe and time-pool retrieval\n"
-        "2156-recording pool, step-matched (4400 steps), fixed epoch 325 "
-        "(from-scratch depth-22 at 375), test split (R6)",
+        "2156-recording pool, step-matched (4400 steps), fixed epoch 325, test split (R6)",
         color=INK, fontsize=11.5, y=0.978, x=0.008, ha="left")
     fig.tight_layout(rect=(0, 0.085, 1, 0.945))
     for ext in ("png", "pdf"):
