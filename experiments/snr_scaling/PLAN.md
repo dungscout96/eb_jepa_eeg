@@ -409,7 +409,19 @@ becomes drawable in triplicate.
    reason the S=1863 headline survived as long as it did, and the reason E0.6's
    fix had to be replicates rather than a better detector.
 
-4. **Depth comparisons in this experiment are confounded by initialisation.**
+4. **A constant probe head-fit pool does not make S unconfounded.** Every cell
+   fits its ridge head on the identical 1863 recordings (verified per artifact),
+   so the head's *data* is not a variable. But the OVERLAP between an encoder's
+   pretraining cohort and that head-fit pool runs 0.5 % at S=10 to 100 % at
+   S=2156. Its direction argues against high S (the head is fitted on "seen"
+   embeddings and applied to unseen test ones, a mismatch growing with S), and
+   retrieval — which fits nothing — tracks the probe at r=0.995 while rising
+   5.7x against its 2.3x, so the SHAPE is the encoder's. Neither settles the
+   absolute values. **The clean design for the next sweep: exclude a fixed
+   ~300-recording slice from every pretraining cohort and fit the head only on
+   that**, making overlap 0 % at every S by construction.
+
+5. **Depth comparisons in this experiment are confounded by initialisation.**
    e03 (depth-12) trains from scratch; E0.4/E0.6 (depth-22) warm-start from
    `reve_base_eet_init.pth.tar`. At matched from-scratch init and S=1400 the two
    depths are within 0.007 (0.1918 vs 0.1853, the deeper one lower) while the

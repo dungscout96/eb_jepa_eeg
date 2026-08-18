@@ -616,12 +616,43 @@ retraining.
 **The probe head-fit pool is NOT changed.** `config_probe_TP_e04.yaml` and
 `config_probe_DM_e04.yaml` still declare `[R1..R4, R7..R10]`, so every cell in
 both arms fits its RidgeCV head on the identical 1863 (ThePresent) / 1832
-(DespicableMe) recordings. Only the **encoder's** pretraining cohort varies —
-which is what isolates "how good are the features an S-subject encoder learned"
-from "how much data did the probe itself see." A cross-task artifact reporting
-`n_train_recordings=2156` would mean the probe read the pretraining config
-instead of the eval config; the submitters' `verify` action checks for exactly
-that.
+(DespicableMe) recordings. Verified per artifact, not assumed: all 31 cells
+report `n_train_recordings=1863`, `n_train_windows=188163`,
+`n_test_recordings=108`, `seed=42`. So the head's *data* is not a variable, and
+a cross-task artifact reporting 2156 would mean the probe read the pretraining
+config instead of the eval config — the `verify` action checks exactly that.
+
+**But "the head-fit pool is constant" is NOT the same as "S is unconfounded",
+and an earlier version of this section overstated it.** What still varies with S
+is the OVERLAP between the pretraining cohort and the head-fit pool:
+
+| S | 10 | 200 | 701 | 1400 | 1863 | 2156 |
+|---|---|---|---|---|---|---|
+| ≈ %% of the 1863 head-fit pool the encoder pretrained on | 0.5 | 9 | 33 | 65 | 86 | 100 |
+
+At low S the ridge head is fitted almost entirely on subjects the encoder never
+saw; at high S, almost entirely on subjects it did. That is not controlled by
+holding the pool fixed. Two reasons it is unlikely to manufacture the curve:
+
+1. **Its direction works against high S.** The head is *fitted* on train and
+   *applied* to test (R6), which no encoder and no head ever sees. If an
+   encoder's embeddings differ systematically for subjects it trained on, then
+   at high S the head is fitted on "seen" embeddings and applied to "unseen"
+   ones — a fit/apply mismatch that grows with S and should depress it. The
+   measured scaling would then be conservative.
+2. **Retrieval is immune to it and agrees.** `retrieval.py` fits nothing, so
+   there is no head for cohort overlap to advantage. Across S=10→1863 the two
+   curves correlate at **r = 0.995**, and retrieval rises **5.7x** against the
+   probe's 2.3x. An overlap artifact cannot produce that.
+
+Reason 1 is an argument about direction, not a measurement, and reason 2
+establishes that the SHAPE is a property of the encoder — not that the probe's
+absolute values at high S are unbiased. **The clean test** would hold a fixed
+slice of the head-fit pool out of *every* pretraining cohort (say 300
+recordings excluded from all draws) and fit the head only on those, making
+overlap 0 %% at every S by construction. That requires retraining the axis,
+since the cohorts themselves must change, so it is a design note for the next
+sweep rather than something that can be bolted on here.
 
 **Retrieval refits nothing.** It is zero-shot cosine similarity between frozen
 EEG and V-JEPA-2 embeddings, so the head-fit caveats apply only to the Pearson
