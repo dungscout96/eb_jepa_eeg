@@ -14,7 +14,25 @@ All numbers in this file are generated directly from the raw JSONs in
 `raw_results/` by `src/write_results_model_scaling.py` -- re-run that script
 to regenerate this file after any change to the sweep.
 
-## Headline observation: S=1863 (full pool) underperforms S=1400
+## ⚠️ RETRACTED 2026-08-17: the headline below was a single-draw artifact
+
+**Do not cite the S=1863 drop.** E0.6 tested it directly by folding R5 into the
+pretraining pool (1863 -> 2156), which makes S=1863 a *drawable* cell with three
+replicates instead of the forced single draw it is here. Result
+([`RESULTS_add_val_set.md`](RESULTS_add_val_set.md)): three draws at S=1863 give
+a within-task probe mean r of **0.3097 +/- 0.0005**, *above* the S=1400 peak
+below (0.2927) and **+0.052 above the 0.2579 this file reports**. The same step
+in S is **+0.0130 with three draws and -0.0347 with one**, on the same
+architecture and recipe; the pools are near-exchangeable at matched S (offset
++0.0041, under half of e04's own between-draw sd).
+
+Caveat #1 below — "S=1863 has no draw replicate" — was therefore the
+explanation, not a hedge. **The tables in sections 1-4 remain valid as
+measurements**; it is only the interpretation of the S=1863 row that fails.
+
+The original text follows unchanged, for the record.
+
+## Headline observation (RETRACTED — see above): S=1863 (full pool) underperforms S=1400
 
 Every table below rises monotonically with S from 10 through 1400, then drops
 at the full-pool S=1863 cell -- consistently across both probe tasks, both

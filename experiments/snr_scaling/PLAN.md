@@ -350,6 +350,104 @@ cells. Output files land in `raw_results/` as `e04_tt_*`, `e04_retr_*`,
 
 Question: would model initialized with naturalistically trained data in one task perform better when finetuned in another task compared to training on that new task from scratch?
 
+### E0.6 — Add the val release to the training pool: is the saturation real? ✅ DONE 2026-08-17
+
+**Answer: no — the S=1863 drop was a single-draw artifact, and E0.4's headline
+is retracted.** Three draws at S=1863 from the 2156 pool give within-task probe
+mean *r* = **0.3097 ± 0.0005**, above E0.4's S=1400 peak (0.2927 ± 0.0085) and
+**+0.052 above its single-draw S=1863 (0.2579)**. The decisive contrast is the
+same step in S measured two ways: **+0.0130 with three draws vs −0.0347 with
+one**, negative on all five readouts in the single-draw case and positive on
+three of five (never below −0.003) with three. The pools are near-exchangeable
+at matched S=1400 (offset +0.0041, under half of E0.4's own between-draw sd),
+so the comparison holds. Full detail in
+[`RESULTS_add_val_set.md`](RESULTS_add_val_set.md).
+
+**What it does not show:** S=2156 is again the whole pool, hence one draw, so it
+inherits exactly the weakness this experiment was built to expose. Its +0.0052
+over S=1863 is inside single-draw range and retrieval is flat across that step.
+Read it as *"no evidence of decline at 2156"*, not *"still rising"*. Settling
+that needs a pool above 2156 (R11, or DespicableMe-native cohorts) so S=2156
+becomes drawable in triplicate.
+
+**Two process lessons worth more than the result:**
+
+1. **A run's `config.yaml` is not the run.** The first sweep was invalid because
+   E0.4 warm-starts from `reve_base_eet_init.pth.tar` and uses seed 2026 via
+   *CLI overrides that no config file records*. A byte-for-byte config diff came
+   back clean while the arms differed in the most important way. Symptom: a
+   uniform ~37 % deficit at matched S with a **completely flat** S curve — an
+   under-trained encoder makes the axis under study stop mattering, which reads
+   as a dramatic finding rather than a bug. Always check
+   `wandb/latest-run/files/wandb-metadata.json` → `args`.
+2. **This recipe has a real seed-instability.** One cell (`s1400_d11`) never
+   converged at seed 2026 — flat at the random baseline across every epoch,
+   final loss 3.9 vs siblings' 2.8. E0.4 hit the identical failure three times
+   (`*_FAILED_seed2026` dirs) and re-ran each at `--meta.seed=7`. Budget for
+   ~1 in 10 cells needing a reseed, and judge failure on artifacts (flat at
+   chance across epochs, high final loss) rather than on whether the number is
+   the one you wanted.
+
+### Original design notes (E0.6, written 2026-08-14 before the runs)
+
+E0.4's depth-22 arm rises monotonically with `S` through 1400 and then **drops**
+at the full-pool S=1863 cell, across every independent readout. The drop cannot
+be believed as stated for one structural reason: **S=1863 *is* the pool**
+(R1–R4 + R7–R10), so it has exactly one possible draw, while every other point
+on the curve is a mean over three. A single-draw cell is exactly where smoothed
+epoch selection protects least — and §2.10 documents a prior case where
+selection variance manufactured an apparent scaling artifact in this experiment.
+
+**The manipulation is one config line.** Folding R5 — previously the val split,
+293 ThePresent recordings — into `data.train_releases` takes the pool from 1863
+to 2156. That buys two things a bigger pool alone would not:
+
+1. **S=1863 becomes a drawable cell with three replicates**, because 1863 <
+   2156 makes `max_subjects=1863` a real subsample rather than a no-op cap. If
+   three independent draws land at the S=1400 level, the drop was draw or
+   selection variance; if they reproduce it, it is a population-level effect.
+   This is the direct test, and it is the reason to do this rather than simply
+   preprocess another release.
+2. **A new max-S point at S=2156**, the first observation past the previous
+   ceiling of the data.
+
+**Cells (7):** S=1400 × 3 draws (pool-stitch calibration), S=1863 × 3 draws
+(the money cells), S=2156 × 1 draw (whole pool). Everything else held to E0.4:
+depth-22, `meta.seed=2025`, 400 epochs, `epoch_size=703` so every cell runs the
+same 4400 steps, `max_anchors=101`, `save_every=25`.
+
+**Three protocol consequences, all of them costs of putting R5 in train:**
+
+- **Test split only.** A val number for these cells would be measured on data
+  their encoder saw. R6 is untouched by both arms and is the only split on
+  which they are comparable.
+- **Fixed epoch 375, not per-cell selection.** `val/clip_scene_auc` is now
+  in-sample, so E0.4's smoothed-argmax selection is unavailable. 375 is where
+  4 of 4 high-S E0.4 cells' own selection landed (S=1400 d11/d33 and S=1863 at
+  375; S=1400 d22 at 350), so the arms are matched to within one 25-epoch
+  interval. `save_every=25` keeps the grid on disk for later re-evaluation.
+- **The probe head-fit pool is deliberately NOT changed** — both eval configs
+  still declare `[R1..R4, R7..R10]`, so every cell in both arms fits its ridge
+  head on the identical 1863/1832 recordings and only the *encoder's* cohort
+  varies.
+
+**The result that gates the rest:** the S=1400 calibration. Draws nest within a
+pool, but adding R5 changes the list being permuted, so the two arms' S=1400
+cohorts are not the same subjects. §2.11 already measured this kind of pool
+effect once (R7–R10 subjects worth 8–15 % less than R1–R4 at matched count), so
+a non-zero offset here is not hypothetical — and if there is one, every
+S=1863/2156 comparison must be read through it rather than at face value.
+
+Infra: `config/clip_pretrain_e05_addval.yaml` (frozen training config — E0.4's,
+plus R5), `submit/_submit_e05_addval.py` (training + `sync`/`verify`),
+`--arm addval` on `submit/_submit_traintest_e04.py` and
+`submit/_submit_retrieval_e04.py` (both restrict to test and pin epoch 375),
+`src/write_results_add_val_set.py`.
+
+Deliverable: `RESULTS_add_val_set.md`. Checkpoints land in
+`/work/hdd/bbnv/dtyoung/eb_jepa/e05_addval`; raw JSONs in `raw_results/` under
+`e05_*` slugs, which cannot collide with the E0.4 arm's `e04_*` ones.
+
 ---
 
 ## Tier 1 — the method. Cross-subject JEPA as a subject-efficiency claim.
