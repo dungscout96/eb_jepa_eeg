@@ -352,8 +352,12 @@ Question: would model initialized with naturalistically trained data in one task
 
 ### E0.6 — Add the val release to the training pool: is the saturation real? ✅ DONE 2026-08-17
 
-**Answer: no — the S=1863 drop was a single-draw artifact, and E0.4's headline
-is retracted.** Three draws at S=1863 from the 2156 pool give within-task probe
+**Answer: no — the S=1863 drop was ONE BADLY-OPTIMISED RUN, and E0.4's headline
+is retracted.** The decisive test is E0.4's own never-evaluated alternate-seed
+replicate of the full-pool cell: that cell has exactly one possible cohort, so
+it varies only `meta.seed`, and it moves 0.2531 -> **0.3092** (final training
+loss 3.32 -> 2.62). E0.6's three-draw estimate from the larger pool, 0.3076 ±
+0.0008, agrees from a different direction. Three draws at S=1863 from the 2156 pool give within-task probe
 mean *r* = **0.3097 ± 0.0005**, above E0.4's S=1400 peak (0.2927 ± 0.0085) and
 **+0.052 above its single-draw S=1863 (0.2579)**. The decisive contrast is the
 same step in S measured two ways: **+0.0130 with three draws vs −0.0347 with
@@ -370,7 +374,7 @@ Read it as *"no evidence of decline at 2156"*, not *"still rising"*. Settling
 that needs a pool above 2156 (R11, or DespicableMe-native cohorts) so S=2156
 becomes drawable in triplicate.
 
-**Two process lessons worth more than the result:**
+**Three process lessons worth more than the result:**
 
 1. **A run's `config.yaml` is not the run.** The first sweep was invalid because
    E0.4 warm-starts from `reve_base_eet_init.pth.tar` and uses seed 2026 via
@@ -394,7 +398,18 @@ becomes drawable in triplicate.
    instability and becomes selection on the outcome. Full write-up in
    [`RESULTS_add_val_set.md`](RESULTS_add_val_set.md) § "Failure mode".
 
-3. **Depth comparisons in this experiment are confounded by initialisation.**
+3. **Screening catches collapse; only REPLICATION catches partial failure.**
+   The instability is a spectrum. Full collapse is easy to detect (loss pinned
+   at ln 64 = 4.16, 1.67–3.09× the S-group median). But the retracted S=1863
+   cell was a *partial* failure — loss 3.32, i.e. **1.22×**, below the 1.30×
+   screen threshold and overlapping the worst healthy cell at 1.19×. The two
+   distributions genuinely overlap, so no threshold separates them. A clean
+   `screen` means "nothing collapsed", not "everything trained well". **Treat
+   every n=1 cell as provisional**, however clean it looks — that is the real
+   reason the S=1863 headline survived as long as it did, and the reason E0.6's
+   fix had to be replicates rather than a better detector.
+
+4. **Depth comparisons in this experiment are confounded by initialisation.**
    e03 (depth-12) trains from scratch; E0.4/E0.6 (depth-22) warm-start from
    `reve_base_eet_init.pth.tar`. At matched from-scratch init and S=1400 the two
    depths are within 0.007 (0.1918 vs 0.1853, the deeper one lower) while the

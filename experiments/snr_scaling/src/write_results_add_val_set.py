@@ -507,7 +507,46 @@ All numbers below are generated from the raw JSONs in `raw_results/` by
 
 ---
 
-## Verdict: the drop does not reproduce. It was the single draw.
+## Verdict: the drop was one RUN, not the data — a single-seed partial failure
+
+**Sharpened 2026-08-18 by a cleaner test than the one this file was built on.**
+`e04_s1863_a101_seed7` is kkokate's alternate-seed replicate of the full-pool
+cell, never previously evaluated. The full-pool cell has exactly ONE possible
+cohort, so seed7 vs the main cell holds data, pool, architecture,
+initialisation and epoch all fixed and varies **only `meta.seed`**:
+
+| e04 S=1863 @ epoch 325 | seed 2026 | seed 7 | delta |
+|---|---|---|---|
+| within-task probe mean(12) r | 0.2531 | **0.3092** | **+0.0561** |
+| time-pool e2v@1 | 0.0523 | 0.0711 | +0.0189 |
+| **final training loss** | **3.32** | **2.62** | -0.70 |
+
+Seed 7 lands on this arm's independent three-draw S=1863 estimate (0.3076 +/-
+0.0008) reached from a different pool entirely. Two routes, one answer.
+
+So the correct statement is **not** "the S=1863 cohort is unlucky" and not "the
+draw was unlucky" -- cohort was never the variable. **That one run optimised
+badly.** Its final loss, 3.32, sits well above its seed-7 twin (2.62) and above
+the S=1400 cells (2.73), so the deficit is visible in training, not only in the
+readout.
+
+**This is the collapse failure mode in a milder form** (see the section below).
+Full collapse pins the loss at ln(64)=4.1589 and the score at chance; this run
+degraded partially -- ~18 %% low on the probe -- which is far more dangerous,
+because nothing about 0.2531 looks broken. It is a plausible number, and it
+survived as a published headline precisely because it was plausible.
+
+**The load-bearing consequence for methodology.** 3.32/2.73 = **1.22x** its
+comparison median, BELOW the 1.30x threshold that catches outright collapse and
+overlapping the worst healthy cell in this arm (1.19x). **Loss screening does
+not separate partial failures from normal variation.** Screening catches
+collapse; only REPLICATION catches partial failure. That is why every
+single-draw cell on these curves is the vulnerable one, and why the fix for
+S=1863 had to be replicates rather than a better detector.
+
+---
+
+## Original verdict (three draws from a larger pool) — unchanged and consistent
 
 **Three independent draws at S=1863 from the 2156 pool give a within-task probe
 mean r of 0.3097 +/- 0.0005** — *above* e04's S=1400 peak (0.2927 +/- 0.0085),
@@ -672,6 +711,28 @@ learned the hard way:
 `screen` also refuses to judge a run that has not finished. A mid-descent loss
 looks collapsed beside a finished sibling's, and that false positive fired once
 on `s400_d11` at 45 of ~75 minutes (2.49 against siblings' 1.26/1.30).
+
+**The instability is a SPECTRUM, and the screen only catches one end of it.**
+Full collapse is the easy case: loss pinned at 4.16, score at chance, 1.67-3.09x
+the S-group median. But `e04_s1863_a101_nd` -- the cell whose apparent drop this
+whole experiment was built to explain -- was a PARTIAL failure:
+
+| | full collapse | partial (`e04_s1863` seed 2026) | healthy |
+|---|---|---|---|
+| final loss | 4.02-4.16 (= ln 64) | 3.32 | 2.6-2.8 |
+| x comparison median | 1.67-3.09 | **1.22** | <= 1.19 |
+| readout | at random baseline | ~18 %% low, looks plausible | -- |
+
+**1.22x is below the 1.30x threshold and overlaps the worst healthy cell at
+1.19x.** So training loss does NOT separate partial failures from normal
+variation, and `screen` would not have flagged this one. Lowering the threshold
+does not fix it -- the two distributions genuinely overlap at that granularity.
+
+The practical rule that follows: **screening catches collapse; only replication
+catches partial failure.** Every single-draw cell on these curves is therefore
+the vulnerable one, which is exactly why the fix for S=1863 had to be replicates
+rather than a better detector. Budget replicates wherever a number will be
+quoted, and treat any n=1 point as provisional regardless of how clean it looks.
 
 **Remedy, and the cap.** Reseed to 7, which is e04's own convention. Two of
 three recovered at seed 7; `s400_d11` collapsed at 2026 *and* 7 and recovered at

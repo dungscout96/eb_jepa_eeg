@@ -362,6 +362,17 @@ def screen() -> int:
     sits at ln(batch_size) = 4.1589, InfoNCE's chance value, flat for the whole
     run -- see COLLAPSED_LOSS. Cells within a few percent of that never learned
     anything, whatever their S.
+
+    WHAT THIS DOES NOT CATCH. The instability is a spectrum and this screen only
+    detects one end. `e04_s1863_a101_nd` -- the cell whose apparent drop started
+    this whole experiment -- finished at loss 3.32 against its alternate-seed
+    twin's 2.62, scoring ~18 %% low on the probe. That is 1.22x its comparison
+    median: BELOW the 1.30x threshold, and overlapping the worst healthy cell
+    here (1.19x). Lowering the threshold does not separate them; the
+    distributions genuinely overlap. A clean screen result therefore means "no
+    cell collapsed", NOT "every cell trained well". Only replication catches
+    partial failure -- treat any n=1 point as provisional no matter how clean
+    it looks.
     """
     import re as _re
     import statistics as _st

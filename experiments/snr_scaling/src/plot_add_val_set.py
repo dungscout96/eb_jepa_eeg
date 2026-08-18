@@ -574,6 +574,201 @@ def fig_depth() -> None:
               f"d22-warm {wm.get(1400, float('nan')):.4f}")
 
 
+# ---------------------------------------------------------------------------
+# The paper figure: both of the above on one canvas
+# ---------------------------------------------------------------------------
+
+def _probe_raw(d):
+    return st.fmean([d["features"][f]["pearson_r"]
+                     for f in W.FEATURES if f in d["features"]])
+
+
+def _time_raw(d):
+    return d["levels"]["time"]["e2v_top_k"]["1"]
+
+
+# Rows are the TASK, columns are the readout -- so reading down a column asks
+# "does this readout transfer", and reading across a row asks "do two readouts
+# that share no fitted parameters agree". Probe and time pool only: the shot and
+# scene pools carry the same shape at coarser resolution, so they are appendix
+# material rather than a third and fourth column here.
+COMBINED_PANELS = [
+    # (title, ylab, e03_prefix, av_prefix, raw_getter, warm_getter, native)
+    ("Within-task probe (ThePresent)", "mean Pearson r over 12 features",
+     "e03_tt", "e04_tt", _probe_raw,
+     lambda sl: W.probe_mean12("e04_tt", sl, OFFICIAL_EPOCH_SUFFIX), False),
+    ("Within-task retrieval, time pool", "e→v top-1 accuracy",
+     "e03_retr", "e04_retr", _time_raw,
+     lambda sl: W.retr_e2v1("e04_retr", "time", sl, OFFICIAL_EPOCH_SUFFIX), False),
+    ("Cross-task probe (DespicableMe)", "mean Pearson r over 12 features",
+     "xtask_tt_DM", "xtask_tt_DM", _probe_raw,
+     lambda sl: W.probe_mean12("xtask_tt_DM", sl, OFFICIAL_EPOCH_SUFFIX), True),
+    ("Cross-task retrieval, time pool", "e→v top-1 accuracy",
+     "xtask_retr_DM", "xtask_retr_DM", _time_raw,
+     lambda sl: W.retr_e2v1("xtask_retr_DM", "time", sl, OFFICIAL_EPOCH_SUFFIX), True),
+]
+
+# The DespicableMe-native anchor: a model trained ON DespicableMe with the
+# identical recipe, so it is the "what would you get without transferring at
+# all" reference for the two cross-task panels.
+#
+# THREE THINGS THIS IS NOT, all of which the label has to carry:
+#   1. It is not at S=2156. Only two native cells were ever trained, S=701 and
+#      S=1841; 1841 is the largest and is what is drawn.
+#   2. It is depth-12 FROM SCRATCH -- the blue arm's configuration, not the
+#      orange one's. So it is the fair ceiling for blue and NOT for orange.
+#   3. It is therefore not an upper bound in general: on the probe the orange
+#      depth-22 warm-started transfer passes straight through it.
+# Drawn as a neutral dotted rule rather than a fourth coloured series, because
+# it is a reference level, not another point on the subject axis.
+NATIVE_SLUG = "e03_s1841_a85_dm"
+NATIVE_S = 1841
+
+
+def native_value(prefix: str, raw_get):
+    d = W.load(W.RAW / f"{W.tag(prefix)}_{NATIVE_SLUG}.json")
+    return None if d is None else raw_get(d)
+
+
+def _draw_three_arms(ax, e03_prefix, av_prefix, raw_get, warm_get) -> bool:
+    """The three initialisation/depth arms on one axis. -> did anything draw?"""
+    drew = False
+
+    pts = official_series(warm_get)          # depth-22, warm start, full axis
+    if pts:
+        drew = True
+        band = [(x, y, sd) for x, y, sd, n in pts if sd is not None]
+        if len(band) > 1:
+            ax.fill_between([b[0] for b in band],
+                            [b[1] - b[2] for b in band],
+                            [b[1] + b[2] for b in band],
+                            color=ORANGE, alpha=0.20, linewidth=0, zorder=1)
+        ax.plot([p[0] for p in pts], [p[1] for p in pts], color=ORANGE, lw=2.2,
+                zorder=4, solid_capstyle="round")
+        for x, y, sd, n in pts:
+            single = sd is None
+            ax.plot([x], [y], marker="s", ms=7,
+                    markerfacecolor=SURFACE if single else ORANGE,
+                    markeredgecolor=ORANGE,
+                    markeredgewidth=2.0 if single else 1.2, zorder=5)
+            if n != 3:
+                ax.annotate(f"n={n}", xy=(x, y), xytext=(-2, -14),
+                            textcoords="offset points", fontsize=7.5,
+                            color=ORANGE, fontweight="bold", ha="right")
+
+    fs = fromscratch_series(av_prefix, raw_get)   # depth-22, from scratch
+    if fs:
+        drew = True
+        fsb = [(x, y, sd) for x, y, sd, n in fs if sd is not None]
+        if len(fsb) > 1:
+            ax.fill_between([b[0] for b in fsb],
+                            [b[1] - b[2] for b in fsb],
+                            [b[1] + b[2] for b in fsb],
+                            color=GREEN, alpha=0.20, linewidth=0, zorder=1)
+        ax.plot([p[0] for p in fs], [p[1] for p in fs], color=GREEN, lw=2.0,
+                linestyle="--", marker="D", ms=6, markerfacecolor=GREEN,
+                markeredgecolor=SURFACE, markeredgewidth=1.2, zorder=4)
+
+    e3 = e03_series(e03_prefix, raw_get)          # depth-12, from scratch
+    if e3:
+        drew = True
+        ax.plot([x for x, _ in e3], [y for _, y in e3], color=BLUE, lw=1.8,
+                linestyle="--", marker="o", ms=6, markerfacecolor=SURFACE,
+                markeredgecolor=BLUE, markeredgewidth=1.6, zorder=3)
+    return drew
+
+
+def fig_combined() -> None:
+    """The paper's subject-scaling figure: four readouts x three arms.
+
+    Merges what were two figures -- the official warm-start curve and the
+    warm-start-vs-from-scratch comparison -- because they share an x-axis and a
+    conclusion. Keeping them apart made the reader hold the warm arm's shape in
+    memory while looking at the second figure to see what it is being compared
+    against.
+    """
+    fig, axes = plt.subplots(2, 2, figsize=(11.2, 8.4), facecolor=SURFACE)
+    for ax, (title, ylab, e03_prefix, av_prefix, raw_get, warm_get,
+             show_native) in zip(axes.ravel(), COMBINED_PANELS):
+        if not _draw_three_arms(ax, e03_prefix, av_prefix, raw_get, warm_get):
+            ax.text(0.5, 0.5, "not yet measured", ha="center", va="center",
+                    transform=ax.transAxes, color=MUTED, fontsize=10)
+            ax.set_title(title, color=INK, fontsize=10.5, loc="left", pad=8)
+            _style(ax)
+            continue
+        if show_native:
+            nat = native_value(e03_prefix, raw_get)
+            if nat is not None:
+                ax.axhline(nat, color=INK_2, lw=1.4, linestyle=":", zorder=2)
+                ax.annotate(f"DM-native (d-12 scratch, S={NATIVE_S}): {nat:.3f}",
+                            xy=(0.015, nat), xycoords=("axes fraction", "data"),
+                            xytext=(0, 4), textcoords="offset points",
+                            fontsize=8, color=INK_2)
+        ax.set_xscale("log")
+        ax.set_xticks([10, 20, 50, 100, 200, 400, 701, 1400, 2156])
+        ax.set_xticklabels(["10", "20", "50", "100", "200", "400", "701",
+                            "1400", "2156"], fontsize=8, rotation=30,
+                           ha="right", rotation_mode="anchor")
+        ax.minorticks_off()
+        ax.set_xlabel("S — pretraining subjects (log scale)", color=INK_2,
+                      fontsize=9.5)
+        ax.set_ylabel(ylab, color=INK_2, fontsize=9.5)
+        ax.set_title(title, color=INK, fontsize=10.5, loc="left", pad=8)
+        _style(ax)
+
+    handles = [
+        Line2D([], [], color=ORANGE, lw=2.2, marker="s", ms=7,
+               markerfacecolor=ORANGE, markeredgecolor=ORANGE,
+               label="depth-22, REVE WARM START — pool 2156, 3 draws"),
+        Line2D([], [], color=GREEN, lw=2.0, linestyle="--", marker="D", ms=6,
+               markerfacecolor=GREEN, markeredgecolor=GREEN,
+               label="depth-22, FROM SCRATCH — pool 2156, 3 draws (S≥1400 only)"),
+        Line2D([], [], color=BLUE, lw=1.8, linestyle="--", marker="o", ms=6,
+               markerfacecolor=SURFACE, markeredgecolor=BLUE,
+               label="depth-12, FROM SCRATCH — pool 1863, single draw, no band"),
+        Line2D([], [], color=MUTED, lw=0, marker="s", ms=7,
+               markerfacecolor=SURFACE, markeredgecolor=MUTED,
+               markeredgewidth=2.0,
+               label="hollow = whole pool, n=1 draw (no spread measurable)"),
+        Line2D([], [], color=INK_2, lw=1.4, linestyle=":",
+               label=f"DespicableMe-NATIVE anchor, depth-12 from scratch, "
+                     f"S={NATIVE_S} (no native cell at S=2156)"),
+    ]
+    leg = fig.legend(handles=handles, loc="lower center", ncol=2, fontsize=9,
+                     frameon=False, bbox_to_anchor=(0.5, 0.005))
+    for t in leg.get_texts():
+        t.set_color(INK_2)
+
+    fig.suptitle(
+        "Subject scaling — top row within-task, bottom row cross-task; probe and time-pool retrieval\n"
+        "2156-recording pool, step-matched (4400 steps), fixed epoch 325 "
+        "(from-scratch depth-22 at 375), test split (R6)",
+        color=INK, fontsize=11.5, y=0.978, x=0.008, ha="left")
+    fig.tight_layout(rect=(0, 0.085, 1, 0.945))
+    for ext in ("png", "pdf"):
+        fig.savefig(FIGS / f"subject_scaling_combined.{ext}", dpi=200,
+                    facecolor=SURFACE)
+    plt.close(fig)
+    print(f"Wrote {FIGS}/subject_scaling_combined.{{png,pdf}}")
+    for title, _y, e03_prefix, av_prefix, raw_get, warm_get, show_native in \
+            COMBINED_PANELS:
+        e3 = dict(e03_series(e03_prefix, raw_get))
+        fs = {x: y for x, y, _s, _n in fromscratch_series(av_prefix, raw_get)}
+        wm = {x: y for x, y, _s, _n in official_series(warm_get)}
+        line = (f"  {title} @S=1400: d12-scratch {e3.get(1400, float('nan')):.4f} | "
+                f"d22-scratch {fs.get(1400, float('nan')):.4f} | "
+                f"d22-warm {wm.get(1400, float('nan')):.4f}")
+        if show_native:
+            nat = native_value(e03_prefix, raw_get)
+            top = wm.get(2156)
+            # Printed because the sign of this comparison differs between the
+            # two cross-task panels, and that is the finding, not a detail.
+            line += (f"\n      native(S={NATIVE_S}) {nat:.4f} vs d22-warm@2156 "
+                     f"{top:.4f} -> transfer is "
+                     f"{'ABOVE' if top > nat else 'below'} native")
+        print(line)
+
+
 def main() -> None:
     if W.FAILED_CELLS:
         print("excluded from every mean/band (see RESULTS_add_val_set.md 2b):")
@@ -583,6 +778,7 @@ def main() -> None:
     fig_decomposition()
     fig_official()
     fig_depth()
+    fig_combined()
 
 if __name__ == "__main__":
     main()

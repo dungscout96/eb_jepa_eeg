@@ -256,21 +256,37 @@ All numbers in this file are generated directly from the raw JSONs in
 `raw_results/` by `src/write_results_model_scaling.py` -- re-run that script
 to regenerate this file after any change to the sweep.
 
-## ⚠️ RETRACTED 2026-08-17: the headline below was a single-draw artifact
+## ⚠️ RETRACTED: the headline below was a single-SEED partial training failure
 
-**Do not cite the S=1863 drop.** E0.6 tested it directly by folding R5 into the
-pretraining pool (1863 -> 2156), which makes S=1863 a *drawable* cell with three
-replicates instead of the forced single draw it is here. Result
-([`RESULTS_add_val_set.md`](RESULTS_add_val_set.md)): three draws at S=1863 give
-a within-task probe mean r of **0.3097 +/- 0.0005**, *above* the S=1400 peak
-below (0.2927) and **+0.052 above the 0.2579 this file reports**. The same step
-in S is **+0.0130 with three draws and -0.0347 with one**, on the same
-architecture and recipe; the pools are near-exchangeable at matched S (offset
-+0.0041, under half of e04's own between-draw sd).
+**Do not cite the S=1863 drop.** Two independent tests kill it.
 
-Caveat #1 below — "S=1863 has no draw replicate" — was therefore the
-explanation, not a hedge. **The tables in sections 1-4 remain valid as
-measurements**; it is only the interpretation of the S=1863 row that fails.
+**1. The direct one (decisive).** `e04_s1863_a101_seed7` is this sweep's own
+alternate-seed replicate of the full-pool cell, never previously evaluated. The
+full-pool cell has exactly ONE possible cohort, so it holds data, pool,
+architecture, initialisation and epoch fixed and varies only `meta.seed`:
+
+| e04 S=1863 @ epoch 325 | seed 2026 (this file) | seed 7 |
+|---|---|---|
+| within-task probe mean(12) r | 0.2531 | **0.3092** |
+| time-pool e2v@1 | 0.0523 | 0.0711 |
+| final training loss | **3.32** | 2.62 |
+
+**2. Independently**, E0.6 folded R5 into the pool so S=1863 becomes drawable,
+and three draws give **0.3076 +/- 0.0008** — landing on seed 7 from a different
+pool entirely ([`RESULTS_add_val_set.md`](RESULTS_add_val_set.md)).
+
+So the S=1863 row is not a property of the data, the cohort, or the subject
+count. **That one run optimised badly** — its final loss, 3.32, sits above both
+its seed-7 twin (2.62) and the S=1400 cells (2.73). It is the same seed
+instability that fully collapses ~10 %% of cells in this recipe, in a milder
+form: ~18 %% low rather than at chance, which is why it read as a finding.
+
+Caveat #1 below — "S=1863 has no draw replicate" — was the right instinct for
+the wrong reason. The problem was not which subjects it drew but that it had no
+replicate of ANY kind, so a bad run had nothing to be checked against. **The
+tables in sections 1-4 remain valid as measurements**; only the interpretation
+of the S=1863 row fails, and any other single-draw cell here carries the same
+exposure.
 
 The original text follows unchanged, for the record.
 
