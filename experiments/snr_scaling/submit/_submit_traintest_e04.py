@@ -56,31 +56,51 @@ TP_CONFIG = "experiments/snr_scaling/config/config_probe_TP_e04.yaml"
 BOOTSTRAP = 2000
 
 # --- arms -------------------------------------------------------------------
-# Both arms are the SAME depth-22 architecture evaluated by the same code
-# against the same two configs, so they share every step-builder below; only
-# the checkpoint root and the cell->epoch map differ.
+# Every arm is the SAME depth-22 architecture, evaluated by the same code
+# against the same two configs. Only three things vary: where the checkpoints
+# live, which cells exist, and how the epoch is chosen. One table rather than a
+# per-arm branch, because there are now three of them.
 #
-#   e04      kkokate's e04_reve_scaling, 28 cells, per-cell smoothed selection
-#            from e04_selection.json (or --epoch N to override).
-#   addval   e05_addval -- the same recipe retrained with R5 folded into the
-#            pretraining pool (see submit/_submit_e05_addval.py). R5 is no
-#            longer held out for these cells, so smoothed val selection is
-#            unavailable and they are pinned to a FIXED epoch (375, where 4 of
-#            4 high-S e04 cells' own selection landed). Their slugs start with
-#            `e05_`, so output filenames never collide with the e04 arm's.
+#   e04         kkokate's e04_reve_scaling. Pool 1863, REVE warm start, 28
+#               cells, per-cell smoothed selection from e04_selection.json.
+#   addval      e05_addval. Pool 2156, REVE warm start, 31 cells.
+#   fromscratch e05_fromscratch. Pool 2156, NO warm start, 31 cells. Isolates
+#               what the initialisation buys -- at S=1400 it is worth +0.111 on
+#               the within-task probe, ~15x the depth-12/depth-22 difference.
+#
+# Both e05 arms report TEST ONLY: their encoders trained on R5, so a val number
+# would be measured on data they saw. Neither can use smoothed val selection
+# for the same reason, so both are pinned to a fixed epoch. The suffix
+# convention is uniform across arms -- unsuffixed means E05_DEFAULT_EPOCH (375),
+# `_ep<N>` means a fixed N -- so pass `--epoch 325` for the official
+# cross-arm comparison, where e04's own 28-cell ep325 sweep also exists.
 #
 # EXPECTED_TRAIN_RECORDINGS is deliberately NOT per-arm: the ridge head is fit
-# on [R1..R4, R7..R10] for every cell in both arms, so 1863/1832 must hold for
-# the addval cells too. If an addval artifact ever reports 2156, the probe
-# read the pretraining config instead of the eval config and the comparison is
-# void.
+# on [R1..R4, R7..R10] for every cell in every arm, so 1863/1832 must hold
+# throughout. A 2156 there means a probe read a pretraining config.
 E05_CKPT_ROOT = "/work/hdd/bbnv/dtyoung/eb_jepa/e05_addval"
+E05FS_CKPT_ROOT = "/work/hdd/bbnv/dtyoung/eb_jepa/e05_fromscratch"
 E05_DEFAULT_EPOCH = 375
-E05_CELLS = (
-    [f"e05_s1400_a101_av_d{d}" for d in (11, 22, 33)]
-    + [f"e05_s1863_a101_av_d{d}" for d in (11, 22, 33)]
-    + ["e05_s2156_a101_av"]
-)
+E05_S_AXIS = [10, 20, 50, 100, 200, 400, 701, 1000, 1400, 1863]
+
+
+def _e05_cells(prefix: str) -> list[str]:
+    """Must stay in step with _submit_e05_addval.py's CELLS + FULL_AXIS_CELLS;
+    tests/unit/test_addval_arm.py pins that."""
+    return ([f"{prefix}_s{s}_a101_av_d{d}" for s in E05_S_AXIS for d in (11, 22, 33)]
+            + [f"{prefix}_s2156_a101_av"])
+
+
+E05_CELLS = _e05_cells("e05")
+E05FS_CELLS = _e05_cells("e05fs")
+
+ARMS = {
+    "e04": dict(root=None, cells=None, splits=None),
+    "addval": dict(root=E05_CKPT_ROOT, cells=E05_CELLS, splits=["test"]),
+    "fromscratch": dict(root=E05FS_CKPT_ROOT, cells=E05FS_CELLS, splits=["test"]),
+}
+ARM_SPLITS = {a: v["splits"] for a, v in ARMS.items()}
+
 
 ENV = {
     "WANDB_MODE": "disabled",
@@ -131,12 +151,9 @@ def resolve_arm(arm: str, epoch: int | None) -> tuple[str, dict[str, int], str, 
             return (CKPT_ROOT, {s: epoch for s in load_selection()},
                     f"_ep{epoch}", f"fixed epoch {epoch}")
         return CKPT_ROOT, load_selection(), "", "per-cell selected epoch"
-    # addval: no held-out val to select on, so a fixed epoch is the protocol,
-    # not a fallback. Default 375; --epoch overrides. No filename suffix at the
-    # default -- these slugs are unique to this arm, so nothing can collide,
-    # and an unsuffixed name keeps the primary artifact obvious.
+    spec = ARMS[arm]
     ep = E05_DEFAULT_EPOCH if epoch is None else epoch
-    return (E05_CKPT_ROOT, {s: ep for s in E05_CELLS},
+    return (spec["root"], {s: ep for s in spec["cells"]},
             "" if ep == E05_DEFAULT_EPOCH else f"_ep{ep}",
             f"fixed epoch {ep} (no held-out val; see _submit_e05_addval.py)")
 
@@ -168,7 +185,6 @@ def _tag(prefix: str, split: str) -> str:
 # so a "val" number would be measured on data the encoder saw -- not a weaker
 # result, a meaningless one. R6 is untouched by both arms and is the only split
 # on which the two are comparable at all.
-ARM_SPLITS = {"e04": None, "addval": ["test"]}
 
 
 def build_steps(preset: str, epochs: dict[str, int], epoch_suffix: str = "",
@@ -268,7 +284,7 @@ def main() -> None:
                     help="Use this FIXED epoch for every cell instead of "
                          "per-cell selection (e.g. 325, matching e03's own "
                          "convention). Outputs get an _ep<N> filename suffix.")
-    ap.add_argument("--arm", default="e04", choices=["e04", "addval"],
+    ap.add_argument("--arm", default="e04", choices=sorted(ARMS),
                     help="e04 = kkokate's e04_reve_scaling (default). "
                          "addval = the e05_addval cells, trained with R5 in "
                          "the pool; TEST SPLIT ONLY, fixed epoch "
