@@ -153,6 +153,61 @@ table above it.
 
 ---
 
+## Failure mode: collapse at initialisation, ~10 % of cells per seed
+
+This recipe fails to train on about one cell in ten, and the failure is
+**silent by construction**: a collapsed cell runs the full 400 epochs, writes a
+complete 15-checkpoint grid, and produces well-formed evaluation artifacts with
+plausible-looking numbers. Nothing in `sacct`, the checkpoint count, or the
+artifact schema distinguishes it. Left in, it drags its S-group mean toward the
+random baseline and steepens the apparent scaling curve.
+
+**The mechanism.** InfoNCE at `batch_size=64` has chance loss `ln(64) = 4.1589`.
+Every failure observed on this arm sits at **4.02–4.16, flat from epoch 1 to
+400** — the run never leaves the collapsed solution. A healthy cell at the same
+S escapes immediately. Measured, same S=400, same recipe, differing only in
+`meta.seed`:
+
+| epoch | 1 | 40 | 80 | 120 | 160 | 200 | 240 | 280 | 320 | 360 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| collapsed (`s400_d11`, seed 2026) | 4.13 | 4.14 | 4.14 | 4.12 | 4.08 | 4.12 | 4.11 | 4.05 | 4.09 | 4.05 |
+| healthy (`s400_d22`, seed 2026) | 4.21 | 3.89 | 3.47 | 2.90 | 2.41 | 2.20 | 1.60 | 1.63 | 1.37 | 1.21 |
+
+So the seed decides whether the run escapes the basin. It is not gradual
+divergence, and it is not a bad cohort: `s1400_d11` collapsed while `s1863_d11`,
+whose cohort is a strict SUPERSET of it, trained normally.
+
+**Rate, across two independently-run sweeps.** 3 of 31 here (~10 %) and 3 of 28
+in `e04_reve_scaling` (~11 %) — kkokate's `e04_s{1000_d33,200_d22,400_d33}` each
+kept a `_FAILED_seed2026` directory beside a seed-7 replacement. Budget for it.
+
+**Detection — `_submit_e05_addval.py screen`.** Two design choices, both
+learned the hard way:
+
+1. **Screen on training loss, not on a score.** No evaluation is needed, so a
+   dead cell is caught before ~40 min of probe GPU is spent on it. One cell
+   (`s400_d11`) was caught exactly this way, before its eval ran.
+2. **Compare to the same-S median, not an absolute threshold.** Loss scales with
+   cohort size — S=10 sits near 0.70, S=1863 near 2.8 — so a fixed cutoff that
+   catches a failure at S=1000 would miss the identical failure at S=50. The
+   threshold is 1.30x the S-group median; measured separation is 1.67–3.09x for
+   the three real failures against 1.19x for the worst healthy cell.
+
+`screen` also refuses to judge a run that has not finished. A mid-descent loss
+looks collapsed beside a finished sibling's, and that false positive fired once
+on `s400_d11` at 45 of ~75 minutes (2.49 against siblings' 1.26/1.30).
+
+**Remedy, and the cap.** Reseed to 7, which is e04's own convention. Two of
+three recovered at seed 7; `s400_d11` collapsed at 2026 *and* 7 and recovered at
+2025. **Retries are capped at three attempts**, after which the cell is reported
+at n=2 with the failure disclosed rather than retried further. Past a small
+fixed budget, "try seeds until one trains" stops being a fix for a known
+instability and becomes selection on the outcome. The cap is in the code
+(`RERUN_SEED`), not just in intent, and every reseeded cell is listed in section
+2b with the numbers that condemned it — judged before the replacement existed.
+
+---
+
 ## 0. Coverage — what is actually measured
 
 An empty cell in any table below is indistinguishable from a zero unless it is
@@ -295,60 +350,6 @@ non-zero delta here is not hypothetical.
 
 ---
 
-## 2d. Matched-epoch calibration — can e04's low-S cells be spliced on?
-
-Sections 1-2a compare e04 at its own smoothed-selected epoch against addval at
-a fixed 375. That is matched to within one checkpoint interval at high S, but it
-is still two protocols, and at low S e04's selection scatters from epoch 75 to
-375 — so a spliced 10 -> 2156 curve built on those numbers would carry a
-selection seam exactly where the curve is steepest. `RESULTS.md` 2.10 documents
-that epoch selection has already manufactured one fake scaling artifact in this
-experiment, so that seam is not a theoretical worry.
-
-This table removes the protocol difference: **every cell here, both arms, is at
-fixed epoch 325** (e04's full 28-cell ep325 sweep already existed; the addval
-cells were re-evaluated to match). It reports the two OVERLAP points, S=1400 and
-S=1863, the only S where both arms have cells.
-
-| readout | S | e04 (pool 1863) | addval (pool 2156) | delta | in e04 sd |
-|---|---|---|---|---|---|
-| TP probe mean(12) r | 1400 | 0.2910 +/- 0.0081 | 0.2962 +/- 0.0034 | +0.0052 | +0.65 |
-| TP probe mean(12) r | 1863 | 0.2531 | 0.3076 +/- 0.0008 | +0.0545 | e04 n=1 |
-| DM probe mean(12) r | 1400 | 0.2551 +/- 0.0077 | 0.2567 +/- 0.0032 | +0.0016 | +0.20 |
-| DM probe mean(12) r | 1863 | 0.2377 | 0.2649 +/- 0.0049 | +0.0272 | e04 n=1 |
-| TP retr time e2v@1 | 1400 | 0.0647 +/- 0.0014 | 0.0714 +/- 0.0046 | +0.0068 | +4.90 |
-| TP retr time e2v@1 | 1863 | 0.0523 | 0.0762 +/- 0.0054 | +0.0239 | e04 n=1 |
-| TP retr shot e2v@1 | 1400 | 0.1151 +/- 0.0021 | 0.1177 +/- 0.0079 | +0.0025 | +1.18 |
-| TP retr shot e2v@1 | 1863 | 0.0893 | 0.1221 +/- 0.0036 | +0.0328 | e04 n=1 |
-| TP retr scene e2v@1 | 1400 | 0.1479 +/- 0.0080 | 0.1574 +/- 0.0132 | +0.0095 | +1.19 |
-| TP retr scene e2v@1 | 1863 | 0.1356 | 0.1429 +/- 0.0055 | +0.0073 | e04 n=1 |
-| DM retr scene e2v@1 | 1400 | 0.0703 +/- 0.0089 | 0.0695 +/- 0.0020 | -0.0008 | -0.09 |
-| DM retr scene e2v@1 | 1863 | 0.0590 | 0.0696 +/- 0.0062 | +0.0106 | e04 n=1 |
-
-**Read the S=1400 rows as the calibration** — both arms have three draws there,
-so the delta is a pool effect with the epoch effect held at zero. Five of six
-readouts land within +/-1.2 of e04's own between-draw sd, i.e. the pools are
-exchangeable for the probe (both tasks) and for shot/scene retrieval.
-
-**The exception is time-pool retrieval, at +4.90 sd** (+0.0068, ~+10 % relative).
-Matching the epoch halved it — it was +10.4 sd at 375 — so part of the original
-gap was protocol, but a real pool effect survives on the finest-granularity
-readout. Direction and size match `RESULTS.md` 2.11, which measured R7-R10
-subjects as worth 8-15 % less per subject than R1-R4: R5 belongs to the original
-block, so a draw from the 2156 pool is slightly richer in good subjects.
-
-**Consequence.** A curve spliced at S=1000/1400 is defensible for the probe and
-coarse retrieval with this calibration quoted, and calibrated stitching is
-already this experiment's convention (`_submit_e03.py`'s `EXTENDED_CELLS`
-stitched R1-R4 onto R1-R10 the same way). It is NOT defensible for time-pool
-retrieval, where it would put a visible ~10 % step at the seam. A single-pool
-curve requires training the low-S cells from the 2156 pool
-(`_submit_e05_addval.py --full-axis`).
-
-**Do not read the S=1863 rows as calibration.** e04 has one draw there, so that
-delta mixes the pool effect with the single-draw artifact this file is about —
-it is the finding, restated at a second fixed epoch, not a control.
-
 ---
 
 ## 2b. Every cell, no averaging
@@ -462,6 +463,62 @@ it is the finding, restated at a second fixed epoch, not a control.
 | addval (pool 2156) | 2156 | - | 0.072 | 0.074 | 0.076 |
 
 TP retrieval, time pool, e2v top-1, test split.
+
+---
+
+## 2d. Matched-epoch calibration — can e04's low-S cells be spliced on?
+
+Sections 1-2a compare e04 at its own smoothed-selected epoch against addval at
+a fixed 375. That is matched to within one checkpoint interval at high S, but it
+is still two protocols, and at low S e04's selection scatters from epoch 75 to
+375 — so a spliced 10 -> 2156 curve built on those numbers would carry a
+selection seam exactly where the curve is steepest. `RESULTS.md` 2.10 documents
+that epoch selection has already manufactured one fake scaling artifact in this
+experiment, so that seam is not a theoretical worry.
+
+This table removes the protocol difference: **every cell here, both arms, is at
+fixed epoch 325** (e04's full 28-cell ep325 sweep already existed; the addval
+cells were re-evaluated to match). It reports the two OVERLAP points, S=1400 and
+S=1863, the only S where both arms have cells.
+
+| readout | S | e04 (pool 1863) | addval (pool 2156) | delta | in e04 sd |
+|---|---|---|---|---|---|
+| TP probe mean(12) r | 1400 | 0.2910 +/- 0.0081 | 0.2962 +/- 0.0034 | +0.0052 | +0.65 |
+| TP probe mean(12) r | 1863 | 0.2531 | 0.3076 +/- 0.0008 | +0.0545 | e04 n=1 |
+| DM probe mean(12) r | 1400 | 0.2551 +/- 0.0077 | 0.2567 +/- 0.0032 | +0.0016 | +0.20 |
+| DM probe mean(12) r | 1863 | 0.2377 | 0.2649 +/- 0.0049 | +0.0272 | e04 n=1 |
+| TP retr time e2v@1 | 1400 | 0.0647 +/- 0.0014 | 0.0714 +/- 0.0046 | +0.0068 | +4.90 |
+| TP retr time e2v@1 | 1863 | 0.0523 | 0.0762 +/- 0.0054 | +0.0239 | e04 n=1 |
+| TP retr shot e2v@1 | 1400 | 0.1151 +/- 0.0021 | 0.1177 +/- 0.0079 | +0.0025 | +1.18 |
+| TP retr shot e2v@1 | 1863 | 0.0893 | 0.1221 +/- 0.0036 | +0.0328 | e04 n=1 |
+| TP retr scene e2v@1 | 1400 | 0.1479 +/- 0.0080 | 0.1574 +/- 0.0132 | +0.0095 | +1.19 |
+| TP retr scene e2v@1 | 1863 | 0.1356 | 0.1429 +/- 0.0055 | +0.0073 | e04 n=1 |
+| DM retr scene e2v@1 | 1400 | 0.0703 +/- 0.0089 | 0.0695 +/- 0.0020 | -0.0008 | -0.09 |
+| DM retr scene e2v@1 | 1863 | 0.0590 | 0.0696 +/- 0.0062 | +0.0106 | e04 n=1 |
+
+**Read the S=1400 rows as the calibration** — both arms have three draws there,
+so the delta is a pool effect with the epoch effect held at zero. Five of six
+readouts land within +/-1.2 of e04's own between-draw sd, i.e. the pools are
+exchangeable for the probe (both tasks) and for shot/scene retrieval.
+
+**The exception is time-pool retrieval, at +4.90 sd** (+0.0068, ~+10 % relative).
+Matching the epoch halved it — it was +10.4 sd at 375 — so part of the original
+gap was protocol, but a real pool effect survives on the finest-granularity
+readout. Direction and size match `RESULTS.md` 2.11, which measured R7-R10
+subjects as worth 8-15 % less per subject than R1-R4: R5 belongs to the original
+block, so a draw from the 2156 pool is slightly richer in good subjects.
+
+**Consequence.** A curve spliced at S=1000/1400 is defensible for the probe and
+coarse retrieval with this calibration quoted, and calibrated stitching is
+already this experiment's convention (`_submit_e03.py`'s `EXTENDED_CELLS`
+stitched R1-R4 onto R1-R10 the same way). It is NOT defensible for time-pool
+retrieval, where it would put a visible ~10 % step at the seam. A single-pool
+curve requires training the low-S cells from the 2156 pool
+(`_submit_e05_addval.py --full-axis`).
+
+**Do not read the S=1863 rows as calibration.** e04 has one draw there, so that
+delta mixes the pool effect with the single-draw artifact this file is about —
+it is the finding, restated at a second fixed epoch, not a control.
 
 ---
 

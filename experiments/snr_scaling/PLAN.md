@@ -380,13 +380,28 @@ becomes drawable in triplicate.
    under-trained encoder makes the axis under study stop mattering, which reads
    as a dramatic finding rather than a bug. Always check
    `wandb/latest-run/files/wandb-metadata.json` → `args`.
-2. **This recipe has a real seed-instability.** One cell (`s1400_d11`) never
-   converged at seed 2026 — flat at the random baseline across every epoch,
-   final loss 3.9 vs siblings' 2.8. E0.4 hit the identical failure three times
-   (`*_FAILED_seed2026` dirs) and re-ran each at `--meta.seed=7`. Budget for
-   ~1 in 10 cells needing a reseed, and judge failure on artifacts (flat at
-   chance across epochs, high final loss) rather than on whether the number is
-   the one you wanted.
+2. **This recipe collapses at initialisation on ~10 % of cells, per seed.**
+   `ln(batch_size) = ln(64) = 4.1589` is InfoNCE's chance loss, and a failed
+   cell sits at 4.02–4.16 **flat for all 400 epochs** — it never leaves the
+   collapsed solution, while a healthy cell at the same S escapes within ~40
+   epochs. Measured 3/31 here and 3/28 in E0.4, so budget for it. Detect with
+   `_submit_e05_addval.py screen`, which reads *training loss* (no eval needed,
+   so a dead cell costs no probe GPU) *relative to same-S siblings* (loss scales
+   with cohort size: 0.70 at S=10 vs 2.8 at S=1863, so a fixed cutoff misses
+   low-S failures). Reseed to 7 — E0.4's own convention — and **cap retries at
+   three**, then report n=2 with the failure disclosed. Past a small fixed
+   budget, reseeding until a cell trains stops being a fix for a known
+   instability and becomes selection on the outcome. Full write-up in
+   [`RESULTS_add_val_set.md`](RESULTS_add_val_set.md) § "Failure mode".
+
+3. **Depth comparisons in this experiment are confounded by initialisation.**
+   e03 (depth-12) trains from scratch; E0.4/E0.6 (depth-22) warm-start from
+   `reve_base_eet_init.pth.tar`. At matched from-scratch init and S=1400 the two
+   depths are within 0.007 (0.1918 vs 0.1853, the deeper one lower) while the
+   warm start is worth **+0.111** — ~15x the depth difference. So
+   `RESULTS_model_scaling.md` § 9's deltas are predominantly the initialisation;
+   that section now carries a warning block. A clean depth ablation would hold
+   init *and* patchification (400/0 vs 200/20) fixed and does not exist yet.
 
 ### Original design notes (E0.6, written 2026-08-14 before the runs)
 

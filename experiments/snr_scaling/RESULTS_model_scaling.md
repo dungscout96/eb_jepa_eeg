@@ -624,13 +624,60 @@ Test split only.
 
 ---
 
-## 9. Depth-12 vs depth-22, head-to-head at matched epoch 325
+## 9. "Depth-12 vs depth-22" -- ⚠️ the delta is INITIALISATION, not depth
+
+**Read this before quoting any number in section 9.** The tables below were
+built to remove one confound (epoch selection) and they do remove it. But they
+leave a larger one that was only identified on 2026-08-18, and it dominates:
+
+| arm | depth | patchification | **initialisation** |
+|---|---|---|---|
+| e03 (`e03_scaling`) | 12 | patch 400 / overlap 0 | **from scratch** |
+| e04 (`e04_reve_scaling`) | 22 | patch 200 / overlap 20 | **REVE warm start** |
+
+e04 warm-starts every cell from
+`/work/hdd/bbnv/kkokate/eb_jepa/reve_base_eet_init.pth.tar` -- 35 of 35 cell
+directories, verified in each run's `wandb-metadata.json` "args", NOT in its
+`config.yaml`, which records `encoder_init_from: null` in both arms. e03 passes
+no such flag. So a "depth" delta here is depth **+ patchification +
+initialisation**.
+
+**Measured decomposition at S=1400, within-task probe mean r, test split**
+(from `RESULTS_add_val_set.md`, which trained the missing from-scratch cell):
+
+| condition | mean r |
+|---|---|
+| depth-12, from scratch | 0.1918 |
+| depth-22, from scratch | 0.1853 +/- 0.0025 |
+| depth-22, REVE warm start | **0.2962 +/- 0.0034** |
+
+At matched initialisation **the two depths are within 0.007 of each other, with
+the DEEPER one marginally lower.** The warm start is worth **+0.111**, roughly
+15x the depth difference. The same holds on time-pool retrieval (0.0362 /
+0.0345 / 0.0714).
+
+**Consequence.** Section 9's deltas are predominantly the REVE initialisation.
+They do not license "depth-22 beats depth-12", nor "capacity changes the
+subject-scaling exponent" -- at matched init that comparison comes out null on
+the two readouts measured so far. What the tables *do* support is the weaker,
+still-useful claim that **the e04 configuration as a whole** (deeper + finer
+patches + warm-started) outperforms the e03 configuration at every S, with the
+warm start as the identified driver.
+
+A clean depth ablation would hold initialisation and patchification fixed and
+vary only depth. Nothing in this repo does that yet. The full from-scratch
+depth-22 axis is in training as of 2026-08-18 (`_submit_e05_addval.py
+--from-scratch`), which will at least give a matched-init curve over the whole
+S range instead of the three points above.
+
+The original framing follows, for the record.
 
 The comparison sections 1-8 exist to make possible: e03 (depth-12,
 `e03_scaling`) evaluated at epoch 325 vs e04 (depth-22, `e04_reve_scaling`,
 section 5-8 above) evaluated at the SAME fixed epoch, so any delta below is
 attributable to architecture, not to the two arms using different
-early-stopping protocols.
+early-stopping protocols -- a statement that is true of the *protocol* and
+false of the *architecture*, per the block above.
 
 **Coverage caveat**: e03's own `e03_tt_val_*` (within-task probe,
 VALIDATION split) artifacts only cover S in {400, 701, 1000, 1400, 1863} --

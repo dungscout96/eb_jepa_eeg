@@ -629,6 +629,61 @@ table above it.
 
 ---
 
+## Failure mode: collapse at initialisation, ~10 % of cells per seed
+
+This recipe fails to train on about one cell in ten, and the failure is
+**silent by construction**: a collapsed cell runs the full 400 epochs, writes a
+complete 15-checkpoint grid, and produces well-formed evaluation artifacts with
+plausible-looking numbers. Nothing in `sacct`, the checkpoint count, or the
+artifact schema distinguishes it. Left in, it drags its S-group mean toward the
+random baseline and steepens the apparent scaling curve.
+
+**The mechanism.** InfoNCE at `batch_size=64` has chance loss `ln(64) = 4.1589`.
+Every failure observed on this arm sits at **4.02–4.16, flat from epoch 1 to
+400** — the run never leaves the collapsed solution. A healthy cell at the same
+S escapes immediately. Measured, same S=400, same recipe, differing only in
+`meta.seed`:
+
+| epoch | 1 | 40 | 80 | 120 | 160 | 200 | 240 | 280 | 320 | 360 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| collapsed (`s400_d11`, seed 2026) | 4.13 | 4.14 | 4.14 | 4.12 | 4.08 | 4.12 | 4.11 | 4.05 | 4.09 | 4.05 |
+| healthy (`s400_d22`, seed 2026) | 4.21 | 3.89 | 3.47 | 2.90 | 2.41 | 2.20 | 1.60 | 1.63 | 1.37 | 1.21 |
+
+So the seed decides whether the run escapes the basin. It is not gradual
+divergence, and it is not a bad cohort: `s1400_d11` collapsed while `s1863_d11`,
+whose cohort is a strict SUPERSET of it, trained normally.
+
+**Rate, across two independently-run sweeps.** 3 of 31 here (~10 %) and 3 of 28
+in `e04_reve_scaling` (~11 %) — kkokate's `e04_s{{1000_d33,200_d22,400_d33}}` each
+kept a `_FAILED_seed2026` directory beside a seed-7 replacement. Budget for it.
+
+**Detection — `_submit_e05_addval.py screen`.** Two design choices, both
+learned the hard way:
+
+1. **Screen on training loss, not on a score.** No evaluation is needed, so a
+   dead cell is caught before ~40 min of probe GPU is spent on it. One cell
+   (`s400_d11`) was caught exactly this way, before its eval ran.
+2. **Compare to the same-S median, not an absolute threshold.** Loss scales with
+   cohort size — S=10 sits near 0.70, S=1863 near 2.8 — so a fixed cutoff that
+   catches a failure at S=1000 would miss the identical failure at S=50. The
+   threshold is 1.30x the S-group median; measured separation is 1.67–3.09x for
+   the three real failures against 1.19x for the worst healthy cell.
+
+`screen` also refuses to judge a run that has not finished. A mid-descent loss
+looks collapsed beside a finished sibling's, and that false positive fired once
+on `s400_d11` at 45 of ~75 minutes (2.49 against siblings' 1.26/1.30).
+
+**Remedy, and the cap.** Reseed to 7, which is e04's own convention. Two of
+three recovered at seed 7; `s400_d11` collapsed at 2026 *and* 7 and recovered at
+2025. **Retries are capped at three attempts**, after which the cell is reported
+at n=2 with the failure disclosed rather than retried further. Past a small
+fixed budget, "try seeds until one trains" stops being a fix for a known
+instability and becomes selection on the outcome. The cap is in the code
+(`RERUN_SEED`), not just in intent, and every reseeded cell is listed in section
+2b with the numbers that condemned it — judged before the replacement existed.
+
+---
+
 ## 0. Coverage — what is actually measured
 
 An empty cell in any table below is indistinguishable from a zero unless it is
@@ -668,6 +723,20 @@ non-zero delta here is not hypothetical.
 ## 2a. Decomposition — pool effect vs S effect vs the alleged drop
 
 {decomposition}
+
+---
+
+---
+
+## 2b. Every cell, no averaging
+
+{per_draw}
+
+---
+
+## 2c. Epoch robustness
+
+{epoch_robustness}
 
 ---
 
@@ -711,18 +780,6 @@ curve requires training the low-S cells from the 2156 pool
 **Do not read the S=1863 rows as calibration.** e04 has one draw there, so that
 delta mixes the pool effect with the single-draw artifact this file is about —
 it is the finding, restated at a second fixed epoch, not a control.
-
----
-
-## 2b. Every cell, no averaging
-
-{per_draw}
-
----
-
-## 2c. Epoch robustness
-
-{epoch_robustness}
 
 ---
 
