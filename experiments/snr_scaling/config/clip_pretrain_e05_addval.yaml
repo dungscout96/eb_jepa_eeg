@@ -1,0 +1,155 @@
+# FROZEN TRAINING CONFIG — experiments/snr_scaling, e05_addval arm
+#
+# Byte-for-byte kkokate's e04_reve_scaling training config (verified 2026-08-14
+# against /work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s1400_a101_nd_d11/
+# config.yaml) with exactly ONE substantive change: data.train_releases adds R5.
+#
+# That single line is the experiment. e04's subject-scaling curve rises through
+# S=1400 and then DROPS at the full-pool S=1863 cell (RESULTS_model_scaling.md
+# headline), but S=1863 is the whole R1-R4+R7-R10 pool, so it has no draw
+# replicate and its apparent decline cannot be separated from single-draw
+# selection variance. Folding R5 (293 ThePresent recordings, previously the val
+# split) into the training pool takes it to 2156 -- which both adds a genuinely
+# new max-S point AND makes S=1863 a *drawable* cell with three replicates.
+#
+# Declared here in the config rather than via the HBN_TRAIN_RELEASES env var,
+# per eb_jepa/datasets/hbn.py's SPLIT_RELEASES comment: the env var is silent
+# and process-global, and forgetting it in one submitter quietly trains that
+# submitter's cells on the wrong pool. Here it is versioned with the run and
+# sits in the same file as S/A/architecture. _submit_e05_addval.py additionally
+# sets the env var, so the two must agree -- and the submitter's `verify`
+# action checks the recording count the job actually loaded.
+#
+# WHAT THIS COSTS: R5 is no longer a clean held-out split for these cells.
+# Consequences, both handled downstream and NOT by this file:
+#   1. In-loop val/clip_* diagnostics become in-sample. They are deliberately
+#      left ON (eval.val_every: 1) -- not for checkpoint selection, which they
+#      can no longer support, but as a POSITIVE CONTROL: if R5 really entered
+#      the training pool, these must run visibly higher than the e04 cells'.
+#   2. Checkpoint selection cannot use them. These cells are therefore
+#      evaluated at a FIXED epoch (375), which is where 4 of 4 high-S e04
+#      cells' own smoothed selection landed (S=1400 d11/d33 and S=1863 at 375,
+#      S=1400 d22 at 350) -- so the comparison is matched to within one
+#      25-epoch checkpoint interval. See _submit_e05_addval.py.
+#   3. All reported evaluation is on TEST (R6), which neither arm has ever
+#      trained on. Val numbers are not reported for these cells at all.
+#
+# The probe head-fit pool is NOT changed: config_probe_TP_e04.yaml and
+# config_probe_DM_e04.yaml still declare [R1..R4, R7..R10], so every cell in
+# both arms fits its ridge head on the identical 1863 (TP) / 1832 (DM)
+# recordings and only the ENCODER's pretraining cohort varies.
+#
+# Do not "update" this file. Per-cell knobs (max_subjects, subsample_seed) are
+# patched into a COPY inside the job by _submit_e05_addval.py; the values below
+# are placeholders that a bare run would interpret as "whole pool, all anchors".
+#
+# READ THIS BEFORE COMPARING THIS FILE TO e04's config.yaml. Two fields below
+# are NOT what the run uses, in both arms, because the submitters override them
+# on the CLI where they leave no trace in any config file:
+#
+#   meta.seed              2025 here -> --meta.seed=2026
+#   meta.encoder_init_from null here -> --meta.encoder_init_from=<REVE base>
+#
+# The second is load-bearing: e04 warm-starts its encoder from
+# /work/hdd/bbnv/kkokate/eb_jepa/reve_base_eet_init.pth.tar and is NOT trained
+# from scratch. The first e05 sweep missed this precisely because a diff of the
+# two arms' config.yaml came back clean, and produced an arm that was ~37 %
+# below e04 at matched S with a completely flat S curve. The authoritative
+# record of what a run did is its wandb metadata ("args"), not its config.
+
+meta:
+  seed: 2025
+  device: auto
+  encoder_init_from: null
+
+data:
+  batch_size: 64
+  num_workers: 4
+  task: ThePresent
+  n_windows: 1
+  window_size_seconds: 2
+  temporal_stride: 1
+  preprocessed: true
+  preprocessed_dir: null
+  norm_mode: per_recording
+  add_envelope: false
+  corrca_filters: null
+  annotation_duration_tolerance_s: 1.0
+  max_recording_overshoot_s: 60.0
+  channel_dropout_p: 0.0
+  # Patched per cell by the submitter.
+  max_subjects: null
+  max_anchors: 101
+  # Held at 703 on EVERY cell, exactly as e04/e03 do: __len__ returns this
+  # instead of the recording count, so steps/epoch is 11 and the run is 4400
+  # steps under an identical LR schedule regardless of pool size. Without it,
+  # adding R5 would also add optimisation budget and the new points would be
+  # confounded with the thing they are meant to measure.
+  epoch_size: 703
+  subsample_seed: 2025
+  # THE experimental manipulation. e04 uses [R1, R2, R3, R4, R7, R8, R9, R10]
+  # (1863 ThePresent recordings); adding R5 takes it to 2156.
+  train_releases: [R1, R2, R3, R4, R5, R7, R8, R9, R10]
+
+model:
+  # Identical to e04_reve_scaling. patch_size/patch_overlap differ from e03's
+  # 400/0 -- required by the deeper stack, and the only architectural
+  # difference between the two arms besides depth.
+  encoder_embed_dim: 512
+  encoder_depth: 22
+  encoder_heads: 8
+  encoder_head_dim: 64
+  patch_size: 200
+  patch_overlap: 20
+  freqs: 4
+  mlp_dim_ratio: 2.66
+
+loss:
+  mode: soft_target_clip
+  mean_center: true
+  target_kind: per_window
+  temporal_buffer_s: 2.0
+  soft_alpha: 0.5
+  soft_tau_teacher: 0.05
+  cs_weight: 1.0
+  kernel_bandwidth: null
+  vision_passthrough: false
+  proj_dim: 512
+  n_residual_blocks: 1
+  temperature: 0.07
+  drop_proj: 0.5
+
+optim:
+  # epochs is overridden to 400 on the CLI by the submitter, matching e04.
+  epochs: 50
+  lr: 0.0001
+  lr_min: 1.0e-06
+  warmup_epochs: 5
+  optimizer: adam
+
+logging:
+  log_wandb: true
+  wandb_group: null
+  log_every: 1
+  # Overridden to 25 on the CLI, matching e04's saved checkpoint grid
+  # (epoch_25 ... epoch_375). Keeping the full grid is what makes it possible
+  # to re-evaluate at a different epoch later without retraining.
+  save_every: 10
+  tqdm_silent: false
+
+eval:
+  auto_run: false
+  n_passes: 20
+  probe_seed: 42
+  n_bootstrap: 2000
+  feature_names:
+    - contrast_rms
+    - luminance_mean
+    - position_in_movie
+    - narrative_event_score
+  visual_processing_delay_s: 0.0
+  # Left ON despite R5 now being in train -- see the positive-control note in
+  # the header. These numbers must NOT be used to select a checkpoint.
+  val_every: 1
+  val_recording_fraction: 0.1
+  val_max_windows: 2000
