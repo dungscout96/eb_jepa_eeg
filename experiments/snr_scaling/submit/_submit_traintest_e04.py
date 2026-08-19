@@ -53,6 +53,9 @@ OUT_DIR = "experiments/snr_scaling/raw_results"
 SELECTION = ROOT / "e04_selection.json"
 DM_CONFIG = "experiments/snr_scaling/config/config_probe_DM_e04.yaml"
 TP_CONFIG = "experiments/snr_scaling/config/config_probe_TP_e04.yaml"
+# Head fitted on R5 alone -- disjoint from every e04 cohort, so pretrain/head-fit
+# overlap is 0 at every S rather than running 0.5%->100%. See the config header.
+TP_HEADFIT_R5_CONFIG = "experiments/snr_scaling/config/config_probe_TP_headfit_R5.yaml"
 BOOTSTRAP = 2000
 
 # --- arms -------------------------------------------------------------------
@@ -129,6 +132,11 @@ ENV = {
 # extended-release list, same code path as the ThePresent runs that DO land on
 # 1863 exactly). Flagged upstream for e03's own constant to be reconciled.
 EXPECTED_TRAIN_RECORDINGS = {"ThePresent": 1863, "DespicableMe": 1832}
+# The zero-overlap preset fits on R5 alone, so it has its OWN expected count --
+# 293, the figure every e03/e04 val-split artifact records for R5. Folding it
+# into the dict above would make `verify` accept 293 for the headline presets
+# too, which is exactly the wrong-pool failure that dict exists to catch.
+HEADFIT_R5_RECORDINGS = 293
 
 
 def load_selection() -> dict[str, int]:
@@ -173,6 +181,14 @@ PRESETS = {
         config=DM_CONFIG,
         prefix="xtask_tt_DM",
         random_from=DM_CONFIG,
+    ),
+    # Zero-overlap head-fit check. TEST only: R5 is the head-fit set here, so a
+    # "val" number would be fitted and evaluated on the same recordings.
+    "within-holdout": dict(
+        splits=["test"],
+        config=TP_HEADFIT_R5_CONFIG,
+        prefix="e04_ttR5",
+        random_from=TP_HEADFIT_R5_CONFIG,
     ),
 }
 
@@ -249,7 +265,8 @@ def verify(preset: str, epochs: dict[str, int], raw_dir: Path,
 
     p = PRESETS[preset]
     task = "DespicableMe" if p["config"] == DM_CONFIG else "ThePresent"
-    want = EXPECTED_TRAIN_RECORDINGS[task]
+    want = (HEADFIT_R5_RECORDINGS if p["config"] == TP_HEADFIT_R5_CONFIG
+            else EXPECTED_TRAIN_RECORDINGS[task])
     bad = 0
     for step in build_steps(preset, epochs, epoch_suffix, ckpt_root, arm):
         out = _re.search(r"--output (\S+)", step).group(1)

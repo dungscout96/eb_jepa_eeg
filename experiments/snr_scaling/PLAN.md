@@ -376,6 +376,18 @@ becomes drawable in triplicate.
 
 **Three process lessons worth more than the result:**
 
+0. **On the cluster, `data.train_releases` in a config was silently ignored.**
+   Delta's checkout is an old commit with files rsynced over it, and its
+   `hbn.py` predated `_cfg_train_releases` — both call sites were bare
+   `_resolve_releases(split)`. Nothing caught it for months because every config
+   in use declares `train_releases` AND sets `HBN_TRAIN_RELEASES` to the same
+   value, so the env var did the work and the config field was decorative. The
+   R5 head-fit config was the first case where the two DISAGREED, and it failed
+   on the first artifact (n_train_recordings=1863 instead of 293). Fixed by
+   syncing `hbn.py`. **The lesson generalises: two mechanisms that always agree
+   hide each other's failure — the bug is only visible where they diverge.**
+   Same shape as lesson 1 below, and as the S=1863 headline.
+
 1. **A run's `config.yaml` is not the run.** The first sweep was invalid because
    E0.4 warm-starts from `reve_base_eet_init.pth.tar` and uses seed 2026 via
    *CLI overrides that no config file records*. A byte-for-byte config diff came
@@ -409,17 +421,29 @@ becomes drawable in triplicate.
    reason the S=1863 headline survived as long as it did, and the reason E0.6's
    fix had to be replicates rather than a better detector.
 
-4. **A constant probe head-fit pool does not make S unconfounded.** Every cell
-   fits its ridge head on the identical 1863 recordings (verified per artifact),
-   so the head's *data* is not a variable. But the OVERLAP between an encoder's
-   pretraining cohort and that head-fit pool runs 0.5 % at S=10 to 100 % at
-   S=2156. Its direction argues against high S (the head is fitted on "seen"
-   embeddings and applied to unseen test ones, a mismatch growing with S), and
-   retrieval — which fits nothing — tracks the probe at r=0.995 while rising
-   5.7x against its 2.3x, so the SHAPE is the encoder's. Neither settles the
-   absolute values. **The clean design for the next sweep: exclude a fixed
-   ~300-recording slice from every pretraining cohort and fit the head only on
-   that**, making overlap 0 % at every S by construction.
+4. **The head-fit overlap confound was real, was tested, and is closed.** Every
+   cell fits its ridge head on the identical 1863 recordings, so the head's
+   *data* is not a variable — but the OVERLAP between an encoder's pretraining
+   cohort and that head-fit pool runs 0.5 % at S=10 to 100 % at S=2156, which
+   holding the pool fixed does not control.
+
+   **Measured 2026-08-18, at no training cost.** E0.4 pretrains on
+   [R1–R4, R7–R10], so R5 is disjoint from every one of its cohorts: fitting the
+   head on R5 alone makes overlap exactly 0 at every S. Re-evaluating the same
+   28 checkpoints at the same epoch on the same test split, changing only the
+   head-fit pool, leaves the curve's SHAPE intact — **r = 0.9989** between the
+   two normalised curves, max deviation 0.053, total S=10→1863 gain **5.90× vs
+   5.72×**. Absolute r drops (293 head-fit recordings vs 1863) but the scaling
+   is unaffected. Residuals are slightly positive at low-to-mid S, i.e. the
+   zero-overlap curve is marginally *steeper* — the direction predicted, and
+   negligible.
+
+   **So the ~300-recording holdout sweep previously required here is NOT
+   needed**, saving ~37 GPU-h of retraining. Infrastructure:
+   `config/config_probe_TP_headfit_R5.yaml` and the `within-holdout` preset.
+   Caveat: this tests E0.4, whose pool excludes R5 by accident of history. The
+   E0.6 arms contain R5, so the same trick is unavailable there and the carry-over
+   argument is by mechanism (same architecture, recipe, axis), not measurement.
 
 5. **Depth comparisons in this experiment are confounded by initialisation.**
    e03 (depth-12) trains from scratch; E0.4/E0.6 (depth-22) warm-start from

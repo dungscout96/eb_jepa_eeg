@@ -685,18 +685,59 @@ holding the pool fixed. Two reasons it is unlikely to manufacture the curve:
    curves correlate at **r = 0.995**, and retrieval rises **5.7x** against the
    probe's 2.3x. An overlap artifact cannot produce that.
 
-Reason 1 is an argument about direction, not a measurement, and reason 2
-establishes that the SHAPE is a property of the encoder — not that the probe's
-absolute values at high S are unbiased. **The clean test** would hold a fixed
-slice of the head-fit pool out of *every* pretraining cohort (say 300
-recordings excluded from all draws) and fit the head only on those, making
-overlap 0 %% at every S by construction. That requires retraining the axis,
-since the cohorts themselves must change, so it is a design note for the next
-sweep rather than something that can be bolted on here.
+**MEASURED 2026-08-18, and the confound is closed.** The clean test turned out
+to need no retraining at all. The e04 arm pretrains on [R1..R4, R7..R10], so
+**R5 is disjoint from every e04 cohort at every S** — fitting the ridge head on
+R5 alone makes overlap exactly 0 by construction, not approximately 0. The same
+28 checkpoints were re-evaluated at the same epoch 325 on the same test split,
+changing only the head-fit pool (`config_probe_TP_headfit_R5.yaml`,
+`_submit_traintest_e04.py within-holdout`):
+
+| S | head = 1863 (overlap 0.5→100 %%) | head = R5 / 293 (overlap **0**) |
+|---|---|---|
+| 10 | 0.1301 | 0.1076 |
+| 200 | 0.1957 | 0.1837 |
+| 701 | 0.2500 | 0.2383 |
+| 1400 | 0.2910 | 0.2807 |
+| 1863 | 0.2531 | 0.2408 |
+| random | 0.1049 | 0.0794 |
+
+Absolute r drops throughout — the head sees 293 recordings instead of 1863 —
+but **the shape is unchanged**. Normalised above each curve's own random floor,
+the two agree at **r = 0.9989** with a maximum deviation of 0.053, and the total
+gain from S=10 to S=1863 is **5.90x vs 5.72x**.
+
+So the growing overlap is not what produces the subject-scaling curve. The
+residual differences are slightly POSITIVE at low-to-mid S (+0.03 to +0.05),
+i.e. the zero-overlap curve is marginally steeper — the direction reason 1
+predicted, and far too small to matter.
+
+Two further things this settles. The S=1863 dip reproduces under the
+zero-overlap head as well (0.2910 → 0.2531 standard, 0.2807 → 0.2408
+zero-overlap), so it is not a head-fitting artifact either — consistent with it
+being one badly-optimised run. And because the head-fit data here is entirely
+disjoint from anything used elsewhere, this doubles as an independent
+replication of the scaling result.
+
+**Scope.** This tests the e04 arm, whose pool excludes R5 by an accident of
+history (R5 was the val split). The addval and from-scratch arms contain R5 in
+their own pools, so the same trick is unavailable for them; the argument that
+the result carries over is by mechanism — same architecture, same recipe, same
+axis — not by direct measurement.
 
 **Retrieval refits nothing.** It is zero-shot cosine similarity between frozen
 EEG and V-JEPA-2 embeddings, so the head-fit caveats apply only to the Pearson
 r tables.
+
+**Note on how the pool is actually set.** The config declares
+`data.train_releases` AND `_submit_e05_addval.py` sets `HBN_TRAIN_RELEASES` to
+the same list. That redundancy was described as belt-and-braces; on the cluster
+it was load-bearing in the opposite direction. Delta's `hbn.py` predated the
+config-override mechanism entirely, so until 2026-08-18 the **env var did all
+the work and the config field was inert**. Every pool reported in this file is
+still correct — the two always agreed, and the pool was verified at runtime
+rather than read off the config — but the mechanism was not what the config
+header claimed. Two mechanisms that always agree hide each other's failure.
 
 **Confirmed at runtime**, job 21138023, rather than assumed:
 

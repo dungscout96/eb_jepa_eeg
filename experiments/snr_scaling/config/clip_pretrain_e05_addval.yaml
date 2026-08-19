@@ -16,9 +16,18 @@
 # per eb_jepa/datasets/hbn.py's SPLIT_RELEASES comment: the env var is silent
 # and process-global, and forgetting it in one submitter quietly trains that
 # submitter's cells on the wrong pool. Here it is versioned with the run and
-# sits in the same file as S/A/architecture. _submit_e05_addval.py additionally
-# sets the env var, so the two must agree -- and the submitter's `verify`
-# action checks the recording count the job actually loaded.
+# sits in the same file as S/A/architecture.
+#
+# BUT NOT ON THE CLUSTER, UNTIL 2026-08-18. Delta's checkout is an old commit
+# with files rsynced over it, and its hbn.py predated `_cfg_train_releases` --
+# so this field was INERT there and HBN_TRAIN_RELEASES did all the work. The
+# runs are still correct, because _submit_e05_addval.py sets both and they
+# agree, and because the pool was verified from the job's own log rather than
+# read off this file. The lesson: two mechanisms that always agree hide each
+# other's failure. tests/unit/test_addval_arm.py asserts they agree, which is
+# not the redundancy check it looks like -- it is the only thing keeping this
+# field honest. The submitter's `verify` action is the backstop: it reads the
+# recording count the job actually loaded, from the job's own log.
 #
 # WHAT THIS COSTS: R5 is no longer a clean held-out split for these cells.
 # Consequences, both handled downstream and NOT by this file:
