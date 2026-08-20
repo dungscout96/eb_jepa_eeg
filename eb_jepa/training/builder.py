@@ -91,6 +91,7 @@ def build_encoder(cfg, *, n_chans: int, n_times: int, chs_info,
         freqs=cfg.model.get("freqs", 4),
         chs_info=chs_info,
         mlp_dim_ratio=cfg.model.get("mlp_dim_ratio", 2.66),
+        init_depth_scaled=cfg.model.get("init_depth_scaled", False),
     )
 
 

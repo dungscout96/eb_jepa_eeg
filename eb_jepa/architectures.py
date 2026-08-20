@@ -9,7 +9,11 @@ from einops import rearrange
 from sklearn.metrics import average_precision_score
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
-from eb_jepa.nn_utils import TemporalBatchMixin, init_module_weights
+from eb_jepa.nn_utils import (
+    TemporalBatchMixin,
+    apply_depth_scaled_residual_init,
+    init_module_weights,
+)
 
 
 # ===========================================================================
@@ -300,6 +304,7 @@ class EEGEncoderTokens(nn.Module):
         freqs: int = 4,
         chs_info=None,
         mlp_dim_ratio: float = 2.66,
+        init_depth_scaled: bool = False,
     ):
         super().__init__()
         self.n_chans = n_chans
@@ -336,6 +341,11 @@ class EEGEncoderTokens(nn.Module):
             dim=embed_dim, depth=depth, heads=heads,
             head_dim=head_dim, mlp_dim=mlp_dim, geglu=True,
         )
+
+        # Depth-scaled residual init. Default off, so every result recorded
+        # before this flag existed reproduces bit-for-bit.
+        if init_depth_scaled:
+            apply_depth_scaled_residual_init(self.transformer, depth)
 
         # Channel positions from REVE position bank
         self.default_pos = None
