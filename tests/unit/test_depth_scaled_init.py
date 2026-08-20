@@ -81,10 +81,19 @@ def test_deeper_gets_smaller_scale():
     assert stds[1] < stds[0], "1/sqrt(2*depth) must shrink as depth grows"
 
 
-def test_encode_still_runs_and_stays_finite_with_flag_on():
-    # EEGEncoderTokens has no forward(); it is driven via tokenize -> encode_tokens.
-    # Shrinking the residual writers must not produce NaN/Inf activations.
-    enc = _encoder(22, init_depth_scaled=True)
-    out = enc.encode_tokens(torch.randn(2, 1, 8, 400))  # [B, T, C, W] -> [B, n_tok, D]
-    assert out.shape[0] == 2
-    assert torch.isfinite(out).all()
+def test_deep_backbone_stays_finite_and_damped_with_flag_on():
+    """The point of the flag: a deep residual stack must not blow up at init.
+
+    Exercised on the backbone directly. encode_tokens() would need chs_info and
+    the REVE position bank, which is far more machinery than the thing under
+    test -- the init only ever touches transformer.layers.
+    """
+    tokens = torch.randn(2, 16, 64)
+    torch.manual_seed(0)
+    plain = _encoder(44).transformer(tokens)
+    torch.manual_seed(0)
+    scaled = _encoder(44, init_depth_scaled=True).transformer(tokens)
+
+    assert torch.isfinite(scaled).all()
+    # Residual-stream growth with depth is what caps trainability; damp it.
+    assert scaled.std().item() < plain.std().item()

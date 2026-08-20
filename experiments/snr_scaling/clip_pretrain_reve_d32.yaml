@@ -1,0 +1,157 @@
+# FROZEN CONFIG -- experiments/snr_scaling, E0.7 depth arm (depth=32).
+#
+# A copy of clip_pretrain_reve.yaml with TWO changes: encoder_depth, and
+# init_depth_scaled=true. Width 512, patch 200/20, heads 8, head_dim 64,
+# freqs 4, mlp_dim_ratio 2.66, proj_dim 512 are all pinned, so this arm
+# isolates DEPTH.
+#
+#     encoder_depth      22 -> 32
+#     init_depth_scaled  (new) true
+#
+# Params: 100.6M.
+#
+# WHY init_depth_scaled IS ON, AND WHY d22 IS RE-RUN WITH IT.
+# EEGEncoderTokens applies no explicit init -- the backbone uses nn.Linear
+# defaults with no depth scaling. A pre-norm stack adds every block onto the
+# residual stream, so its variance grows with depth. That is survivable at 22
+# and is what caps trainable depth beyond it (CaiT: 12 -> 36 layers costs ~10
+# points top-1 at fixed lr/wd; REVE pretrains with full_megatron init over
+# encoder_depth + decoder_depth for the same reason).
+#
+# Turning it on changes the init at EVERY depth, so an arm that enables it is
+# only comparable to another arm that also enables it. That is exactly why
+# depth 22 is re-run here rather than compared against E0.5: pairing scaled-init
+# d32/d44 against unscaled-init d22 would confound init with depth -- the same
+# mistake E0.4 made with the warm start.
+#
+# WHY DEPTH AND NOT WIDTH. E0.6 tested width cleanly at a converged budget and
+# it is negative: 512 -> 768 is 0.999x at S=701, 512 -> 1216 is 0.79x at S=701
+# and 0.66x at S=1863. Depth 12 -> 22 is the only capacity axis with a positive
+# signal (+24% at S=1863, local exponent 0.265 vs 0.049), and both arms of that
+# comparison were converged. Depth past 22 has never been tested.
+#
+# The prior null at depth 22 (jul1 iter 14, +0.00009) ran at 300 epochs. E0.5
+# later showed a depth-22 model is still climbing at 400, so that result is an
+# undertraining artifact and is NOT evidence against depth.
+#
+# EEG CLIP Training Configuration
+# Train an EEG encoder via symmetric InfoNCE against V-JEPA-2 frame embeddings.
+# No masking, no predictor, no anti-collapse — the CLIP objective is the only loss.
+
+meta:
+  seed: 2025
+  device: auto  # auto, cuda, or cpu
+  # Path to a JEPA checkpoint (or any model with `encoder.*` state-dict keys).
+  # When set, only encoder weights are copied; optimizer / LR / step start fresh.
+  encoder_init_from: null
+
+data:
+  batch_size: 64
+  num_workers: 4
+  task: [ThePresent, DespicableMe]
+  n_windows: 1
+  window_size_seconds: 2
+  temporal_stride: 1
+  preprocessed: true
+  preprocessed_dir: null
+  norm_mode: per_recording
+  add_envelope: false
+  corrca_filters: null
+  annotation_duration_tolerance_s: 1.0
+  max_recording_overshoot_s: 60.0
+  channel_dropout_p: 0.0  # iter5 (p=0.1) hurt; revert. Kept as knob for future exploration at smaller p.
+
+model:
+  # REVE encoder — same fields as jepa_pretrain.yaml so a JEPA checkpoint loads
+  # cleanly via encoder_init_from. Predictor / masking blocks are intentionally
+  # absent since the CLIP path doesn't use them.
+  # jul1 iter12's winning shape (scene_clip_fromscratch/autoresearch/RESULTS.md)
+  # already agreed with reve-base on embed_dim, heads, head_dim, freqs and
+  # mlp_dim_ratio; only depth and the patch geometry below had to move.
+  encoder_embed_dim: 512
+  encoder_depth: 32
+  encoder_heads: 8
+  encoder_head_dim: 64
+  patch_size: 200     # reve-base geometry, forced by its (512, 200) to_patch_embedding; 2 patches per 2s window per channel
+  patch_overlap: 20   # reve-base's pretraining stride. Invisible to the state_dict load -- see header.
+  freqs: 4            # min for embed_dim=512 (freqs^4 >= 256)
+  mlp_dim_ratio: 2.66
+  init_depth_scaled: true   # see header -- on for EVERY cell in this arm
+
+loss:
+  # mode=clip   : legacy symmetric InfoNCE (CLIPPretrain). Diagonal positives.
+  # mode=scene_clip: §9 bottom-line recipe. Requires vjepa2_recipe.npz built via
+  #                  experiments/clip_pretraining/embedding_feature_correlation/precompute_vjepa2_recipe.py.
+  # mode=soft_target_clip: Andonian-2022-style soft-target distillation from the
+  #                  V-JEPA-2 similarity matrix. Same recipe/data requirements
+  #                  as scene_clip; ignores scene_id (teacher carries the label).
+  # mode=cs_aligner: InfoNCE + Cauchy–Schwarz divergence on batch marginals
+  #                  (Yin et al. 2025, arXiv:2502.17028). Directly attacks the
+  #                  modality gap that pairwise InfoNCE cannot close. Ignores
+  #                  scene_id; keeps the 2 s temporal buffer on the InfoNCE half.
+  mode: scene_clip
+  # Recipe knobs (used when mode in {scene_clip, soft_target_clip, cs_aligner}):
+  mean_center: true            # subtract V-JEPA-2 global mean at dataset init
+  target_kind: per_window      # {per_window, shot_mean}; per_window keeps the
+                               # mean-pooled clip vector, shot_mean replaces it
+                               # with the recipe's shot-mean lookup. per_window
+                               # wins downstream on the val probe (fresh500 sweep + jul1 iter 12).
+  temporal_buffer_s: 2.0       # mask cross-scene pairs with |Δt|<2s from denom
+  # Soft-target knobs (only used when mode=soft_target_clip):
+  soft_alpha: 0.5              # blend weight: t = (1-α)·diag + α·teacher_softmax(V V^T / τ_t)
+  soft_tau_teacher: 0.1        # teacher temperature; lower → sharper (near one-hot),
+                               # higher → smoother. See centered-cosine range in
+                               # experiments/.../clip_design_observations_vjepa2.md §2.
+  # CS-Aligner knobs (only used when mode=cs_aligner):
+  cs_weight: 1.0               # λ in L = L_InfoNCE + λ · D_CS. Paper's default;
+                               # calibrate per-pipeline — sweep {0.1, 1.0, 10.0}.
+  kernel_bandwidth: null       # null → median heuristic per batch (σ² = median
+                               # ‖z_eeg−z_vis‖² / 2, detached). Float → fixed σ.
+
+  # Symmetric mode: both EEG and V-JEPA-2 project into a learned proj_dim-d
+  # space. proj_dim=1024 matches the encoder embed dim so the EEG MLP doesn't
+  # have to expand (less collapse risk than 1024->1408 of asymmetric mode).
+  # vision_proj is a learnable Linear(1408, 1024). Set vision_passthrough=true
+  # for strict NICE-style asymmetric (vision identity, proj_dim auto = 1408).
+  vision_passthrough: false
+  proj_dim: 512        # jul1 iter 12: matched to encoder embed_dim so EEG head doesn't expand
+  n_residual_blocks: 1 # jul1 iter 16-17: n_res=3 (complex head) hurts, revert to 1
+  temperature: 0.07    # initial logit-scale value (learnable; clamped exp ≤ 100)
+  drop_proj: 0.5       # dropout inside the EEG-side residual block
+
+optim:
+  epochs: 50
+  lr: 1.0e-4           # jul1 iter4/17: from-scratch prefers lr=1e-4 across shapes (single AND multi-movie confirmed jul2 iter3)
+  lr_min: 1.0e-6
+  warmup_epochs: 5  # iter9: revert iter7 (10 hurt). Back to fresh500 default.
+  optimizer: adam      # iter18: revert iter17 (adamw wd=0.05 identical to adam at 300 ep)
+
+logging:
+  log_wandb: true
+  wandb_group:
+  log_every: 1
+  save_every: 10
+  tqdm_silent: false
+
+# Post-training auto-eval (probe_eval + bootstrap). Disabled by default for CLIP
+# since the probe-eval pipeline is JEPA-shaped; flip to true if you've validated
+# that path against a CLIP checkpoint.
+eval:
+  auto_run: false
+  n_passes: 20
+  probe_seed: 42
+  n_bootstrap: 2000
+  feature_names:
+    - contrast_rms
+    - luminance_mean
+    - position_in_movie
+    - narrative_event_score
+  visual_processing_delay_s: 0.0
+
+  # In-loop recipe diagnostics (only fires when loss.mode=scene_clip).
+  # Logs val/{vision,clip}_{shot,scene}_auc, val/clip_nn_top1,
+  # val/scene_collapse_ratio. Doc §9 #8 sanity numbers: vision_scene_auc≈0.94,
+  # vision_shot_auc≈0.92; clip_* metrics rise with training.
+  val_every: 1                  # 0 disables
+  val_recording_fraction: 0.1
+  val_max_windows: 2000
