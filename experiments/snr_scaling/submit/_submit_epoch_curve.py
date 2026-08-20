@@ -65,9 +65,10 @@ N_RECORDINGS = 80
 N_FIT = 60
 SEED = 42
 # Held fixed across every cell and epoch. Re-tuning alpha per checkpoint would
-# let the curve move because the head's regularisation moved. Calibrate with
-# `epoch_curve.py --calibrate-alpha` before changing this.
-ALPHA = 100.0
+# let the curve move because the head's regularisation moved. Measured
+# 2026-08-20 by `epoch_curve.py --calibrate-alpha` on e04_s701_a101_nd_d22 at
+# epochs 100/200/375: RidgeCV put all 36 feature-draws in 1e3--1e4, median 10^3.5.
+ALPHA = 3162.2776601683795
 
 ENV = {
     "WANDB_MODE": "disabled",

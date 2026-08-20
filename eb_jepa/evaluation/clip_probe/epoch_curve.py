@@ -74,10 +74,17 @@ from eb_jepa.evaluation.clip_probe.retrieval import (
 from eb_jepa.training.builder import build_encoder
 from eb_jepa.training_utils import load_config
 
-# Alpha for the selection ridge. Calibrated once with --calibrate-alpha and then
-# held fixed across every cell and every epoch: the curve must move because the
-# encoder moved, not because the head's regularisation was re-tuned under it.
-DEFAULT_ALPHA = 100.0
+# Alpha for the selection ridge, held fixed across every cell and every epoch:
+# the curve must move because the encoder moved, not because the head's
+# regularisation was re-tuned under it.
+#
+# 3162 = 10^3.5, the median of what RidgeCV picks on this fit. Measured
+# 2026-08-20 with --calibrate-alpha on e04_s701_a101_nd_d22 at epochs 100/200/375:
+# every feature landed in 1e3--1e4 (36 of 36 draws), with the epoch-to-epoch
+# drift inside that band rather than across it. Do NOT reuse the alphas in the
+# probe_traintest.py artifacts (~30--100): those are fitted on 188k rows, and the
+# optimum scales with n, so a 6060-row fit needs a far stronger prior.
+DEFAULT_ALPHA = 3162.2776601683795
 
 
 def parse_args():
