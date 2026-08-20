@@ -81,8 +81,10 @@ def test_deeper_gets_smaller_scale():
     assert stds[1] < stds[0], "1/sqrt(2*depth) must shrink as depth grows"
 
 
-def test_forward_still_runs_with_flag_on():
+def test_encode_still_runs_and_stays_finite_with_flag_on():
+    # EEGEncoderTokens has no forward(); it is driven via tokenize -> encode_tokens.
+    # Shrinking the residual writers must not produce NaN/Inf activations.
     enc = _encoder(22, init_depth_scaled=True)
-    out = enc(torch.randn(2, 1, 8, 400))
+    out = enc.encode_tokens(torch.randn(2, 1, 8, 400))  # [B, T, C, W] -> [B, n_tok, D]
     assert out.shape[0] == 2
     assert torch.isfinite(out).all()
