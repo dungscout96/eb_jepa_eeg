@@ -1,0 +1,135 @@
+{
+  "_meta": {
+    "ckpt_root": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling",
+    "config": "experiments/snr_scaling/config/config_probe_TP_e04.yaml",
+    "split": "val",
+    "seed": 42,
+    "n_recordings": 80,
+    "n_fit_recordings": 60,
+    "n_windows": 8080,
+    "alpha": null,
+    "features": [
+      "luminance_mean",
+      "contrast_rms",
+      "edge_density",
+      "saturation_mean",
+      "entropy",
+      "motion_energy",
+      "n_faces",
+      "face_area_frac",
+      "depth_mean",
+      "scene_natural_score",
+      "position_in_movie",
+      "narrative_event_score"
+    ]
+  },
+  "cells": {
+    "e04_s701_a101_nd_d22": {
+      "100": {
+        "probe_mean_r": 0.26293253526091576,
+        "probe_per_feature": {
+          "luminance_mean": 0.3511198163032532,
+          "contrast_rms": 0.3275909423828125,
+          "edge_density": 0.2046625316143036,
+          "saturation_mean": 0.3341509699821472,
+          "entropy": 0.3312530815601349,
+          "motion_energy": 0.28850623965263367,
+          "n_faces": 0.22235646843910217,
+          "face_area_frac": 0.18156228959560394,
+          "depth_mean": 0.20043399930000305,
+          "scene_natural_score": 0.24118612706661224,
+          "position_in_movie": 0.3026791512966156,
+          "narrative_event_score": 0.16968880593776703
+        },
+        "alphas": {
+          "luminance_mean": 1000.0,
+          "contrast_rms": 1000.0,
+          "edge_density": 10000.0,
+          "saturation_mean": 1000.0,
+          "entropy": 3162.2776601683795,
+          "motion_energy": 1000.0,
+          "n_faces": 10000.0,
+          "face_area_frac": 10000.0,
+          "depth_mean": 3162.2776601683795,
+          "scene_natural_score": 3162.2776601683795,
+          "position_in_movie": 3162.2776601683795,
+          "narrative_event_score": 10000.0
+        },
+        "e2v1_time": 0.04319306930693069,
+        "e2v1_shot": 0.10433168316831683,
+        "e2v1_scene": 0.14628712871287128,
+        "seconds": 33.3
+      },
+      "200": {
+        "probe_mean_r": 0.28363218034307164,
+        "probe_per_feature": {
+          "luminance_mean": 0.344016432762146,
+          "contrast_rms": 0.36263513565063477,
+          "edge_density": 0.22604380548000336,
+          "saturation_mean": 0.3432040810585022,
+          "entropy": 0.3578695058822632,
+          "motion_energy": 0.2988045811653137,
+          "n_faces": 0.2504405975341797,
+          "face_area_frac": 0.20984318852424622,
+          "depth_mean": 0.22180290520191193,
+          "scene_natural_score": 0.2560842037200928,
+          "position_in_movie": 0.29938259720802307,
+          "narrative_event_score": 0.23345912992954254
+        },
+        "alphas": {
+          "luminance_mean": 1000.0,
+          "contrast_rms": 3162.2776601683795,
+          "edge_density": 3162.2776601683795,
+          "saturation_mean": 1000.0,
+          "entropy": 1000.0,
+          "motion_energy": 1000.0,
+          "n_faces": 3162.2776601683795,
+          "face_area_frac": 3162.2776601683795,
+          "depth_mean": 3162.2776601683795,
+          "scene_natural_score": 3162.2776601683795,
+          "position_in_movie": 1000.0,
+          "narrative_event_score": 3162.2776601683795
+        },
+        "e2v1_time": 0.07821782178217822,
+        "e2v1_shot": 0.12945544554455446,
+        "e2v1_scene": 0.17339108910891088,
+        "seconds": 32.7
+      },
+      "375": {
+        "probe_mean_r": 0.28718798235058784,
+        "probe_per_feature": {
+          "luminance_mean": 0.36474326252937317,
+          "contrast_rms": 0.3640916049480438,
+          "edge_density": 0.26076990365982056,
+          "saturation_mean": 0.348016619682312,
+          "entropy": 0.35345160961151123,
+          "motion_energy": 0.30595773458480835,
+          "n_faces": 0.24521489441394806,
+          "face_area_frac": 0.2034197896718979,
+          "depth_mean": 0.215870663523674,
+          "scene_natural_score": 0.2479986846446991,
+          "position_in_movie": 0.319327712059021,
+          "narrative_event_score": 0.21739330887794495
+        },
+        "alphas": {
+          "luminance_mean": 3162.2776601683795,
+          "contrast_rms": 3162.2776601683795,
+          "edge_density": 3162.2776601683795,
+          "saturation_mean": 3162.2776601683795,
+          "entropy": 3162.2776601683795,
+          "motion_energy": 3162.2776601683795,
+          "n_faces": 10000.0,
+          "face_area_frac": 10000.0,
+          "depth_mean": 3162.2776601683795,
+          "scene_natural_score": 10000.0,
+          "position_in_movie": 3162.2776601683795,
+          "narrative_event_score": 10000.0
+        },
+        "e2v1_time": 0.08935643564356435,
+        "e2v1_shot": 0.13861386138613863,
+        "e2v1_scene": 0.16534653465346535,
+        "seconds": 32.5
+      }
+    }
+  }
+}

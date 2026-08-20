@@ -150,10 +150,15 @@ def main() -> None:
     print(f"\n1. AGREEMENT. probe vs auc: {len(rows) - len(moved)}/{len(rows)} cells "
           f"pick the same checkpoint; median |delta epoch| {st.median(d_probe_auc):.0f}, "
           f"max {max(d_probe_auc):.0f}.")
+    # NON-NEGATIVE BY CONSTRUCTION: the probe epoch IS the argmax of this very
+    # curve, so it can never score below 325 on it. This is the winner's margin
+    # over 15 draws, not an estimate of what selection buys -- read it as an
+    # UPPER BOUND, and take the real number from a test-split re-evaluation.
     print(f"   Selection-set r at the probe epoch minus at 325: "
-          f"mean {st.mean(d_r_325):+.4f}, max {max(d_r_325):+.4f} "
-          f"(on {meta['n_recordings'] - meta['n_fit_recordings']} scoring recordings, "
-          f"NOT the reported test number).")
+          f"mean {st.mean(d_r_325):+.4f}, max {max(d_r_325):+.4f}. This is "
+          f"non-negative by construction (325 is one of the 15 candidates the "
+          f"argmax ranged over), so it bounds what selection could be worth "
+          f"rather than estimating it.")
 
     # --- 2. is the budget binding at high S ---------------------------------
     auc_pinned = {c for c, v in auc_sel.items() if v.get("best_epoch") == 399}
