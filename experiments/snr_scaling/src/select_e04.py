@@ -22,6 +22,7 @@ Usage (on Delta, from the repo root):
 """
 from __future__ import annotations
 
+import argparse
 import glob
 import json
 import re
@@ -39,15 +40,43 @@ SELECT_KEY = "val/clip_scene_auc"
 CELLS_GLOB = "e04_s*_a101_nd*"
 OUTPUT = "experiments/snr_scaling/e04_selection.json"
 
+# Other arms this same selection applies to. Each holds R5 out, so
+# ``val/clip_scene_auc`` is a genuine held-out signal there rather than an
+# in-sample one -- the property that makes the metric meaningful at all. The
+# 2156-pool arms (e05_addval, e05_fromscratch) are deliberately absent: they
+# trained on R5, so their val AUC measures training-set fit and selecting on it
+# would be selecting on train.
+ARM_PRESETS = {
+    "e04": dict(root=CKPT_ROOT, glob=CELLS_GLOB, out=OUTPUT),
+    "e03": dict(root="/work/hdd/bbnv/dtyoung/eb_jepa/e03_scaling",
+                glob="e03_s*_a101_nd*",
+                out="experiments/snr_scaling/raw_results/e03_selection_nd_all.json"),
+    "e05rand": dict(root="/work/hdd/bbnv/kkokate/eb_jepa/e05_random_scaling",
+                    glob="e05_s*_a101_nd*",
+                    out="experiments/snr_scaling/raw_results/e05rand_selection.json"),
+    "e05rand800": dict(root="/work/hdd/bbnv/kkokate/eb_jepa/e05_random_scaling",
+                       glob="e05_s*_a101_ep800*",
+                       out="experiments/snr_scaling/raw_results/e05rand800_selection.json"),
+}
+
 
 def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--arm", default="e04", choices=sorted(ARM_PRESETS),
+                    help="Which checkpoint tree to select over. Default e04, "
+                         "which reproduces this script's original behaviour "
+                         "exactly, including the output path.")
+    args = ap.parse_args()
+    preset = ARM_PRESETS[args.arm]
+    ckpt_root, cells_glob, output = preset["root"], preset["glob"], preset["out"]
+
     slugs = sorted(
-        (Path(d).name for d in glob.glob(f"{CKPT_ROOT}/{CELLS_GLOB}")
+        (Path(d).name for d in glob.glob(f"{ckpt_root}/{cells_glob}")
          if "FAILED" not in d and "smoke" not in d),
         key=lambda n: (int(re.search(r"_s(\d+)_", n).group(1)), n),
     )
     if not slugs:
-        sys.exit(f"No cell directories matched {CELLS_GLOB!r} under {CKPT_ROOT}")
+        sys.exit(f"No cell directories matched {cells_glob!r} under {ckpt_root}")
 
     sel: dict[str, dict] = {}
     print(f"selection metric: {SELECT_KEY}")
@@ -55,7 +84,7 @@ def main() -> None:
     print(f"  {'cell':<28}{'best_ep':>8}{'best':>8}{'final':>8}{'drop%':>7}"
           f"{'sel_ep':>8}{'snap':>6}")
     for slug in slugs:
-        info = select_epoch(Path(CKPT_ROOT) / slug, SELECT_KEY)
+        info = select_epoch(Path(ckpt_root) / slug, SELECT_KEY)
         sel[slug] = info
         if "error" in info and "selected_epoch" not in info:
             print(f"  {slug:<28}  {info['error']}")
@@ -64,9 +93,9 @@ def main() -> None:
               f"{info['final_value']:>8.4f}{info['drop_pct']:>7.1f}"
               f"{info['selected_epoch']:>8}{info['snap_distance']:>6}")
 
-    Path(OUTPUT).write_text(json.dumps(sel, indent=2))
+    Path(output).write_text(json.dumps(sel, indent=2))
     n_ok = sum(1 for v in sel.values() if "selected_epoch" in v)
-    print(f"\nWrote {OUTPUT} ({n_ok}/{len(slugs)} cells selected)")
+    print(f"\nWrote {output} ({n_ok}/{len(slugs)} cells selected)")
 
 
 if __name__ == "__main__":
