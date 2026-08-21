@@ -8,7 +8,13 @@ Every number here is generated from the raw JSONs in `raw_results/` by
 Three arms scanned, 1260 checkpoints. **Whether the selection rule matters
 depends on the initialisation, which is itself the finding.**
 
-0. **From scratch, the optimal epoch tracks cohort size; warm-started it
+0. **The 4400-step budget was binding for the from-scratch arm above S=1000,
+   and not at all below S=400.** Measured against the same arm trained twice
+   as long: the cost is exactly 0.0000 r up to S=400 and +0.012 to +0.016
+   above S=1000. Section 0b. An earlier reading of the 400-epoch curves as
+   'flat at the top, so converged' was wrong -- they were truncated.
+
+0a. **From scratch, the optimal epoch tracks cohort size; warm-started it
    barely moves.** The from-scratch arms peak near epoch 25 at S=10-20 and at
    the last saved checkpoint by S=1400, so a fixed 325 costs them
    ~0.011-0.014 r at S<=200. The warm-started arm costs ~0.004 over the same
@@ -188,6 +194,45 @@ uses the 2156-pool arms; the gains are measured on the R5 selection set
 with a 60-recording head, not on R6 with 1863; and both are upper bounds,
 for the reason above. Settling it needs the 2156-pool arms re-evaluated at
 per-cell epochs, which their pool makes impossible without retraining.
+
+## 0b. What the step budget cost, measured rather than inferred
+
+The same from-scratch depth-22 arm exists at **double the step budget**
+(800 epochs x 703 = 8800 steps against 4400), 31 checkpoints per cell out to
+epoch 775. That turns the budget question from an inference about where an
+argmax lands into a subtraction, because a curve truncated at 400 and a curve
+converged by 400 are indistinguishable from inside 400.
+
+| S | probe argmax (800 ep) | best reachable <=400 | best <=800 | budget cost |
+|---|---|---|---|---|
+| 10 | 25/25/50 | 0.1105 | 0.1105 | +0.0000 |
+| 20 | 25/25/25 | 0.1237 | 0.1237 | +0.0000 |
+| 50 | 50/150/375 | 0.1390 | 0.1390 | +0.0000 |
+| 100 | 75/100/400 | 0.1624 | 0.1624 | +0.0000 |
+| 200 | 200/250/400 | 0.1905 | 0.1905 | +0.0000 |
+| 400 | 300/350/400 | 0.2232 | 0.2232 | +0.0000 |
+| 701 | 425/450/675 | 0.2448 | 0.2462 | +0.0014 |
+| 1000 | 575/575/750 | 0.2432 | 0.2549 | +0.0117 |
+| 1400 | 600/725/750 | 0.2455 | 0.2575 | +0.0120 |
+| 1863 | 775 | 0.2514 | 0.2669 | +0.0156 |
+
+**The 4400-step budget cost this arm +0.0000 r at S<=400 and +0.0131 at
+S>=1000.** Probe argmax at the last saved checkpoint falls from 7 of 28 in the
+400-epoch arm to 1 of 28 here -- the holdout being the full-pool
+S=1863 cell, which wants more than 8800 steps.
+
+**The optimum grows with cohort size**: epoch 25 at S=10--20, 775 at S=1863.
+Bigger cohorts need more steps. That is a scaling statement in its own right,
+and one the 400-epoch arm could not have produced -- inside that budget its
+high-S curves look flat at the end because they stop, not because they settle.
+
+**Consequence for the subject-scaling slope.** The from-scratch arm's high-S
+points sit ~0.012 r low, so its measured slope is understated and the
+initialisation gap at high S is overstated by roughly that much. Note this is
+the same direction as the small-cohort effect in section 0, reached by a
+different mechanism: there the fixed epoch is too late for the cell, here the
+budget ends before the cell is done. The from-scratch arm is disadvantaged by
+the protocol at BOTH ends of the ladder, for unrelated reasons.
 
 ## 1. Three selectors, every cell (e04)
 

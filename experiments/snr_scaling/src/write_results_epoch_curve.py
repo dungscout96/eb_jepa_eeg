@@ -42,6 +42,10 @@ CROSS_ARMS = [
     ("e03", "from scratch", 12, RAW / "e03_epoch_curve.json"),
 ]
 CALIB = RAW / "e04_epochcurve_alpha_calibration.json"
+# The same from-scratch arm at double the step budget. Its value is that it can
+# see PAST the 400-epoch horizon: inside that horizon a truncated curve and a
+# converged one look identical.
+CURVE_800 = RAW / "e05rand800_epoch_curve.json"
 FIXED_EPOCH = 325
 
 # Reuse the selection logic rather than restating it -- if argmax_epoch ever
@@ -128,7 +132,13 @@ def main() -> None:
     w("Three arms scanned, 1260 checkpoints. **Whether the selection rule matters")
     w("depends on the initialisation, which is itself the finding.**")
     w("")
-    w("0. **From scratch, the optimal epoch tracks cohort size; warm-started it")
+    w("0. **The 4400-step budget was binding for the from-scratch arm above S=1000,")
+    w("   and not at all below S=400.** Measured against the same arm trained twice")
+    w("   as long: the cost is exactly 0.0000 r up to S=400 and +0.012 to +0.016")
+    w("   above S=1000. Section 0b. An earlier reading of the 400-epoch curves as")
+    w("   'flat at the top, so converged' was wrong -- they were truncated.")
+    w("")
+    w("0a. **From scratch, the optimal epoch tracks cohort size; warm-started it")
     w("   barely moves.** The from-scratch arms peak near epoch 25 at S=10-20 and at")
     w("   the last saved checkpoint by S=1400, so a fixed 325 costs them")
     w("   ~0.011-0.014 r at S<=200. The warm-started arm costs ~0.004 over the same")
@@ -327,6 +337,55 @@ def main() -> None:
             w("for the reason above. Settling it needs the 2156-pool arms re-evaluated at")
             w("per-cell epochs, which their pool makes impossible without retraining.")
             w("")
+    if CURVE_800.exists():
+        c800 = json.loads(CURVE_800.read_text())["cells"]
+        by8: dict[int, list] = {}
+        for c, cv in c800.items():
+            ep, r = ana.argmax_epoch(cv, "probe_mean_r", 1)
+            within = max((int(e) for e in cv if int(e) <= 400),
+                         key=lambda e: cv[str(e)]["probe_mean_r"])
+            by8.setdefault(ana.s_of(c), []).append(
+                (ep, r, cv[str(within)]["probe_mean_r"]))
+        pin8 = [c for c, cv in c800.items()
+                if ana.argmax_epoch(cv, "probe_mean_r", 1)[0] == 775]
+
+        w("## 0b. What the step budget cost, measured rather than inferred")
+        w("")
+        w("The same from-scratch depth-22 arm exists at **double the step budget**")
+        w("(800 epochs x 703 = 8800 steps against 4400), 31 checkpoints per cell out to")
+        w("epoch 775. That turns the budget question from an inference about where an")
+        w("argmax lands into a subtraction, because a curve truncated at 400 and a curve")
+        w("converged by 400 are indistinguishable from inside 400.")
+        w("")
+        w("| S | probe argmax (800 ep) | best reachable <=400 | best <=800 | budget cost |")
+        w("|---|---|---|---|---|")
+        for S in sorted(by8):
+            g = by8[S]
+            eps = "/".join(str(e) for e, _, _ in sorted(g))
+            b4 = st.mean(x[2] for x in g)
+            b8 = st.mean(x[1] for x in g)
+            w(f"| {S} | {eps} | {b4:.4f} | {b8:.4f} | {b8 - b4:+.4f} |")
+        w("")
+        lo8 = st.mean(st.mean(x[1] - x[2] for x in by8[S]) for S in (10, 20, 50, 100, 200, 400))
+        hi8 = st.mean(st.mean(x[1] - x[2] for x in by8[S]) for S in (1000, 1400, 1863))
+        w(f"**The 4400-step budget cost this arm {lo8:+.4f} r at S<=400 and {hi8:+.4f} at")
+        w(f"S>=1000.** Probe argmax at the last saved checkpoint falls from 7 of 28 in the")
+        w(f"400-epoch arm to {len(pin8)} of 28 here -- the holdout being the full-pool")
+        w("S=1863 cell, which wants more than 8800 steps.")
+        w("")
+        w("**The optimum grows with cohort size**: epoch 25 at S=10--20, 775 at S=1863.")
+        w("Bigger cohorts need more steps. That is a scaling statement in its own right,")
+        w("and one the 400-epoch arm could not have produced -- inside that budget its")
+        w("high-S curves look flat at the end because they stop, not because they settle.")
+        w("")
+        w("**Consequence for the subject-scaling slope.** The from-scratch arm's high-S")
+        w("points sit ~0.012 r low, so its measured slope is understated and the")
+        w("initialisation gap at high S is overstated by roughly that much. Note this is")
+        w("the same direction as the small-cohort effect in section 0, reached by a")
+        w("different mechanism: there the fixed epoch is too late for the cell, here the")
+        w("budget ends before the cell is done. The from-scratch arm is disadvantaged by")
+        w("the protocol at BOTH ends of the ladder, for unrelated reasons.")
+        w("")
     w("## 1. Three selectors, every cell (e04)")
     w("")
     w("`auc` = the incumbent smoothed-AUC choice; `prb` = probe argmax; `retr` = scene-retrieval")
