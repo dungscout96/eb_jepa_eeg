@@ -23,9 +23,25 @@ selection never touches pretraining data, and the test split R6 is never read.
 The zero-overlap head-fit check (config_probe_TP_headfit_R5.yaml) already
 measured that a 293-recording head-fit pool reproduces the S-curve shape at
 r = 0.9989, which is the evidence that a small pool preserves the RANKING a
-selector needs. **This is available for the e04 arm only.** The e05_addval and
-e05_fromscratch arms trained on R5, so they have no held-out selection data at
-all and their fixed epoch stays fixed by necessity.
+selector needs.
+
+WHICH ARMS THIS WORKS FOR. Any arm that holds R5 out, which is a fact about the
+arm's pretraining pool rather than about this script:
+
+  e04_reve_scaling  pool [R1..R4, R7..R10] -- R5 held out. WORKS.
+  e03_scaling       pool [R1..R4, R7..R10] -- R5 held out. WORKS. Depth 12,
+                    patch 400 / overlap 0, from scratch. Same windowing as e04
+                    (2 s, stride 1, ThePresent), so the same 80 recordings give
+                    the same 8080 windows and the two arms are directly
+                    comparable; only --config and --ckpt-root differ.
+  e05_addval        pool 2156 = R1..R5 + R7..R10 -- R5 IS IN TRAIN. Cannot.
+  e05_fromscratch   same pool. Cannot.
+
+For the two e05 arms the only unseen split is R6, which is the reported test
+split, so they have no held-out selection data at all and their fixed epoch
+stays fixed by necessity. Note the consequence for the initialisation
+comparison: that comparison is e05-vs-e05 at depth 22, so neither side of it can
+be re-selected this way.
 
 TWO METRICS, ONE FORWARD PASS.
   probe      mean Pearson r over the 12 scalar features, ridge at a FIXED alpha

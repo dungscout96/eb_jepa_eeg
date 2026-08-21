@@ -37,11 +37,23 @@ winner is at least as good as it by construction. Read it as bounding what
 selection could buy. The unbiased number is the test-split comparison already in
 `RESULTS_model_scaling.md`.
 
-**e04 ONLY, and not by convenience.** Selection reads the val split (R5), which is
-disjoint from every e04 cohort because e04 pretrains on [R1-R4, R7-R10]. The
-`e05_addval` and `e05_fromscratch` arms have R5 *in* their pretraining pool, so
-there this would measure training-set fit. Those arms have no held-out selection
-data at all and stay pinned to a fixed epoch -- the same constraint
+**This file is the e04 arm. It is not the only scannable arm.** Selection reads
+the val split (R5), so the method works for any arm whose pretraining pool
+excludes R5 -- which is a fact about the pool, not about the arm's name:
+
+| arm | init | depth | pool | scannable |
+|---|---|---|---|---|
+| `e04_reve_scaling` | warm (REVE) | 22 | 1863 | yes — **this file** |
+| `e05_random_scaling` (`_nd`, `_ep800`) | from scratch | 22 | 1863 | yes — not yet run |
+| `e03_scaling` | from scratch | 12 | 1863 | yes — not yet run |
+| `e05_addval` | warm | 22 | 2156 | no, R5 in train |
+| `e05_fromscratch` | from scratch | 22 | 2156 | no, R5 in train |
+
+Note the last two rows: `e05_fromscratch` and `e05_random_scaling` are both
+from-scratch depth-22 arms and land on opposite sides of the line, because they
+differ in pool rather than in initialisation. For the 2156-pool arms the only
+unseen split is R6 -- the reported test split -- so they have no held-out
+selection data at all, the same constraint
 `config/config_probe_TP_headfit_R5.yaml` documents for the zero-overlap head fit.
 
 ## Method
