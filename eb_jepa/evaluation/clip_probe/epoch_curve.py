@@ -28,20 +28,26 @@ selector needs.
 WHICH ARMS THIS WORKS FOR. Any arm that holds R5 out, which is a fact about the
 arm's pretraining pool rather than about this script:
 
-  e04_reve_scaling  pool [R1..R4, R7..R10] -- R5 held out. WORKS.
-  e03_scaling       pool [R1..R4, R7..R10] -- R5 held out. WORKS. Depth 12,
-                    patch 400 / overlap 0, from scratch. Same windowing as e04
-                    (2 s, stride 1, ThePresent), so the same 80 recordings give
-                    the same 8080 windows and the two arms are directly
-                    comparable; only --config and --ckpt-root differ.
-  e05_addval        pool 2156 = R1..R5 + R7..R10 -- R5 IS IN TRAIN. Cannot.
-  e05_fromscratch   same pool. Cannot.
+  e04_reve_scaling    pool 1863 -- R5 held out. WORKS. Warm start, depth 22.
+  e05_random_scaling  pool 1863 -- R5 held out. WORKS. FROM SCRATCH, depth 22,
+                      patch 200/20, epoch_size 703: architecturally matched to
+                      e04, so the pair isolates initialisation. Carries a
+                      second family at 800 epochs (8800 steps, 31 checkpoints).
+  e03_scaling         pool 1863 -- R5 held out. WORKS. Depth 12, patch 400/0,
+                      from scratch.
+  e05_addval          pool 2156 = R1..R5 + R7..R10 -- R5 IS IN TRAIN. Cannot.
+  e05_fromscratch     pool 2156 -- R5 IS IN TRAIN. Cannot. NOTE this is a
+                      different arm from e05_random_scaling above: same
+                      initialisation, different pool, opposite verdict. The
+                      distinction is the pool, never the name.
 
-For the two e05 arms the only unseen split is R6, which is the reported test
-split, so they have no held-out selection data at all and their fixed epoch
-stays fixed by necessity. Note the consequence for the initialisation
-comparison: that comparison is e05-vs-e05 at depth 22, so neither side of it can
-be re-selected this way.
+All the supported arms share the windowing fields (2 s, stride 1, ThePresent,
+per-recording norm), so the same 80 recordings give the same 8080 windows and
+their curves are comparable cell-for-cell; only --config and --ckpt-root differ.
+
+For the 2156-pool arms the only unseen split is R6, the reported test split, so
+they have no held-out selection data at all and their fixed epoch stays fixed by
+necessity.
 
 TWO METRICS, ONE FORWARD PASS.
   probe      mean Pearson r over the 12 scalar features, ridge at a FIXED alpha
@@ -359,6 +365,7 @@ def main():
     }
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
 
+    checked: dict[str, bool] = {}
     for cell in cells:
         cell_dir = Path(args.ckpt_root) / cell
         ckpts = checkpoints_for(cell_dir, args.epochs)
@@ -369,8 +376,26 @@ def main():
         for epoch, path in ckpts:
             t0 = time.time()
             enc_sd, head_sd = _load_clip_ckpt(str(path))
-            encoder.load_state_dict(enc_sd, strict=False)
-            clip_head.load_state_dict(head_sd, strict=False)
+            miss_e, _ = encoder.load_state_dict(enc_sd, strict=False)
+            miss_h, _ = clip_head.load_state_dict(head_sd, strict=False)
+            # strict=False is what lets a checkpoint load against a config that
+            # does not describe it: the tensors simply do not land, the encoder
+            # stays at its random init, and every number below is well-formed
+            # and meaningless. Cheap to catch, invisible if not caught -- so
+            # check the FIRST checkpoint of each cell and refuse rather than
+            # produce a curve nobody can tell is wrong.
+            if not checked.get(cell):
+                if not enc_sd or miss_e:
+                    raise SystemExit(
+                        f"{cell} ep{epoch}: {len(enc_sd)} encoder tensors in the "
+                        f"checkpoint, {len(miss_e)} parameters left unfilled. The "
+                        f"--config architecture does not match this checkpoint.")
+                if not head_sd or miss_h:
+                    raise SystemExit(
+                        f"{cell} ep{epoch}: clip_head mismatch -- {len(head_sd)} "
+                        f"tensors, {len(miss_h)} unfilled. Retrieval would be "
+                        f"measured on a randomly-initialised head.")
+                checked[cell] = True
             eeg = cache["eeg"].float() if args.half else cache["eeg"]
             X = encode_windows(encoder, eeg, device, args.encode_batch)
             rec = probe_score(X, cache, args.alpha, calibrate=args.calibrate_alpha)
