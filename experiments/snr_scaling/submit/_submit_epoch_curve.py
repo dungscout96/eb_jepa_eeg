@@ -19,29 +19,37 @@ re-encodes only that (~8k windows) per checkpoint, a few seconds each. Chunking
 costs one cache build per job, so prefer FEW, LONG jobs here -- the opposite of
 the probe submitters, where every step re-read the data anyway.
 
-WHICH ARMS, AND WHY NOT ALL OF THEM. The selector reads the val split (R5), so
-it works for any arm that holds R5 out and for no arm that does not. Whether an
-arm qualifies is a fact about its pretraining pool, NOT about its name -- two
-different from-scratch arms sit on opposite sides of this line:
+WHICH ARMS, AND THE RULE THAT DECIDES IT. An earlier version of this file said
+the 2156-pool arms could not be scanned, because R5 -- the release the others
+hold out -- is inside their pretraining pool. That conflated "no release is held
+out" with "nothing is held out". The rule is:
 
-  --arm e04         e04_reve_scaling, pool 1863. Warm start, depth 22. Default.
-  --arm e03         e03_scaling, pool 1863. From scratch, depth 12, patch 400/0.
-  --arm e05rand     e05_random_scaling, pool 1863. From scratch, depth 22,
-                    400 epochs. Architecturally matched to e04, so e04 vs this
-                    isolates INITIALISATION with nothing else moving.
-  --arm e05rand800  the same arm's 800-epoch cells: 8800 steps against 4400,
-                    31 checkpoints out to epoch 775.
+    a cell is selectable iff its cohort is a PROPER SUBSET of the pool.
 
-  NOT SUPPORTED, and cannot be:
-  e05_addval        pool 2156 -- R5 IS IN TRAIN.
-  e05_fromscratch   pool 2156 -- R5 IS IN TRAIN. Note this is a DIFFERENT
-                    from-scratch arm from e05_random_scaling above; same
-                    initialisation, different pool, opposite verdict.
+Cohorts nest, so any cell with S < pool has subjects it never saw. Only
+FULL-POOL cells are unreachable, and those are already the unreplicable cells
+the paper plots hollow and excludes from every fit.
 
-For that pair the only unseen split is R6, the reported test split, so they have
-no held-out selection data at all and stay pinned to a fixed epoch -- the same
-constraint config_probe_TP_headfit_R5.yaml documents for the zero-overlap head
-fit.
+  --arm e04           pool 1863, warm, depth 22. Selects on R5. Default.
+  --arm e03           pool 1863, scratch, depth 12, patch 400/0. Selects on R5.
+  --arm e05rand       pool 1863, scratch, depth 22, 400 epochs. Selects on R5.
+                      Architecturally matched to e04, so the pair isolates
+                      INITIALISATION with nothing else moving.
+  --arm e05rand800    the same arm at 8800 steps, 31 checkpoints to epoch 775.
+  --arm addval        pool 2156, warm -- THE PAPER'S OFFICIAL CURVE. Selects on
+                      each draw's cohort complement.
+  --arm fromscratch   pool 2156, scratch -- the paper's initialisation baseline.
+                      Same complement mechanism.
+
+The last two are what let the paper's own initialisation comparison be
+re-selected; before the complement mechanism existed, neither side of it could
+be. Their s2156 cells are excluded, having no complement.
+
+COMPLEMENT ARMS ARE GROUPED BY DRAW, one job per seed, because the selection set
+is a property of the draw. A job mixing draws would score some cells on
+recordings they trained on -- silently, since nothing about the output would
+look wrong. `build_command` refuses a mixed-draw group rather than trusting the
+caller to group correctly.
 
 Usage:
     uv run --group eeg python experiments/snr_scaling/submit/_submit_epoch_curve.py dry
@@ -96,6 +104,23 @@ def _cells(prefix: str, suffix: str) -> list[str]:
             + [f"{prefix}_s1863_a101_{suffix}"])
 
 
+def _cells_2156(prefix: str) -> list[str]:
+    """The 30 selectable cells of a 2156-pool arm: 10 S x 3 draws.
+
+    EXCLUDES the full-pool s2156 cell deliberately. It trained on every subject
+    in the pool, so it has no complement and no legal selection data -- the one
+    cell of the arm the epoch curve cannot reach. It keeps its fixed epoch,
+    which is consistent with the paper already plotting it hollow and excluding
+    it from every fit for being unreplicable.
+    """
+    return [f"{prefix}_s{s}_a101_av_d{d}" for s in S_AXIS + [1863] for d in DRAWS]
+
+
+DRAWS = [11, 22, 33]
+# The largest drawable S of a 2156-pool arm. Its complement (293 subjects) is
+# held out from every smaller cell of the same draw, because cohorts nest.
+COMPLEMENT_S = 1863
+
 E03_CELLS = _cells("e03", "nd")
 E05RAND_CELLS = _cells("e05", "nd")          # 400 epochs, 15 checkpoints
 E05RAND800_CELLS = _cells("e05", "ep800")    # 800 epochs, 31 checkpoints
@@ -140,6 +165,29 @@ ARMS = {
         cells=E05RAND800_CELLS,
         merged=RAW_DIR / "e05rand800_epoch_curve.json",
         desc="from scratch, depth 22, 800 epochs (8800 steps), 31 ckpts",
+    ),
+    # The two arms the PAPER reports. Their pool contains R5, so they select on
+    # each cell's cohort complement instead of a held-out release -- see
+    # epoch_curve.py's "WHICH CELLS THIS WORKS FOR". Both use the 2156-pool
+    # config, whose train_releases must match what they pretrained on or the
+    # reconstructed cohort is wrong in a way nothing downstream reveals.
+    "addval": dict(
+        ckpt_root="/work/hdd/bbnv/dtyoung/eb_jepa/e05_addval",
+        config="experiments/snr_scaling/config/config_probe_TP_pool2156.yaml",
+        selection=None,
+        cells=_cells_2156("e05"),
+        merged=RAW_DIR / "addval_epoch_curve.json",
+        desc="warm start, depth 22, pool 2156 -- the paper's official curve",
+        complement=COMPLEMENT_S,
+    ),
+    "fromscratch": dict(
+        ckpt_root="/work/hdd/bbnv/dtyoung/eb_jepa/e05_fromscratch",
+        config="experiments/snr_scaling/config/config_probe_TP_pool2156.yaml",
+        selection=None,
+        cells=_cells_2156("e05fs"),
+        merged=RAW_DIR / "fromscratch_epoch_curve.json",
+        desc="from scratch, depth 22, pool 2156 -- the paper's initialisation baseline",
+        complement=COMPLEMENT_S,
     ),
 }
 
@@ -197,12 +245,23 @@ def build_command(arm: str, cells: list[str], out_name: str,
                   epochs: list[int] | None) -> str:
     spec = ARMS[arm]
     ep = f" --epochs {' '.join(str(e) for e in epochs)}" if epochs else ""
+    comp = spec.get("complement")
+    if comp is None:
+        sel = "--split val"
+    else:
+        # Every cell in the group must share a draw, or they would be scored on
+        # a set that is held out for some of them and trained on by others.
+        draws = {int(c.rsplit("_d", 1)[1]) for c in cells}
+        if len(draws) != 1:
+            raise SystemExit(f"complement mode needs one draw per job, got {draws}")
+        sel = (f"--split train --holdout-complement-of {comp} "
+               f"--subsample-seed {draws.pop()}")
     return (
         f"mkdir -p {OUT_DIR} && "
         "PYTHONPATH=. uv run --group eeg python "
         "eb_jepa/evaluation/clip_probe/epoch_curve.py "
         f"--ckpt-root {spec['ckpt_root']} --cells {' '.join(cells)} "
-        f"--config {spec['config']} --split val --device cuda "
+        f"--config {spec['config']} {sel} --device cuda "
         f"--n-recordings {N_RECORDINGS} --n-fit {N_FIT} --seed {SEED} "
         f"--alpha {ALPHA}{ep} "
         f"--output {OUT_DIR}/{out_name}"
@@ -326,6 +385,13 @@ def main() -> None:
         # the curve is smoother than the raw AUC history before 28 cells run.
         groups = [cells[len(cells) // 2:len(cells) // 2 + 1]]
         epochs, action = None, args.sub_action
+    elif ARMS[args.arm].get("complement") is not None:
+        # One job per draw: the selection set is a property of the draw, so a
+        # job mixing draws would need to rebuild the cache mid-run and would
+        # score some cells on data they trained on.
+        groups = [[c for c in cells if c.endswith(f"_d{d}")] for d in DRAWS]
+        groups = [g for g in groups if g]
+        epochs, action = None, args.action
     else:
         groups = chunk(cells, args.chunks)
         epochs, action = None, args.action

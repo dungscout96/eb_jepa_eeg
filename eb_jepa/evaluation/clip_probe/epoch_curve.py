@@ -25,29 +25,37 @@ measured that a 293-recording head-fit pool reproduces the S-curve shape at
 r = 0.9989, which is the evidence that a small pool preserves the RANKING a
 selector needs.
 
-WHICH ARMS THIS WORKS FOR. Any arm that holds R5 out, which is a fact about the
-arm's pretraining pool rather than about this script:
+WHICH CELLS THIS WORKS FOR, AND THE RULE IS NOT ABOUT RELEASES. An earlier
+version of this file said the 2156-pool arms could not be selected at all,
+because R5 -- their usual held-out release -- is inside their pretraining pool.
+That conflated "no release is held out" with "nothing is held out". The rule is:
 
-  e04_reve_scaling    pool 1863 -- R5 held out. WORKS. Warm start, depth 22.
-  e05_random_scaling  pool 1863 -- R5 held out. WORKS. FROM SCRATCH, depth 22,
-                      patch 200/20, epoch_size 703: architecturally matched to
-                      e04, so the pair isolates initialisation. Carries a
-                      second family at 800 epochs (8800 steps, 31 checkpoints).
-  e03_scaling         pool 1863 -- R5 held out. WORKS. Depth 12, patch 400/0,
-                      from scratch.
-  e05_addval          pool 2156 = R1..R5 + R7..R10 -- R5 IS IN TRAIN. Cannot.
-  e05_fromscratch     pool 2156 -- R5 IS IN TRAIN. Cannot. NOTE this is a
-                      different arm from e05_random_scaling above: same
-                      initialisation, different pool, opposite verdict. The
-                      distinction is the pool, never the name.
+    a cell is selectable iff its cohort is a PROPER SUBSET of the pool.
 
-All the supported arms share the windowing fields (2 s, stride 1, ThePresent,
-per-recording norm), so the same 80 recordings give the same 8080 windows and
-their curves are comparable cell-for-cell; only --config and --ckpt-root differ.
+Cohorts are nested, so a cell with S < pool has subjects it never trained on,
+and those subjects are legal selection data whether or not they form a release.
+Only FULL-POOL cells are unselectable -- e04's S=1863, e05_random's S=1863, the
+2156-pool arms' S=2156 -- and those are already the unreplicable cells the paper
+plots hollow and excludes from every fit.
 
-For the 2156-pool arms the only unseen split is R6, the reported test split, so
-they have no held-out selection data at all and their fixed epoch stays fixed by
-necessity.
+Two ways to supply the selection set, then:
+
+  --split val            a held-out RELEASE. Available to the 1863-pool arms
+                         (e04_reve_scaling, e05_random_scaling, e03_scaling),
+                         which pretrain on [R1..R4, R7..R10] and so never touch
+                         R5. One fixed set for the whole arm, comparable across
+                         every cell.
+  --holdout-complement-of S --subsample-seed d
+                         the cell's own COMPLEMENT. Needed by the 2156-pool arms
+                         (e05_addval, e05_fromscratch), and usable by any arm.
+                         Pass the arm's largest drawable S: because cohorts nest,
+                         complement(1863,d) is held out from every cell of draw
+                         d, so one set serves the draw and stays comparable
+                         across S within it.
+
+All supported arms share the windowing fields (2 s, stride 1, ThePresent,
+per-recording norm), so a given selection set yields the same windows and the
+curves are comparable cell-for-cell; only --config and --ckpt-root differ.
 
 TWO METRICS, ONE FORWARD PASS.
   probe      mean Pearson r over the 12 scalar features, ridge at a FIXED alpha
@@ -83,6 +91,7 @@ from sklearn.linear_model import Ridge, RidgeCV
 from sklearn.preprocessing import StandardScaler
 
 from eb_jepa.architectures import MovieCLIPHead
+from eb_jepa.datasets.hbn import JEPAMovieDataset
 from eb_jepa.evaluation.clip_probe.probe import (
     SCALAR_FEATURES_DEFAULT,
     build_dataset,
@@ -121,8 +130,24 @@ def parse_args():
     ap.add_argument("--config", required=True,
                     help="Probe-eval config yaml (architecture + data).")
     ap.add_argument("--split", default="val", choices=["train", "val", "test"],
-                    help="Split to select on. Default val (R5), the only split "
-                         "disjoint from every e04 cohort. NEVER pass test.")
+                    help="Split to select on. Default val (R5) for arms that "
+                         "hold a release out. With --holdout-complement-of, "
+                         "pass train: the selection set is then the part of the "
+                         "TRAIN pool the cell never trained on. NEVER pass test.")
+    ap.add_argument("--holdout-complement-of", type=int, default=None,
+                    metavar="S",
+                    help="Select on the complement of the S-subject cohort "
+                         "instead of a held-out release. For arms whose pool "
+                         "leaves no release out, this is the only legal "
+                         "selection data. Pass the LARGEST drawable S of the "
+                         "arm (1863 for the 2156-pool arms): because cohorts "
+                         "nest, its complement is held out from every smaller "
+                         "cell of the same draw, so one selection set serves "
+                         "the whole draw.")
+    ap.add_argument("--subsample-seed", type=int, default=None,
+                    help="The cell's draw seed -- the number in its _d11/_d22/"
+                         "_d33 suffix. Required with --holdout-complement-of, "
+                         "and it must be the draw the swept cells belong to.")
     ap.add_argument("--epochs", nargs="+", type=int, default=None,
                     help="Epochs to evaluate. Default: every epoch_*.pth.tar in "
                          "the cell directory.")
@@ -150,6 +175,15 @@ def parse_args():
     args = ap.parse_args()
     if bool(args.cells) == bool(args.cells_glob):
         raise SystemExit("Pass exactly one of --cells / --cells-glob.")
+    if (args.holdout_complement_of is None) != (args.subsample_seed is None):
+        raise SystemExit(
+            "--holdout-complement-of and --subsample-seed go together: the "
+            "complement is only defined for a specific (S, draw).")
+    if args.holdout_complement_of is not None and args.split != "train":
+        raise SystemExit(
+            "--holdout-complement-of selects inside the TRAIN pool, so pass "
+            "--split train. The complement is the part of that pool the cell "
+            "did not train on.")
     if args.n_fit >= args.n_recordings:
         raise SystemExit("--n-fit must leave recordings over to score on.")
     return args
@@ -180,20 +214,70 @@ def checkpoints_for(cell_dir: Path, epochs: list[int] | None) -> list[tuple[int,
     return saved
 
 
-def build_cache(dataset, args):
+def cohort_complement(cfg, split, max_subjects, subsample_seed, full_dataset):
+    """Indices of `full_dataset` that a (S, draw) cell did NOT train on.
+
+    Cohorts are nested -- ``_apply_scaling_subsample`` permutes the pool's
+    subjects once with ``subsample_seed`` and keeps the first S -- so the
+    recordings outside a cell's cohort are held out FOR THAT CELL even when the
+    arm has no held-out release. That is what makes the 2156-pool arms
+    selectable at all: R5 being inside their pretraining pool does not mean
+    nothing is held out, only that the held-out part is cell-specific.
+
+    The cohort is rebuilt by CONSTRUCTING THE DATASET THE SAME WAY TRAINING DID,
+    rather than by re-deriving the permutation here. A re-derivation that drifted
+    from the real one -- a different sort order, a different rng call -- would
+    hand back a "complement" containing training subjects, and every number
+    downstream would look entirely normal. Going through the same code path makes
+    that class of error impossible rather than unlikely.
+    """
+    cohort = build_dataset_subsampled(cfg, split, max_subjects, subsample_seed)
+    trained_on = set(cohort._fif_paths)
+    idx = [i for i, p in enumerate(full_dataset._fif_paths) if p not in trained_on]
+    if len(idx) != len(full_dataset._fif_paths) - len(trained_on):
+        raise SystemExit(
+            "Cohort is not a subset of the pool -- the config's train_releases "
+            "probably do not match the pool this arm trained on.")
+    return idx
+
+
+def build_dataset_subsampled(cfg, split, max_subjects, subsample_seed):
+    """The pool restricted to one cell's cohort, via the training code path."""
+    return JEPAMovieDataset(
+        split=split,
+        n_windows=cfg.data.n_windows,
+        window_size_seconds=cfg.data.window_size_seconds,
+        task=cfg.data.task,
+        temporal_stride=cfg.data.get("temporal_stride", 1),
+        feature_names=SCALAR_FEATURES_DEFAULT,
+        cfg=cfg.data,
+        preprocessed=cfg.data.preprocessed,
+        preprocessed_dir=cfg.data.get("preprocessed_dir", None),
+        visual_processing_delay_s=0.0,
+        max_subjects=max_subjects,
+        subsample_seed=subsample_seed,
+    )
+
+
+def build_cache(dataset, args, candidates=None):
     """Materialise the checkpoint-independent half of the evaluation, once.
 
     Everything here -- windows, targets, movie-time, shot/scene ids, V-JEPA-2
     vectors -- is a property of the DATA, so it is read once and reused by every
     checkpoint of every cell.
+
+    ``candidates`` restricts the draw to a subset of the dataset's recordings;
+    in complement mode it is the cell's held-out set.
     """
-    n_avail = len(dataset)
+    pool = list(range(len(dataset))) if candidates is None else list(candidates)
+    n_avail = len(pool)
     if args.n_recordings > n_avail:
         raise SystemExit(
-            f"--n-recordings {args.n_recordings} exceeds the {args.split} split's "
-            f"{n_avail} recordings.")
+            f"--n-recordings {args.n_recordings} exceeds the {n_avail} available "
+            f"recordings ({args.split} split"
+            f"{', cohort complement' if candidates is not None else ''}).")
     rng = np.random.default_rng(args.seed)
-    chosen = rng.permutation(n_avail)[:args.n_recordings]
+    chosen = np.array(pool)[rng.permutation(n_avail)[:args.n_recordings]]
     fit_recs = set(chosen[:args.n_fit].tolist())
 
     windows, Ys, is_fit = [], [], []
@@ -332,8 +416,21 @@ def main():
     dataset = build_dataset(cfg, args.split, SCALAR_FEATURES_DEFAULT)
     print(f"  n_recordings={len(dataset)}, n_chans={dataset.n_chans}")
 
+    candidates = None
+    if args.holdout_complement_of is not None:
+        candidates = cohort_complement(
+            cfg, args.split, args.holdout_complement_of, args.subsample_seed,
+            dataset)
+        print(f"  cohort S={args.holdout_complement_of} seed={args.subsample_seed}: "
+              f"{len(dataset) - len(candidates)} trained on, "
+              f"{len(candidates)} held out")
+        if len(candidates) < args.n_recordings:
+            raise SystemExit(
+                f"complement has {len(candidates)} recordings, fewer than the "
+                f"{args.n_recordings} requested.")
+
     print(f"Caching {args.n_recordings} recordings ...")
-    cache = build_cache(dataset, args)
+    cache = build_cache(dataset, args, candidates)
 
     encoder = build_encoder(
         cfg, n_chans=dataset.n_chans, n_times=dataset.n_times,
@@ -358,6 +455,8 @@ def main():
             "n_recordings": cache["n_recordings"],
             "n_fit_recordings": cache["n_fit_recordings"],
             "n_windows": int(len(cache["eeg"])),
+            "holdout_complement_of": args.holdout_complement_of,
+            "subsample_seed": args.subsample_seed,
             "alpha": None if args.calibrate_alpha else args.alpha,
             "features": SCALAR_FEATURES_DEFAULT,
         },
