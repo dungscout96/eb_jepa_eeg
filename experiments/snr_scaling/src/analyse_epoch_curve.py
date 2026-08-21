@@ -91,6 +91,15 @@ def nearest(curve: dict, epoch: int) -> int:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--curve", default=str(CURVE))
+    ap.add_argument("--selection", default=str(AUC_SELECTION),
+                    help="Incumbent smoothed-AUC selection to compare against. "
+                         "Per arm: e04_selection.json, "
+                         "raw_results/e05rand_selection.json, "
+                         "raw_results/e03_selection_nd_all.json.")
+    ap.add_argument("--out-selection", default=str(OUT_SELECTION),
+                    help="Where --write-selection writes the probe-chosen "
+                         "epochs. Must differ per arm or arms overwrite "
+                         "each other.")
     ap.add_argument("--smooth", type=int, default=SMOOTH_DEFAULT,
                     help="Rolling-mean window over the epoch curve. Default 1 "
                          "(off) -- see the module docstring.")
@@ -100,7 +109,7 @@ def main() -> None:
 
     curve_doc = json.loads(Path(args.curve).read_text())
     meta, cells = curve_doc["_meta"], curve_doc["cells"]
-    auc_sel = json.loads(AUC_SELECTION.read_text())
+    auc_sel = json.loads(Path(args.selection).read_text())
 
     print(f"selection set: {meta['n_recordings']} {meta['split']}-split recordings "
           f"({meta['n_fit_recordings']} fit / "
@@ -192,8 +201,8 @@ def main() -> None:
               f"{st.mean(r['r_325'] for r in g):>12.4f}")
 
     if args.write_selection:
-        OUT_SELECTION.write_text(json.dumps(out_sel, indent=2))
-        print(f"\nWrote {OUT_SELECTION} ({len(out_sel)} cells)")
+        Path(args.out_selection).write_text(json.dumps(out_sel, indent=2))
+        print(f"\nWrote {args.out_selection} ({len(out_sel)} cells)")
 
 
 if __name__ == "__main__":
