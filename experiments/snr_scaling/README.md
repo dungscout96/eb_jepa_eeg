@@ -11,6 +11,7 @@ asks which data axis moves a model toward it: more **subjects**, or more **movie
 | [`RESULTS_cross_task.md`](RESULTS_cross_task.md) | the same checkpoints evaluated on DespicableMe: features transfer, alignment does not. |
 | [`RESULTS_model_scaling.md`](RESULTS_model_scaling.md) | the depth-22 (`e04_reve_scaling`) subject-scaling sweep — probe + retrieval, within- and cross-task. |
 | [`RESULTS_add_val_set.md`](RESULTS_add_val_set.md) | R5 folded into the pretraining pool (1863 → 2156) so S=1863 becomes drawable in triplicate. **Verdict: depth-22's saturation-then-drop was a single-draw artifact** — three draws put S=1863 *above* the S=1400 peak, and `RESULTS_model_scaling.md`'s headline is retracted. Test split only. |
+| [`RESULTS_epoch_curve.md`](RESULTS_epoch_curve.md) | the depth-22 arm re-selected on a held-out probe instead of the validation AUC, at all 15 saved checkpoints of all 28 cells. **Verdict: the selection rule changes the chosen epoch a lot and the score almost not at all.** It also kills the reading that the 8 cells whose AUC argmax sits at epoch 399 (`RESULTS_model_scaling.md`'s epoch table) mean the 4400-step budget is binding at high S — under the probe only 1 of those 8 still pins at the end. |
 | [`RELATED_WORK.md`](RELATED_WORK.md) | why this sweep's subject axis scales when Banville et al. 2025 report it does not — per-doubling slopes, log-linear fits, and the methodological differences that explain the contrast. |
 | [`PLAN.md`](PLAN.md) | forward-looking design. Experiments not yet run. |
 
