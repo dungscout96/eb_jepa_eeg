@@ -51,24 +51,31 @@ winner is at least as good as it by construction. Read it as bounding what
 selection could buy. The unbiased number is the test-split comparison already in
 `RESULTS_model_scaling.md`.
 
-**This file is the e04 arm. It is not the only scannable arm.** Selection reads
-the val split (R5), so the method works for any arm whose pretraining pool
-excludes R5 -- which is a fact about the pool, not about the arm's name:
+**Every arm is scannable; the earlier claim that two were not was wrong.**
+Selection needs data the cell did not train on, and the rule is:
 
-| arm | init | depth | pool | scannable |
+> a cell is selectable iff its cohort is a **proper subset** of the pool.
+
+Cohorts nest — permute the pool's subjects once per seed, take the first S —
+so any cell with S < pool has subjects it never saw, whether or not they form a
+held-out release. Only FULL-POOL cells are unreachable, and those are already
+the unreplicable cells the paper plots hollow and drops from every fit.
+
+| arm | init | depth | pool | selection data |
 |---|---|---|---|---|
-| `e04_reve_scaling` | warm (REVE) | 22 | 1863 | yes — **this file** |
-| `e05_random_scaling` (`_nd`, `_ep800`) | from scratch | 22 | 1863 | yes — not yet run |
-| `e03_scaling` | from scratch | 12 | 1863 | yes — not yet run |
-| `e05_addval` | warm | 22 | 2156 | no, R5 in train |
-| `e05_fromscratch` | from scratch | 22 | 2156 | no, R5 in train |
+| `e04_reve_scaling` | warm (REVE) | 22 | 1863 | R5 — **this file** |
+| `e05_random_scaling` (`_nd`, `_ep800`) | from scratch | 22 | 1863 | R5 |
+| `e03_scaling` | from scratch | 12 | 1863 | R5 |
+| `e05_addval` | warm | 22 | 2156 | per-draw cohort complement |
+| `e05_fromscratch` | from scratch | 22 | 2156 | per-draw cohort complement |
 
-Note the last two rows: `e05_fromscratch` and `e05_random_scaling` are both
-from-scratch depth-22 arms and land on opposite sides of the line, because they
-differ in pool rather than in initialisation. For the 2156-pool arms the only
-unseen split is R6 -- the reported test split -- so they have no held-out
-selection data at all, the same constraint
-`config/config_probe_TP_headfit_R5.yaml` documents for the zero-overlap head fit.
+An earlier version of this file said the 2156-pool arms could not be scanned,
+because R5 is inside their pretraining pool. That conflated *no release is held
+out* with *nothing is held out*: at S=1863 from a 2156 pool, each draw leaves
+293 subjects untouched, and because cohorts nest those same 293 are held out
+from every smaller cell of that draw. The consequence is not cosmetic — those
+two arms are the ones the paper reports, so before this correction neither side
+of its initialisation comparison could be re-selected.
 
 ## Method
 
