@@ -33,6 +33,14 @@ ROOT = HERE.parent  # experiments/snr_scaling
 RAW = ROOT / "raw_results"
 OUT = ROOT / "RESULTS_epoch_curve.md"
 CURVE = RAW / "e04_epoch_curve.json"
+# Arms with a curve on disk. Scanned in this order; the cross-arm section is
+# emitted only for those present, so the file degrades gracefully if one is
+# missing rather than failing or silently dropping a column.
+CROSS_ARMS = [
+    ("e04", "warm start (REVE)", 22, RAW / "e04_epoch_curve.json"),
+    ("e05rand", "from scratch", 22, RAW / "e05rand_epoch_curve.json"),
+    ("e03", "from scratch", 12, RAW / "e03_epoch_curve.json"),
+]
 CALIB = RAW / "e04_epochcurve_alpha_calibration.json"
 FIXED_EPOCH = 325
 
@@ -117,17 +125,25 @@ def main() -> None:
     w("")
     w("## Verdict")
     w("")
-    w("**The rule barely matters for anything the paper claims, and the one place it")
-    w("does matter, it overturns a claim.**")
+    w("Three arms scanned, 1260 checkpoints. **Whether the selection rule matters")
+    w("depends on the initialisation, which is itself the finding.**")
     w("")
-    w(f"1. The two selectors name the same checkpoint on only **{len(same)} of {len(rows)}** cells")
+    w("0. **From scratch, the optimal epoch tracks cohort size; warm-started it")
+    w("   barely moves.** The from-scratch arms peak near epoch 25 at S=10-20 and at")
+    w("   the last saved checkpoint by S=1400, so a fixed 325 costs them")
+    w("   ~0.011-0.014 r at S<=200. The warm-started arm costs ~0.004 over the same")
+    w("   range. Section 0 below, and it is the reason points 1-2 are e04-only")
+    w("   statements rather than statements about the recipe.")
+    w("")
+    w(f"1. **On e04 (warm start)** the two selectors name the same checkpoint on only")
+    w(f"   **{len(same)} of {len(rows)}** cells")
     w(f"   (median disagreement {st.median(d_ep):.0f} epochs, max {max(d_ep):.0f}) -- and the score barely")
     w(f"   responds. The probe-selected checkpoint beats fixed epoch {FIXED_EPOCH} by a mean of")
     w(f"   **{st.mean(gain):+.4f} r**, at most {max(gain):+.4f}, and at S>=1000 at most {max(gain_hi):+.4f}.")
     w("   A flat optimum is the whole picture: the epoch is weakly determined, which is")
     w("   exactly why two reasonable rules disagree about it while agreeing about the result.")
     w("")
-    w("2. **RETRACTS the high-S budget reading.** The appendix notes that")
+    w("2. **RETRACTS the high-S budget reading, on e04.** The appendix notes that")
     w(f"   {len(auc_pinned)} of {len(rows)} cells put the smoothed AUC argmax at epoch 399 -- the last")
     w("   epoch searched -- and reads that as the 4400-step budget being close to")
     w(f"   binding at large S. Under the probe selector only **{len(probe_pinned)} of {len(rows)}** cells")
@@ -221,7 +237,97 @@ def main() -> None:
     w("Absolute values differ -- a 60-recording head scores lower in general -- but the")
     w("ordering, which is all a selector uses, is preserved.")
     w("")
-    w("## 1. Three selectors, every cell")
+    # ---- cross-arm section -------------------------------------------------
+    present = [(a, init, d, f) for a, init, d, f in CROSS_ARMS if f.exists()]
+    if len(present) > 1:
+        per_arm = {}
+        for a, _init, _d, f in present:
+            cc = json.loads(f.read_text())["cells"]
+            by: dict[int, list] = {}
+            for c, cv in cc.items():
+                ep, r = ana.argmax_epoch(cv, "probe_mean_r", 1)
+                by.setdefault(ana.s_of(c), []).append((ep, r - cv["325"]["probe_mean_r"]))
+            per_arm[a] = by
+
+        w("## 0. Across arms: the optimal epoch depends on S only when training "
+          "from scratch")
+        w("")
+        w("The e04 result below -- epoch weakly determined, score barely affected -- is")
+        w("**a property of the warm start, not of the recipe.** Scanning the two")
+        w("from-scratch arms on the identical selection set gives a different shape:")
+        w("their optimum moves monotonically with cohort size, from epoch ~25 at S=10")
+        w("to the last saved checkpoint at S=1400.")
+        w("")
+        head = " | ".join(f"{a} ({init[:7]}, d{d})" for a, init, d, _ in present)
+        w(f"| S | {head} |")
+        w("|---|" + "---|" * len(present))
+        for S in sorted(per_arm[present[0][0]]):
+            cells_txt = []
+            for a, _i, _d, _f in present:
+                g = per_arm[a][S]
+                eps = "/".join(str(e) for e, _ in sorted(g))
+                cells_txt.append(f"{eps} ({st.mean(x for _, x in g):+.4f})")
+            w(f"| {S} | " + " | ".join(cells_txt) + " |")
+        w("")
+        w("Each cell is the probe-selected epochs of the 3 draws, then the mean gain")
+        w("over fixed epoch 325 on the selection set. Summarised:")
+        w("")
+        w("| arm | median optimum, S<=200 | median optimum, S>=701 | mean gain S<=200 | mean gain S>=701 |")
+        w("|---|---|---|---|---|")
+        for a, init, d, _f in present:
+            by = per_arm[a]
+            lo = [x for S in (10, 20, 50, 100, 200) for x in by[S]]
+            hi = [x for S in (701, 1000, 1400, 1863) for x in by[S]]
+            w(f"| `{a}` ({init}, d{d}) | {st.median([e for e, _ in lo]):.0f} | "
+              f"{st.median([e for e, _ in hi]):.0f} | "
+              f"{st.mean(x for _, x in lo):+.4f} | {st.mean(x for _, x in hi):+.4f} |")
+        w("")
+        w("**Warm-starting compresses the epoch dependence.** From scratch the optimum")
+        w("travels 75 -> 375 across the ladder and a fixed 325 costs ~0.011--0.014 r at")
+        w("S<=200; warm-started it travels 175 -> 300 and costs ~0.004. Whatever REVE")
+        w("pretraining supplies, one thing it supplies is insensitivity to when you stop.")
+        w("")
+        w("**Is the early optimum real, or the winner's curse?** These gains cannot be")
+        w("negative, so a noisy curve manufactures a positive one. The evidence that it")
+        w("is real is the CONCENTRATION of the argmax across independent draws: under")
+        w("noise the three draws of a cell would scatter, and instead the from-scratch")
+        w("arm puts all three at epoch 25 at S=20 and all three at 375 at S=1400. A")
+        w("winner's curse does not reproduce across seeds.")
+        w("")
+        if "e05rand" in per_arm:
+            warm, scr = per_arm["e04"], per_arm["e05rand"]
+            dif = {S: st.mean(x for _, x in scr[S]) - st.mean(x for _, x in warm[S])
+                   for S in warm}
+            lo2 = st.mean(dif[S] for S in (10, 20))
+            w("### What this does to the initialisation claim")
+            w("")
+            w("The paper reports the warm start as worth a draw-separated $+0.016$ to")
+            w("$+0.031\\,r$ at $S=10$--$20$, with both arms evaluated at a fixed epoch 325.")
+            w("But a fixed 325 is not neutral between them: it sits near the warm arm's")
+            w("optimum and far past the from-scratch arm's. The part of that gap which is")
+            w("protocol rather than initialisation is the DIFFERENCE of the two arms'")
+            w("gains, not the from-scratch arm's gain alone:")
+            w("")
+            w("| S | warm gains | scratch gains | differential |")
+            w("|---|---|---|---|")
+            for S in sorted(dif):
+                w(f"| {S} | {st.mean(x for _, x in warm[S]):+.4f} | "
+                  f"{st.mean(x for _, x in scr[S]):+.4f} | {dif[S]:+.4f} |")
+            w("")
+            w(f"At $S=10$--$20$ the differential is {lo2:+.4f}, i.e.\\ per-cell selection")
+            w(f"would close at most {100*lo2/0.016:.0f} % of the low end of the claimed gap")
+            w(f"and {100*lo2/0.031:.0f} % of the high end. **The initialisation result")
+            w("survives, and is overstated at small cohorts.** It peaks at $S=100$--$200$,")
+            w(f"where the differential reaches {max(dif.values()):+.4f}.")
+            w("")
+            w("Three things keep this a caveat rather than a correction. The arms measured")
+            w("here draw from the 1863 pool while the paper's initialisation comparison")
+            w("uses the 2156-pool arms; the gains are measured on the R5 selection set")
+            w("with a 60-recording head, not on R6 with 1863; and both are upper bounds,")
+            w("for the reason above. Settling it needs the 2156-pool arms re-evaluated at")
+            w("per-cell epochs, which their pool makes impossible without retraining.")
+            w("")
+    w("## 1. Three selectors, every cell (e04)")
     w("")
     w("`auc` = the incumbent smoothed-AUC choice; `prb` = probe argmax; `retr` = scene-retrieval")
     w(f"argmax. `r@*` are on the {n_score} scoring recordings, NOT the reported test number.")

@@ -5,17 +5,25 @@ Every number here is generated from the raw JSONs in `raw_results/` by
 
 ## Verdict
 
-**The rule barely matters for anything the paper claims, and the one place it
-does matter, it overturns a claim.**
+Three arms scanned, 1260 checkpoints. **Whether the selection rule matters
+depends on the initialisation, which is itself the finding.**
 
-1. The two selectors name the same checkpoint on only **3 of 28** cells
+0. **From scratch, the optimal epoch tracks cohort size; warm-started it
+   barely moves.** The from-scratch arms peak near epoch 25 at S=10-20 and at
+   the last saved checkpoint by S=1400, so a fixed 325 costs them
+   ~0.011-0.014 r at S<=200. The warm-started arm costs ~0.004 over the same
+   range. Section 0 below, and it is the reason points 1-2 are e04-only
+   statements rather than statements about the recipe.
+
+1. **On e04 (warm start)** the two selectors name the same checkpoint on only
+   **3 of 28** cells
    (median disagreement 75 epochs, max 250) -- and the score barely
    responds. The probe-selected checkpoint beats fixed epoch 325 by a mean of
    **+0.0036 r**, at most +0.0120, and at S>=1000 at most +0.0013.
    A flat optimum is the whole picture: the epoch is weakly determined, which is
    exactly why two reasonable rules disagree about it while agreeing about the result.
 
-2. **RETRACTS the high-S budget reading.** The appendix notes that
+2. **RETRACTS the high-S budget reading, on e04.** The appendix notes that
    8 of 28 cells put the smoothed AUC argmax at epoch 399 -- the last
    epoch searched -- and reads that as the 4400-step budget being close to
    binding at large S. Under the probe selector only **2 of 28** cells
@@ -104,7 +112,84 @@ across all 28 cells: **Pearson r = 0.9875, Spearman = 0.9814**.
 Absolute values differ -- a 60-recording head scores lower in general -- but the
 ordering, which is all a selector uses, is preserved.
 
-## 1. Three selectors, every cell
+## 0. Across arms: the optimal epoch depends on S only when training from scratch
+
+The e04 result below -- epoch weakly determined, score barely affected -- is
+**a property of the warm start, not of the recipe.** Scanning the two
+from-scratch arms on the identical selection set gives a different shape:
+their optimum moves monotonically with cohort size, from epoch ~25 at S=10
+to the last saved checkpoint at S=1400.
+
+| S | e04 (warm st, d22) | e05rand (from sc, d22) | e03 (from sc, d12) |
+|---|---|---|---|
+| 10 | 100/150/150 (+0.0039) | 25/25/75 (+0.0089) | 25/50/150 (+0.0108) |
+| 20 | 100/150/175 (+0.0052) | 25/25/25 (+0.0112) | 25/25/200 (+0.0055) |
+| 50 | 200/275/275 (+0.0014) | 50/50/125 (+0.0111) | 50/250/300 (+0.0075) |
+| 100 | 75/125/225 (+0.0040) | 75/100/125 (+0.0180) | 75/75/75 (+0.0167) |
+| 200 | 225/250/275 (+0.0042) | 150/175/250 (+0.0183) | 100/125/150 (+0.0161) |
+| 400 | 125/225/225 (+0.0106) | 250/300/350 (+0.0027) | 225/250/275 (+0.0064) |
+| 701 | 225/250/250 (+0.0033) | 350/375/375 (+0.0008) | 350/375/375 (+0.0018) |
+| 1000 | 250/300/375 (+0.0006) | 350/375/375 (+0.0013) | 325/375/375 (+0.0013) |
+| 1400 | 300/325/325 (+0.0003) | 375/375/375 (+0.0016) | 350/375/375 (+0.0017) |
+| 1863 | 375 (+0.0010) | 325 (+0.0000) | 375 (+0.0005) |
+
+Each cell is the probe-selected epochs of the 3 draws, then the mean gain
+over fixed epoch 325 on the selection set. Summarised:
+
+| arm | median optimum, S<=200 | median optimum, S>=701 | mean gain S<=200 | mean gain S>=701 |
+|---|---|---|---|---|
+| `e04` (warm start (REVE), d22) | 175 | 300 | +0.0037 | +0.0014 |
+| `e05rand` (from scratch, d22) | 75 | 375 | +0.0135 | +0.0011 |
+| `e03` (from scratch, d12) | 75 | 375 | +0.0113 | +0.0015 |
+
+**Warm-starting compresses the epoch dependence.** From scratch the optimum
+travels 75 -> 375 across the ladder and a fixed 325 costs ~0.011--0.014 r at
+S<=200; warm-started it travels 175 -> 300 and costs ~0.004. Whatever REVE
+pretraining supplies, one thing it supplies is insensitivity to when you stop.
+
+**Is the early optimum real, or the winner's curse?** These gains cannot be
+negative, so a noisy curve manufactures a positive one. The evidence that it
+is real is the CONCENTRATION of the argmax across independent draws: under
+noise the three draws of a cell would scatter, and instead the from-scratch
+arm puts all three at epoch 25 at S=20 and all three at 375 at S=1400. A
+winner's curse does not reproduce across seeds.
+
+### What this does to the initialisation claim
+
+The paper reports the warm start as worth a draw-separated $+0.016$ to
+$+0.031\,r$ at $S=10$--$20$, with both arms evaluated at a fixed epoch 325.
+But a fixed 325 is not neutral between them: it sits near the warm arm's
+optimum and far past the from-scratch arm's. The part of that gap which is
+protocol rather than initialisation is the DIFFERENCE of the two arms'
+gains, not the from-scratch arm's gain alone:
+
+| S | warm gains | scratch gains | differential |
+|---|---|---|---|
+| 10 | +0.0039 | +0.0089 | +0.0050 |
+| 20 | +0.0052 | +0.0112 | +0.0060 |
+| 50 | +0.0014 | +0.0111 | +0.0096 |
+| 100 | +0.0040 | +0.0180 | +0.0140 |
+| 200 | +0.0042 | +0.0183 | +0.0141 |
+| 400 | +0.0106 | +0.0027 | -0.0078 |
+| 701 | +0.0033 | +0.0008 | -0.0025 |
+| 1000 | +0.0006 | +0.0013 | +0.0007 |
+| 1400 | +0.0003 | +0.0016 | +0.0013 |
+| 1863 | +0.0010 | +0.0000 | -0.0010 |
+
+At $S=10$--$20$ the differential is +0.0055, i.e.\ per-cell selection
+would close at most 34 % of the low end of the claimed gap
+and 18 % of the high end. **The initialisation result
+survives, and is overstated at small cohorts.** It peaks at $S=100$--$200$,
+where the differential reaches +0.0141.
+
+Three things keep this a caveat rather than a correction. The arms measured
+here draw from the 1863 pool while the paper's initialisation comparison
+uses the 2156-pool arms; the gains are measured on the R5 selection set
+with a 60-recording head, not on R6 with 1863; and both are upper bounds,
+for the reason above. Settling it needs the 2156-pool arms re-evaluated at
+per-cell epochs, which their pool makes impossible without retraining.
+
+## 1. Three selectors, every cell (e04)
 
 `auc` = the incumbent smoothed-AUC choice; `prb` = probe argmax; `retr` = scene-retrieval
 argmax. `r@*` are on the 20 scoring recordings, NOT the reported test number.
