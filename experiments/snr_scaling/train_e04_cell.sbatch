@@ -53,6 +53,10 @@ INIT_CKPT="${INIT_CKPT:-/work/hdd/bbnv/kkokate/eb_jepa/reve_base_eet_init.pth.ta
 # Frozen config snapshot to copy. E0.6 swaps in a width variant; the shape
 # fields live in the snapshot, never on the CLI, so a cell dir always records
 # exactly what it was trained with.
+# LR overrides optim.lr in the copied snapshot. Empty = use the snapshot's
+# value (1e-4), which every arm so far has used. Set only for an LR probe,
+# and encode it in SUFFIX or cells collide.
+LR="${LR:-}"
 CONFIG_SRC="${CONFIG_SRC:-experiments/snr_scaling/clip_pretrain_reve.yaml}"
 EXP_PREFIX="${EXP_PREFIX:-e04}"
 CKPT_ROOT="${CKPT_ROOT:-/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling}"
@@ -88,7 +92,7 @@ fi
 EXP_DIR="${CKPT_ROOT}/${EXP_ID}"
 
 echo "Job $SLURM_JOB_ID  Node: $SLURM_NODELIST  Cell: $EXP_ID"
-echo "cfg: S=${SUBJECTS} A=${ANCHORS} draw=${DRAW:-none} epochs=${EPOCHS} seed=${SEED} init=${INIT_CKPT}"
+echo "cfg: S=${SUBJECTS} A=${ANCHORS} draw=${DRAW:-none} epochs=${EPOCHS} seed=${SEED} init=${INIT_CKPT} lr=${LR:-snapshot}"
 
 mkdir -p logs "$EXP_DIR"
 
@@ -99,6 +103,10 @@ cp "$CONFIG_SRC" "$EXP_DIR/config.yaml"
 DRAW_PATCH=""
 if [ -n "${DRAW:-}" ]; then
     DRAW_PATCH="c.data.subsample_seed = ${DRAW}; "
+fi
+LR_PATCH=""
+if [ -n "${LR:-}" ]; then
+    LR_PATCH="c.optim.lr = ${LR}; "
 fi
 
 # epoch_size=703 pins 11 steps/epoch regardless of S, so data scale is never
@@ -113,7 +121,7 @@ c.data.task = 'ThePresent'
 c.data.max_subjects = ${SUBJECTS}
 c.data.max_anchors = ${ANCHORS}
 c.data.epoch_size = 703
-${DRAW_PATCH}OmegaConf.save(c, '${EXP_DIR}/config.yaml')
+${DRAW_PATCH}${LR_PATCH}OmegaConf.save(c, '${EXP_DIR}/config.yaml')
 "
 
 # The probe must see the FULL data, or retrieval chance levels shift per cell.
