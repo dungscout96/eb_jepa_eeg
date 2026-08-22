@@ -84,9 +84,15 @@ def load_encoder_state(encoder, ckpt_path):
     if unexpected[:3]: print(f"  unexpected (first 3): {unexpected[:3]}")
 
 
-@torch.no_grad()
-def embed_recording_all_windows(encoder, dataset, rec_idx, device, batch_size):
-    """Encode every window in one recording. Returns (X[n_win, D], Y[n_win, n_features])."""
+def load_recording_windows(dataset, rec_idx):
+    """Read and normalize every window in one recording. Returns [n_win, 1, C, T].
+
+    Split out of `embed_recording_all_windows` because the result is
+    CHECKPOINT-INDEPENDENT: an epoch sweep over N checkpoints re-encodes the same
+    tensor N times, and re-reading the FIF each time is the dominant cost. Callers
+    that sweep checkpoints (epoch_curve.py) cache this once; callers that evaluate
+    a single checkpoint go through embed_recording_all_windows as before.
+    """
     crop_inds = dataset._crop_inds[rec_idx]
     fif_path = dataset._fif_paths[rec_idx]
     raw = _read_raw_windows(fif_path, crop_inds)            # [n_win, C, T] numpy float32
@@ -102,7 +108,12 @@ def embed_recording_all_windows(encoder, dataset, rec_idx, device, batch_size):
         eeg = (eeg - dataset._eeg_mean) / dataset._eeg_std
 
     # Treat each window as its own "trial" with n_windows=1 (matches training shape).
-    eeg_in = eeg.unsqueeze(1)                                # [n_win, 1, C, T]
+    return eeg.unsqueeze(1)                                  # [n_win, 1, C, T]
+
+
+@torch.no_grad()
+def encode_windows(encoder, eeg_in, device, batch_size):
+    """Encode a [n_win, 1, C, T] window tensor to pooled embeddings [n_win, D]."""
     embs = []
     for start in range(0, len(eeg_in), batch_size):
         batch = eeg_in[start:start + batch_size].to(device)
@@ -110,7 +121,14 @@ def embed_recording_all_windows(encoder, dataset, rec_idx, device, batch_size):
         pooled = encoder.pool_to_windows(tokens)             # [B, D, 1, 1, 1]
         emb = pooled.squeeze(-1).squeeze(-1).squeeze(-1).cpu().numpy()  # [B, D]
         embs.append(emb)
-    X = np.concatenate(embs, axis=0)                          # [n_win, D]
+    return np.concatenate(embs, axis=0)                       # [n_win, D]
+
+
+@torch.no_grad()
+def embed_recording_all_windows(encoder, dataset, rec_idx, device, batch_size):
+    """Encode every window in one recording. Returns (X[n_win, D], Y[n_win, n_features])."""
+    eeg_in = load_recording_windows(dataset, rec_idx)
+    X = encode_windows(encoder, eeg_in, device, batch_size)   # [n_win, D]
     Y = dataset.feature_recordings[rec_idx].numpy()           # [n_win, n_features]
     return X, Y
 

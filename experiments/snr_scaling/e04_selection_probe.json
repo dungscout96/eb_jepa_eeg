@@ -1,0 +1,254 @@
+{
+  "e04_s10_a101_nd_d11": {
+    "best_epoch": 150,
+    "best_value": 0.1187129740913709,
+    "selected_epoch": 150,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s10_a101_nd_d11/epoch_150.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s10_a101_nd_d22": {
+    "best_epoch": 100,
+    "best_value": 0.13306018865356842,
+    "selected_epoch": 100,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s10_a101_nd_d22/epoch_100.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s10_a101_nd_d33": {
+    "best_epoch": 150,
+    "best_value": 0.13944587546090284,
+    "selected_epoch": 150,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s10_a101_nd_d33/epoch_150.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s20_a101_nd_d11": {
+    "best_epoch": 100,
+    "best_value": 0.15205544295410314,
+    "selected_epoch": 100,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s20_a101_nd_d11/epoch_100.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s20_a101_nd_d22": {
+    "best_epoch": 175,
+    "best_value": 0.14890952656666437,
+    "selected_epoch": 175,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s20_a101_nd_d22/epoch_175.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s20_a101_nd_d33": {
+    "best_epoch": 150,
+    "best_value": 0.15373523191859326,
+    "selected_epoch": 150,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s20_a101_nd_d33/epoch_150.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s50_a101_nd_d11": {
+    "best_epoch": 275,
+    "best_value": 0.17392504153152308,
+    "selected_epoch": 275,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s50_a101_nd_d11/epoch_275.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s50_a101_nd_d22": {
+    "best_epoch": 200,
+    "best_value": 0.17000102251768112,
+    "selected_epoch": 200,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s50_a101_nd_d22/epoch_200.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s50_a101_nd_d33": {
+    "best_epoch": 275,
+    "best_value": 0.16238470437626043,
+    "selected_epoch": 275,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s50_a101_nd_d33/epoch_275.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s100_a101_nd_d11": {
+    "best_epoch": 125,
+    "best_value": 0.19457053144772848,
+    "selected_epoch": 125,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s100_a101_nd_d11/epoch_125.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s100_a101_nd_d22": {
+    "best_epoch": 225,
+    "best_value": 0.2037250685195128,
+    "selected_epoch": 225,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s100_a101_nd_d22/epoch_225.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s100_a101_nd_d33": {
+    "best_epoch": 75,
+    "best_value": 0.1984934521218141,
+    "selected_epoch": 75,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s100_a101_nd_d33/epoch_75.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s200_a101_nd_d11": {
+    "best_epoch": 275,
+    "best_value": 0.2488965056836605,
+    "selected_epoch": 275,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s200_a101_nd_d11/epoch_275.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s200_a101_nd_d22": {
+    "best_epoch": 250,
+    "best_value": 0.23386970534920692,
+    "selected_epoch": 250,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s200_a101_nd_d22/epoch_250.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s200_a101_nd_d33": {
+    "best_epoch": 225,
+    "best_value": 0.22548611586292586,
+    "selected_epoch": 225,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s200_a101_nd_d33/epoch_225.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s400_a101_nd_d11": {
+    "best_epoch": 225,
+    "best_value": 0.25769084071119625,
+    "selected_epoch": 225,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s400_a101_nd_d11/epoch_225.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s400_a101_nd_d22": {
+    "best_epoch": 125,
+    "best_value": 0.273315716534853,
+    "selected_epoch": 125,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s400_a101_nd_d22/epoch_125.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s400_a101_nd_d33": {
+    "best_epoch": 225,
+    "best_value": 0.2757393841942151,
+    "selected_epoch": 225,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s400_a101_nd_d33/epoch_225.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s701_a101_nd_d11": {
+    "best_epoch": 250,
+    "best_value": 0.30496202036738396,
+    "selected_epoch": 250,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s701_a101_nd_d11/epoch_250.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s701_a101_nd_d22": {
+    "best_epoch": 225,
+    "best_value": 0.29198962698380154,
+    "selected_epoch": 225,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s701_a101_nd_d22/epoch_225.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s701_a101_nd_d33": {
+    "best_epoch": 250,
+    "best_value": 0.28529928003748256,
+    "selected_epoch": 250,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s701_a101_nd_d33/epoch_250.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s1000_a101_nd_d11": {
+    "best_epoch": 250,
+    "best_value": 0.3181736146410306,
+    "selected_epoch": 250,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s1000_a101_nd_d11/epoch_250.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s1000_a101_nd_d22": {
+    "best_epoch": 300,
+    "best_value": 0.3254343532025814,
+    "selected_epoch": 300,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s1000_a101_nd_d22/epoch_300.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s1000_a101_nd_d33": {
+    "best_epoch": 375,
+    "best_value": 0.3270366167028745,
+    "selected_epoch": 375,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s1000_a101_nd_d33/epoch_375.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s1400_a101_nd_d11": {
+    "best_epoch": 325,
+    "best_value": 0.3238430619239807,
+    "selected_epoch": 325,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s1400_a101_nd_d11/epoch_325.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s1400_a101_nd_d22": {
+    "best_epoch": 300,
+    "best_value": 0.3157717784245809,
+    "selected_epoch": 300,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s1400_a101_nd_d22/epoch_300.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s1400_a101_nd_d33": {
+    "best_epoch": 325,
+    "best_value": 0.32400764897465706,
+    "selected_epoch": 325,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s1400_a101_nd_d33/epoch_325.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  },
+  "e04_s1863_a101_nd": {
+    "best_epoch": 375,
+    "best_value": 0.2740364720424016,
+    "selected_epoch": 375,
+    "snap_distance": 0,
+    "checkpoint": "/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling/e04_s1863_a101_nd/epoch_375.pth.tar",
+    "selector": "probe_mean_r",
+    "smooth_window": 1
+  }
+}

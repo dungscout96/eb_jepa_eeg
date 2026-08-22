@@ -1,0 +1,102 @@
+# Probe-eval config for the ZERO-OVERLAP head-fit check (E0.6 follow-up).
+#
+# Identical to config_probe_TP_e04.yaml except that the ridge head is fitted on
+# R5 ALONE. That single change removes the one confound the standard config
+# cannot: with the head fitted on [R1..R4, R7..R10], the fraction of head-fit
+# data an encoder also pretrained on runs from ~0.5 %% at S=10 to 100 %% at the
+# top of the axis, so "head-fit pool held constant" is not the same as "S
+# unconfounded".
+#
+# WHY R5 WORKS, AND ONLY FOR THE e04 ARM. e04 pretrains on [R1..R4, R7..R10],
+# so R5 is disjoint from EVERY e04 cohort at every S -- overlap is exactly 0 by
+# construction, not approximately 0. The same trick is unavailable for the
+# e05/addval arms, whose pool already contains R5; testing those would require
+# retraining the axis against a held-out slice.
+#
+# WHAT IT COSTS. The head sees 293 recordings instead of 1863, so absolute
+# Pearson r drops across the board. This config is therefore a SHAPE check --
+# does the S-curve keep its form when overlap is held at 0? -- and its numbers
+# are not comparable to, nor a replacement for, the headline tables.
+#
+# Test split (R6) is untouched and is seen by neither the encoders nor the head.
+
+meta:
+  seed: 2025
+  device: auto
+  encoder_init_from: null
+data:
+  batch_size: 64
+  num_workers: 4
+  task: ThePresent
+  n_windows: 1
+  window_size_seconds: 2
+  temporal_stride: 1
+  preprocessed: true
+  preprocessed_dir: null
+  norm_mode: per_recording
+  add_envelope: false
+  corrca_filters: null
+  annotation_duration_tolerance_s: 1.0
+  max_recording_overshoot_s: 60.0
+  channel_dropout_p: 0.0
+  max_subjects: null
+  max_anchors: null
+  epoch_size: null
+  # Declares the extended train pool in the config itself instead of relying
+  # on the HBN_TRAIN_RELEASES env var (see eb_jepa/datasets/hbn.py). Every
+  # e04_reve_scaling cell's own config_probe.yaml is otherwise identical to
+  # this one (verified 2026-08-13; the only per-cell difference is an inert
+  # subsample_seed, unused since max_subjects/max_anchors are null here) --
+  # this file replaces them as the "within" preset's shared probe-eval config
+  # so the declaration lives in the repo, not in kkokate's checkpoint tree.
+  # THE change: head fitted on R5 only -- disjoint from every e04 cohort.
+  train_releases: [R5]
+model:
+  encoder_embed_dim: 512
+  encoder_depth: 22
+  encoder_heads: 8
+  encoder_head_dim: 64
+  patch_size: 200
+  patch_overlap: 20
+  freqs: 4
+  mlp_dim_ratio: 2.66
+loss:
+  mode: soft_target_clip
+  mean_center: true
+  target_kind: per_window
+  temporal_buffer_s: 2.0
+  soft_alpha: 0.5
+  soft_tau_teacher: 0.05
+  cs_weight: 1.0
+  kernel_bandwidth: null
+  vision_passthrough: false
+  proj_dim: 512
+  n_residual_blocks: 1
+  temperature: 0.07
+  drop_proj: 0.5
+optim:
+  epochs: 50
+  lr: 0.0001
+  lr_min: 1.0e-06
+  warmup_epochs: 5
+  optimizer: adam
+logging:
+  log_wandb: true
+  wandb_group: null
+  log_every: 1
+  save_every: 10
+  tqdm_silent: false
+eval:
+  auto_run: false
+  n_passes: 20
+  probe_seed: 42
+  n_bootstrap: 2000
+  feature_names:
+  - contrast_rms
+  - luminance_mean
+  - position_in_movie
+  - narrative_event_score
+  visual_processing_delay_s: 0.0
+  val_every: 1
+  val_recording_fraction: 0.1
+  val_max_windows: 2000

@@ -1,0 +1,90 @@
+# Probe-eval config for the 2156-pool arms (warm-started and from-scratch).
+#
+# Identical to config_probe_TP_e04.yaml except that data.train_releases adds R5,
+# giving the 2156-recording pool those arms actually pretrained on. It exists so
+# the epoch-curve selector can RECONSTRUCT a cell's cohort and take the
+# complement: cohorts are nested (permute the pool's subjects once per seed,
+# take the first S), so every cell with S < 2156 has a set of subjects it never
+# trained on, and that set is the legal place to select an epoch.
+#
+# Getting the release list wrong here does not fail loudly -- it silently
+# reconstructs the wrong cohort, and the "held-out" complement would then
+# contain training subjects. The list below must match
+# clip_pretrain_e05_addval.yaml's data.train_releases exactly.
+#
+# NOT for fitting reported ridge heads. Every published probe number fits its
+# head on the 1863 pool (see config_probe_TP_e04.yaml); this file is for
+# selection only, where the head is fitted inside the complement.
+data:
+  batch_size: 64
+  num_workers: 4
+  task: ThePresent
+  n_windows: 1
+  window_size_seconds: 2
+  temporal_stride: 1
+  preprocessed: true
+  preprocessed_dir: null
+  norm_mode: per_recording
+  add_envelope: false
+  corrca_filters: null
+  annotation_duration_tolerance_s: 1.0
+  max_recording_overshoot_s: 60.0
+  channel_dropout_p: 0.0
+  max_subjects: null
+  max_anchors: null
+  epoch_size: null
+  # Declares the extended train pool in the config itself instead of relying
+  # this one (verified 2026-08-13; the only per-cell difference is an inert
+  # subsample_seed, unused since max_subjects/max_anchors are null here) --
+  # this file replaces them as the "within" preset's shared probe-eval config
+  # so the declaration lives in the repo, not in kkokate's checkpoint tree.
+  train_releases: [R1, R2, R3, R4, R5, R7, R8, R9, R10]
+model:
+  encoder_embed_dim: 512
+  encoder_depth: 22
+  encoder_heads: 8
+  encoder_head_dim: 64
+  patch_size: 200
+  patch_overlap: 20
+  freqs: 4
+  mlp_dim_ratio: 2.66
+loss:
+  mode: soft_target_clip
+  mean_center: true
+  target_kind: per_window
+  temporal_buffer_s: 2.0
+  soft_alpha: 0.5
+  soft_tau_teacher: 0.05
+  cs_weight: 1.0
+  kernel_bandwidth: null
+  vision_passthrough: false
+  proj_dim: 512
+  n_residual_blocks: 1
+  temperature: 0.07
+  drop_proj: 0.5
+optim:
+  epochs: 50
+  lr: 0.0001
+  lr_min: 1.0e-06
+  warmup_epochs: 5
+  optimizer: adam
+logging:
+  log_wandb: true
+  wandb_group: null
+  log_every: 1
+  save_every: 10
+  tqdm_silent: false
+eval:
+  auto_run: false
+  n_passes: 20
+  probe_seed: 42
+  n_bootstrap: 2000
+  feature_names:
+  - contrast_rms
+  - luminance_mean
+  - position_in_movie
+  - narrative_event_score
+  visual_processing_delay_s: 0.0
+  val_every: 1
+  val_recording_fraction: 0.1
+  val_max_windows: 2000
