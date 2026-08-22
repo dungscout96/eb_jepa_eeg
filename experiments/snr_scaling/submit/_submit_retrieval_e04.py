@@ -106,8 +106,34 @@ def load_selection() -> dict[str, int]:
     return epochs
 
 
-def resolve_arm(arm: str, epoch: int | None) -> tuple[str, dict[str, int], str, str]:
+def load_probe_selection(path: str) -> dict[str, int]:
+    """{slug: epoch} from an epoch-curve probe selection.
+
+    Written by src/analyse_epoch_curve.py --write-selection. Covers only the
+    cells the curve could reach: a full-pool cell has no cohort complement and
+    so no held-out data to select on, and is deliberately ABSENT here rather
+    than defaulted to something. Evaluating the cells present leaves that cell's
+    existing fixed-epoch artifacts untouched, which is the honest handling --
+    the paper already excludes it from every fit.
+    """
+    sel = json.loads(Path(path).read_text())
+    return {slug: info["selected_epoch"] for slug, info in sel.items()
+            if "selected_epoch" in info}
+
+
+def resolve_arm(arm: str, epoch: int | None,
+                selection: str | None = None) -> tuple[str, dict[str, int], str, str]:
     """-> (ckpt_root, {slug: epoch}, filename_suffix, human description)."""
+    root = CKPT_ROOT if arm == "e04" else ARMS[arm]["root"]
+    if selection is not None:
+        # Per-cell epochs from the probe curve. The _epprb suffix keeps these
+        # artifacts from colliding with the _ep325/_ep375 sets every published
+        # number comes from -- the two protocols must remain separately
+        # readable, or a later reader cannot tell which produced a given file.
+        eps = load_probe_selection(selection)
+        return (root, eps, "_epprb",
+                f"per-cell probe-selected epoch ({len(eps)} cells, "
+                f"from {Path(selection).name})")
     if arm == "e04":
         if epoch is not None:
             return (CKPT_ROOT, {s: epoch for s in load_selection()},
@@ -194,6 +220,14 @@ def main() -> None:
                     help="Use this FIXED epoch for every cell instead of "
                          "per-cell selection (e.g. 325, matching e03's own "
                          "convention). Outputs get an _ep<N> filename suffix.")
+    ap.add_argument("--selection", default=None,
+                    help="Probe-selected epochs from an epoch curve, e.g. "
+                         "experiments/snr_scaling/raw_results/"
+                         "addval_selection_probe.json. Overrides --epoch and "
+                         "evaluates each cell at its own optimum; artifacts get "
+                         "an _epprb suffix. Cells absent from the file (full-pool "
+                         "cells, which have no held-out data to select on) are "
+                         "skipped rather than defaulted.")
     ap.add_argument("--arm", default="e04", choices=sorted(ARMS),
                     help="e04 = kkokate's e04_reve_scaling (default). "
                          "addval = the e05_addval cells, trained with R5 in "
@@ -201,7 +235,7 @@ def main() -> None:
                          f"{E05_DEFAULT_EPOCH}.")
     args = ap.parse_args()
 
-    ckpt_root, epochs, epoch_suffix, epoch_desc = resolve_arm(args.arm, args.epoch)
+    ckpt_root, epochs, epoch_suffix, epoch_desc = resolve_arm(args.arm, args.epoch, args.selection)
 
     p = PRESETS[args.preset]
     steps = build_steps(args.preset, epochs, epoch_suffix, ckpt_root, args.arm)

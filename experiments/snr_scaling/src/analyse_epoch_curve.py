@@ -109,7 +109,13 @@ def main() -> None:
 
     curve_doc = json.loads(Path(args.curve).read_text())
     meta, cells = curve_doc["_meta"], curve_doc["cells"]
-    auc_sel = json.loads(Path(args.selection).read_text())
+    # Arms whose pool leaves no release out have no incumbent AUC selection --
+    # their validation metric is measured on data they trained on, so it was
+    # never computed. Pass --selection none: there is then simply no second
+    # selector to compare against, and the probe is judged against the fixed
+    # epoch alone.
+    auc_sel = ({} if args.selection in ("", "none")
+               else json.loads(Path(args.selection).read_text()))
 
     print(f"selection set: {meta['n_recordings']} {meta['split']}-split recordings "
           f"({meta['n_fit_recordings']} fit / "
@@ -156,9 +162,14 @@ def main() -> None:
     moved = [r for r in rows if r["auc_ep"] is not None and r["probe_ep"] != r["auc_ep"]]
     d_probe_auc = [abs(r["probe_ep"] - r["auc_ep"]) for r in rows if r["auc_ep"] is not None]
     d_r_325 = [r["r_probe"] - r["r_325"] for r in rows]
-    print(f"\n1. AGREEMENT. probe vs auc: {len(rows) - len(moved)}/{len(rows)} cells "
-          f"pick the same checkpoint; median |delta epoch| {st.median(d_probe_auc):.0f}, "
-          f"max {max(d_probe_auc):.0f}.")
+    if d_probe_auc:
+        print(f"\n1. AGREEMENT. probe vs auc: {len(rows) - len(moved)}/{len(rows)} cells "
+              f"pick the same checkpoint; median |delta epoch| {st.median(d_probe_auc):.0f}, "
+              f"max {max(d_probe_auc):.0f}.")
+    else:
+        print("\n1. AGREEMENT. no incumbent AUC selection exists for this arm "
+              "(its validation metric is in-sample), so the probe is compared "
+              "against the fixed epoch only.")
     # NON-NEGATIVE BY CONSTRUCTION: the probe epoch IS the argmax of this very
     # curve, so it can never score below 325 on it. This is the winner's margin
     # over 15 draws, not an estimate of what selection buys -- read it as an
