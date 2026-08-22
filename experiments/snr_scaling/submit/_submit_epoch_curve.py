@@ -275,7 +275,7 @@ def merge(arm: str) -> int:
     if not parts:
         print(f"No {arm}_epoch_curve_[0-9]*.json under {RAW_DIR}")
         return 1
-    merged, meta = {}, None
+    merged, meta, seed_by_cell = {}, None, {}
     for p in parts:
         d = json.loads(p.read_text())
         if meta is None:
@@ -284,7 +284,8 @@ def merge(arm: str) -> int:
             # A chunk run with a different selection set is not mergeable: the
             # cells would be scored on different recordings and the argmaxes
             # would not be comparable across chunks.
-            for k in ("split", "seed", "n_recordings", "n_fit_recordings", "alpha"):
+            for k in ("split", "seed", "n_recordings", "n_fit_recordings",
+                      "alpha", "holdout_complement_of"):
                 if d["_meta"][k] != meta[k]:
                     print(f"  INCOMPATIBLE {p.name}: {k}={d['_meta'][k]!r} "
                           f"expected {meta[k]!r}")
@@ -293,7 +294,18 @@ def merge(arm: str) -> int:
         if overlap:
             print(f"  DUPLICATE cells in {p.name}: {sorted(overlap)}")
             return 1
+        # Complement arms select each DRAW on its own held-out set, so the
+        # merged file must not inherit one part's subsample_seed for all 30
+        # cells -- that would claim every cell was scored on draw 11's
+        # complement, which is exactly the correctness question a reader of
+        # this file needs answered.
+        for cell in d["cells"]:
+            seed_by_cell[cell] = d["_meta"].get("subsample_seed")
         merged.update(d["cells"])
+    if len(set(seed_by_cell.values())) > 1:
+        meta = dict(meta)
+        meta["subsample_seed"] = "per-draw"
+        meta["subsample_seed_by_cell"] = seed_by_cell
     merged_path.write_text(json.dumps({"_meta": meta, "cells": merged}, indent=2))
     n_ck = sum(len(v) for v in merged.values())
     print(f"Merged {len(parts)} part(s) -> {merged_path.name}: "
@@ -317,9 +329,34 @@ def verify(arm: str) -> int:
     meta, cells = d["_meta"], d["cells"]
     bad = 0
 
-    if meta["split"] != "val":
-        print(f"  WRONG SPLIT: selected on {meta['split']!r}, must be 'val' (R5)")
-        bad += 1
+    comp = ARMS[arm].get("complement")
+    if comp is None:
+        if meta["split"] != "val":
+            print(f"  WRONG SPLIT: {arm} selects on a held-out release, so split "
+                  f"must be 'val' (R5), got {meta['split']!r}")
+            bad += 1
+    else:
+        # Complement arms select INSIDE the train pool -- that is the point, and
+        # it is legal only because the cells never saw those subjects. What must
+        # hold is that the complement was taken at the arm's largest drawable S,
+        # and that every draw is represented.
+        if meta["split"] != "train":
+            print(f"  WRONG SPLIT: {arm} selects on a cohort complement, so split "
+                  f"must be 'train', got {meta['split']!r}")
+            bad += 1
+        if meta.get("holdout_complement_of") != comp:
+            print(f"  WRONG COMPLEMENT: {meta.get('holdout_complement_of')!r}, "
+                  f"expected {comp}")
+            bad += 1
+        seeds = meta.get("subsample_seed_by_cell") or {}
+        missing_seed = [c for c in cells if c not in seeds]
+        if seeds and missing_seed:
+            print(f"  NO SELECTION PROVENANCE for {len(missing_seed)} cell(s)")
+            bad += 1
+        for c in cells:
+            if c in seeds and not c.endswith(f"_d{seeds[c]}"):
+                print(f"  DRAW MISMATCH {c}: selected on draw {seeds[c]}'s complement")
+                bad += 1
     if meta["n_recordings"] != N_RECORDINGS or meta["n_fit_recordings"] != N_FIT:
         print(f"  WRONG SELECTION SET: {meta['n_recordings']}/{meta['n_fit_recordings']} "
               f"expected {N_RECORDINGS}/{N_FIT}")
