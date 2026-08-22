@@ -128,7 +128,15 @@ ENCODER_INIT_FROM = "/work/hdd/bbnv/kkokate/eb_jepa/reve_base_eet_init.pth.tar"
 # checkpoint nor an artifact can collide with the warm-started arm.
 FS_CKPT_ROOT = "/work/hdd/bbnv/dtyoung/eb_jepa/e05_fromscratch"
 FROM_SCRATCH = False           # set by main() from --from-scratch
-EPOCHS = 400
+# Set by main() from --epochs, exactly like FROM_SCRATCH above, because THREE
+# separate completion checks derive from it: the screen's "is this run
+# finished" (EPOCHS // SAVE_EVERY - 1), verify's expected checkpoint count, and
+# the idempotence test for `epoch_{EPOCHS - SAVE_EVERY}.pth.tar`. Leaving it a
+# constant while --epochs varied would have made an 800-epoch submission test
+# for epoch_375 -- which every 400-epoch cell already has -- and silently skip
+# all 31 jobs as "already done".
+DEFAULT_EPOCHS = 400       # argparse default; EPOCHS is the resolved value
+EPOCHS = DEFAULT_EPOCHS
 SAVE_EVERY = 25
 ANCHORS = 101
 EPOCH_SIZE = 703          # -> 11 steps/epoch -> 4400 steps, every cell
@@ -220,8 +228,20 @@ def slug_prefix() -> str:
     return "e05fs" if FROM_SCRATCH else "e05"
 
 
+def epoch_marker() -> str:
+    """Slug segment separating budgets, so they cannot share a directory.
+
+    A longer run writes epoch_25..epoch_375 too, so without this an 800-epoch
+    submission would OVERWRITE the 400-epoch checkpoints in place -- and those
+    are what every published from-scratch number was measured from. The
+    convention matches the existing 800-epoch arm, which keeps its `_ep800`
+    cells beside the 400-epoch ones in one root.
+    """
+    return "" if EPOCHS == DEFAULT_EPOCHS else f"_ep{EPOCHS}"
+
+
 def slug(subjects: int, draw: int | None) -> str:
-    s = f"{slug_prefix()}_s{subjects}_a{ANCHORS}_av"
+    s = f"{slug_prefix()}_s{subjects}_a{ANCHORS}_av{epoch_marker()}"
     return s if draw is None else f"{s}_d{draw}"
 
 
@@ -555,7 +575,10 @@ def main() -> None:
     # per 25 epochs, measured from the checkpoint mtimes). 3 h leaves room for
     # the larger pool's longer scan and a slower node.
     ap.add_argument("--time-limit", default="03:00:00")
-    ap.add_argument("--epochs", type=int, default=EPOCHS)
+    ap.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS,
+                    help="Training length. A value other than the default puts the\n"
+                         "cells in their own _ep<N> directories, so a longer run\n"
+                         "cannot overwrite the checkpoints of a shorter one.")
     ap.add_argument("--only", default=None,
                     help="One cell, e.g. --only=1863_d11 or --only=2156.")
     ap.add_argument("--force", action="store_true",
@@ -576,8 +599,9 @@ def main() -> None:
                          "~31 GPU-h train + ~36 GPU-h eval, ~312 GB.")
     args = ap.parse_args()
 
-    global FROM_SCRATCH
+    global FROM_SCRATCH, EPOCHS
     FROM_SCRATCH = args.from_scratch
+    EPOCHS = args.epochs
     if FROM_SCRATCH:
         args.full_axis = True
 
