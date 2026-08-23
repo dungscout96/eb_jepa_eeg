@@ -117,9 +117,19 @@ def _cells_2156(prefix: str) -> list[str]:
 
 
 DRAWS = [11, 22, 33]
+# The retrained from-scratch cells: only the range where the 400-epoch budget
+# was measurably binding. Below S=400 the 800-epoch measurement put the cost of
+# the shorter budget at exactly 0.0000, so those cells were deliberately not
+# retrained and keep their 400-epoch checkpoints. s2156 is retrained but stays
+# out of the curve, having no complement to select on.
+RETRAINED_S = [701, 1000, 1400, 1863]
 # The largest drawable S of a 2156-pool arm. Its complement (293 subjects) is
 # held out from every smaller cell of the same draw, because cohorts nest.
 COMPLEMENT_S = 1863
+
+
+def _cells_ep800(prefix: str) -> list[str]:
+    return [f"{prefix}_s{s}_a101_av_ep800_d{d}" for s in RETRAINED_S for d in DRAWS]
 
 E03_CELLS = _cells("e03", "nd")
 E05RAND_CELLS = _cells("e05", "nd")          # 400 epochs, 15 checkpoints
@@ -187,6 +197,19 @@ ARMS = {
         cells=_cells_2156("e05fs"),
         merged=RAW_DIR / "fromscratch_epoch_curve.json",
         desc="from scratch, depth 22, pool 2156 -- the paper's initialisation baseline",
+        complement=COMPLEMENT_S,
+    ),
+    # The same baseline retrained at 8800 steps, S>=701 only. Its 400-epoch
+    # counterpart pinned at the last checkpoint on every cell at S>=1000, so
+    # its optimum was never observed; these cells are where that becomes
+    # measurable instead of bounded.
+    "fromscratch800": dict(
+        ckpt_root="/work/hdd/bbnv/dtyoung/eb_jepa/e05_fromscratch",
+        config="experiments/snr_scaling/config/config_probe_TP_pool2156.yaml",
+        selection=None,
+        cells=_cells_ep800("e05fs"),
+        merged=RAW_DIR / "fromscratch800_epoch_curve.json",
+        desc="from scratch, depth 22, pool 2156, 800 epochs, S>=701 only",
         complement=COMPLEMENT_S,
     ),
 }
