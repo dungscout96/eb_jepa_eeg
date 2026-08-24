@@ -1,0 +1,105 @@
+# Depth-12 architecture against the 2156 pool (R5 folded in).
+#
+# Same as config_probe_TP_e03.yaml apart from the release declaration below.
+# Used by the epoch-curve selector to reconstruct each cell's cohort and take
+# the complement, which is only legal if the pool matches what the cells were
+# actually trained on.
+#
+# Probe-eval config for the depth-12 e03_scaling arm.
+#
+# Depth-12 counterpart of config_probe_TP_e04.yaml, and used for the same
+# reason: the submitters need the architecture declared IN THE REPO rather than
+# read out of a checkpoint directory on the cluster. Copied from
+# e03_s1400_a101_nd_d11/config_probe.yaml (2026-08-21); every e03 cell's own
+# copy is identical apart from an inert subsample_seed, which is dropped here
+# because max_subjects/max_anchors are null in evaluation.
+#
+# WHAT DIFFERS FROM THE e04 CONFIG, and it is not only depth: patch 400 with no
+# overlap against 200/20, and these cells train FROM SCRATCH where e04
+# warm-starts from REVE. A depth-12-vs-22 delta measured with these two files is
+# depth + patchification + initialisation (RESULTS_model_scaling.md section 9).
+#
+# The data block is byte-identical to the e04 config's in every field that
+# selects windows -- task, n_windows, window_size_seconds, temporal_stride,
+# norm_mode -- so the same recordings yield the same windows and an epoch curve
+# on this arm is directly comparable to e04's.
+#
+# R5 is NOT in this arm's pretraining pool (e03 trains on R1-R4, R7-R10), which
+# is what makes it a legal selection split. See _submit_epoch_curve.py.
+meta:
+  seed: 2025
+  device: auto
+  encoder_init_from: null
+data:
+  # The pool this arm trained on. MUST be declared here, not left to the
+  # HBN_TRAIN_RELEASES env var: the epoch-curve submitter deliberately does
+  # not set that var, so an absent declaration silently falls back to the
+  # 703-recording default and the reconstructed cohort -- and therefore the
+  # 'held-out' complement -- would be computed against the wrong pool.
+  train_releases: [R1, R2, R3, R4, R5, R7, R8, R9, R10]
+  batch_size: 64
+  num_workers: 4
+  task: ThePresent
+  n_windows: 1
+  window_size_seconds: 2
+  temporal_stride: 1
+  preprocessed: true
+  preprocessed_dir: null
+  norm_mode: per_recording
+  add_envelope: false
+  corrca_filters: null
+  annotation_duration_tolerance_s: 1.0
+  max_recording_overshoot_s: 60.0
+  channel_dropout_p: 0.0
+  max_subjects: null
+  max_anchors: null
+  epoch_size: null
+model:
+  encoder_embed_dim: 512
+  encoder_depth: 12
+  encoder_heads: 8
+  encoder_head_dim: 64
+  patch_size: 400
+  patch_overlap: 0
+  freqs: 4
+  mlp_dim_ratio: 2.66
+loss:
+  mode: soft_target_clip
+  mean_center: true
+  target_kind: per_window
+  temporal_buffer_s: 2.0
+  soft_alpha: 0.5
+  soft_tau_teacher: 0.05
+  cs_weight: 1.0
+  kernel_bandwidth: null
+  vision_passthrough: false
+  proj_dim: 512
+  n_residual_blocks: 1
+  temperature: 0.07
+  drop_proj: 0.5
+optim:
+  epochs: 50
+  lr: 0.0001
+  lr_min: 1.0e-06
+  warmup_epochs: 5
+  optimizer: adam
+logging:
+  log_wandb: true
+  wandb_group: null
+  log_every: 1
+  save_every: 10
+  tqdm_silent: false
+eval:
+  auto_run: false
+  n_passes: 20
+  probe_seed: 42
+  n_bootstrap: 2000
+  feature_names:
+  - contrast_rms
+  - luminance_mean
+  - position_in_movie
+  - narrative_event_score
+  visual_processing_delay_s: 0.0
+  val_every: 1
+  val_recording_fraction: 0.1
+  val_max_windows: 2000

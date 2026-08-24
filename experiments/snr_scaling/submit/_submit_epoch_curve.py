@@ -131,6 +131,13 @@ COMPLEMENT_S = 1863
 def _cells_ep800(prefix: str) -> list[str]:
     return [f"{prefix}_s{s}_a101_av_ep800_d{d}" for s in RETRAINED_S for d in DRAWS]
 
+
+def _cells_d12(low_s: list[int], high_s: list[int]) -> list[str]:
+    """The depth-12 2156-pool axis, whose two budget halves carry different
+    suffixes -- _av below the split, _av_ep800 at and above it."""
+    return ([f"e03_s{s}_a101_av_d{d}" for s in low_s for d in DRAWS]
+            + [f"e03_s{s}_a101_av_ep800_d{d}" for s in high_s for d in DRAWS])
+
 E03_CELLS = _cells("e03", "nd")
 E05RAND_CELLS = _cells("e05", "nd")          # 400 epochs, 15 checkpoints
 E05RAND800_CELLS = _cells("e05", "ep800")    # 800 epochs, 31 checkpoints
@@ -210,6 +217,19 @@ ARMS = {
         cells=_cells_ep800("e05fs"),
         merged=RAW_DIR / "fromscratch800_epoch_curve.json",
         desc="from scratch, depth 22, pool 2156, 800 epochs, S>=701 only",
+        complement=COMPLEMENT_S,
+    ),
+    # Depth 12 on the 2156 pool. Same pool, same per-S budgets and same
+    # selection as the depth-22 from-scratch arm, so a depth contrast against it
+    # varies depth and patchification and nothing else. The s2156 cell is
+    # excluded for the usual reason: no complement, so nothing to select on.
+    "d12av": dict(
+        ckpt_root="/work/hdd/bbnv/dtyoung/eb_jepa/e03_scaling",
+        config="experiments/snr_scaling/config/config_probe_TP_e03_pool2156.yaml",
+        selection=None,
+        cells=_cells_d12([10, 20, 50, 100, 200, 400], [701, 1000, 1400, 1863]),
+        merged=RAW_DIR / "d12av_epoch_curve.json",
+        desc="from scratch, depth 12, pool 2156 -- matched to the depth-22 scratch arm",
         complement=COMPLEMENT_S,
     ),
 }
