@@ -101,6 +101,24 @@ DM_CELLS = [(701, 85), (1841, 85)]
 NESTED_DRAW_SEEDS = [11, 22, 33]
 FULL_POOL_S = 1863
 
+# --- the 2156-pool axis (--av-axis) ------------------------------------------
+# Folding R5 into the pool takes it from 1863 to 2156 recordings, which buys two
+# things the 1863-pool axis cannot have: S=1863 becomes a real subsample and so
+# gets three draws instead of being the single unreplicable full-pool cell, and
+# a new top point appears at S=2156. It also puts this arm on the SAME pool as
+# the depth-22 arms, so a depth comparison against them is no longer confounded
+# by which subjects each pool contains.
+#
+# The budget splits at S=701 because that is where it stops being sufficient.
+# Below it the measured cost of the shorter budget is 0.0000 and those cells are
+# already past their optimum by epoch 300; at and above it the optimum sits at
+# or beyond the last checkpoint. Run the two halves as two submissions, with the
+# suffix naming the budget so neither can overwrite the other.
+AV_S_AXIS = [10, 20, 50, 100, 200, 400, 701, 1000, 1400, 1863]
+AV_FULL_POOL_S = 2156
+AV_BUDGET_SPLIT_S = 701
+POOL_2156 = False          # set by main() from --av-axis
+
 CELLS = [
     (701, 101), (400, 101), (200, 101), (100, 101), (50, 101),   # vary S
     (701, 50), (701, 25), (701, 13),                             # vary A
@@ -178,7 +196,13 @@ def build_job(subjects: int, anchors: int, partition: str,
             "HBN_PREPROCESS_DIR": (
                 "/work/hdd/bbnv/dtyoung/hbn_preprocessed" if extended
                 else "/projects/bbnv/kkokate/hbn_preprocessed"),
-            **({"HBN_TRAIN_RELEASES": "R1,R2,R3,R4,R7,R8,R9,R10"}
+            # R5 is in the list only for the 2156-pool axis. Getting this wrong
+            # does not fail -- it trains a perfectly healthy model on the wrong
+            # pool, and only the "Scaling subsample: N -> S" line in the log
+            # would ever show it.
+            **({"HBN_TRAIN_RELEASES":
+                "R1,R2,R3,R4,R5,R7,R8,R9,R10" if POOL_2156
+                else "R1,R2,R3,R4,R7,R8,R9,R10"}
                if extended else {}),
         },
     )
@@ -208,6 +232,14 @@ def main() -> None:
                    help="Low-S arm: LOW_S x NESTED_DRAW_SEEDS. Implies "
                         "--extended so draws come from the same 1863 pool and "
                         "nest with the existing cells.")
+    p.add_argument("--av-axis", default=None, choices=["low", "high", "all"],
+                   help="The 2156-pool axis (R5 folded in), which gives S=1863 "
+                        "three draws and adds S=2156. Implies --extended. "
+                        "'low' = S<=400, the half that converges inside 400 "
+                        "epochs; 'high' = S>=701 plus the whole-pool cell, the "
+                        "half that needs 800. Run the two halves separately and "
+                        "give each its own --suffix, or the longer run "
+                        "overwrites the shorter one's checkpoints.")
     p.add_argument("--nested-draws", action="store_true",
                    help="Nested + replicated S axis: NESTED_S x NESTED_DRAW_SEEDS "
                         "plus a single full-pool cell. Implies --extended.")
@@ -221,9 +253,22 @@ def main() -> None:
     p.add_argument("action", nargs="?", default="dry", choices=["dry", "submit"])
     args = p.parse_args()
 
-    global SUFFIX
+    global SUFFIX, POOL_2156
     SUFFIX = args.suffix
-    if args.dm_reference:
+    POOL_2156 = args.av_axis is not None
+    if args.av_axis:
+        args.extended = True
+        lo = [s_ for s_ in AV_S_AXIS if s_ < AV_BUDGET_SPLIT_S]
+        hi = [s_ for s_ in AV_S_AXIS if s_ >= AV_BUDGET_SPLIT_S]
+        pick = {"low": lo, "high": hi, "all": AV_S_AXIS}[args.av_axis]
+        cells = [(s_, 101, d) for s_ in pick for d in NESTED_DRAW_SEEDS]
+        if args.av_axis in ("high", "all"):
+            cells.append((AV_FULL_POOL_S, 101, None))  # whole pool: one draw
+        if not SUFFIX:
+            raise SystemExit(
+                "--av-axis needs an explicit --suffix. Without one these cells "
+                "take the same slugs as the 1863-pool cells and overwrite them.")
+    elif args.dm_reference:
         args.extended = True
         args.task = "DespicableMe"
         cells = [(s_, a_, None) for s_, a_ in DM_CELLS]
