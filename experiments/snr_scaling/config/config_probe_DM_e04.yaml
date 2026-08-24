@@ -1,0 +1,74 @@
+meta:
+  seed: 2025
+  device: auto
+  encoder_init_from: null
+data:
+  batch_size: 64
+  num_workers: 4
+  task: DespicableMe
+  n_windows: 1
+  window_size_seconds: 2
+  temporal_stride: 1
+  preprocessed: true
+  preprocessed_dir: null
+  norm_mode: per_recording
+  add_envelope: false
+  corrca_filters: null
+  annotation_duration_tolerance_s: 1.0
+  max_recording_overshoot_s: 60.0
+  channel_dropout_p: 0.0
+  max_subjects: null
+  max_anchors: null
+  epoch_size: null
+  # See config_probe_TP_e04.yaml for why this is declared here rather than
+  # left to the HBN_TRAIN_RELEASES env var.
+  train_releases: [R1, R2, R3, R4, R7, R8, R9, R10]
+model:
+  encoder_embed_dim: 512
+  encoder_depth: 22
+  encoder_heads: 8
+  encoder_head_dim: 64
+  patch_size: 200
+  patch_overlap: 20
+  freqs: 4
+  mlp_dim_ratio: 2.66
+loss:
+  mode: soft_target_clip
+  mean_center: true
+  target_kind: per_window
+  temporal_buffer_s: 2.0
+  soft_alpha: 0.5
+  soft_tau_teacher: 0.05
+  cs_weight: 1.0
+  kernel_bandwidth: null
+  vision_passthrough: false
+  proj_dim: 512
+  n_residual_blocks: 1
+  temperature: 0.07
+  drop_proj: 0.5
+optim:
+  epochs: 50
+  lr: 0.0001
+  lr_min: 1.0e-06
+  warmup_epochs: 5
+  optimizer: adam
+logging:
+  log_wandb: true
+  wandb_group: null
+  log_every: 1
+  save_every: 10
+  tqdm_silent: false
+eval:
+  auto_run: false
+  n_passes: 20
+  probe_seed: 42
+  n_bootstrap: 2000
+  feature_names:
+  - contrast_rms
+  - luminance_mean
+  - position_in_movie
+  - narrative_event_score
+  visual_processing_delay_s: 0.0
+  val_every: 1
+  val_recording_fraction: 0.1
+  val_max_windows: 2000

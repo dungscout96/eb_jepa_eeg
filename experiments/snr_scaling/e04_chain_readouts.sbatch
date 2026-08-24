@@ -53,7 +53,7 @@ if [ ! -f "${CKPT_ROOT}/${SLUG}/latest.pth.tar" ]; then
 fi
 
 PYTHONPATH=. uv run --group eeg python \
-    experiments/snr_scaling/select_and_probe_e03.py \
+    experiments/snr_scaling/src/select_and_probe_e03.py \
     --ckpt-root "$CKPT_ROOT" \
     --cells-glob "$SLUG" \
     --output "$SEL"

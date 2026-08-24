@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-_ROOT = Path(__file__).resolve().parents[1] / "experiments" / "snr_scaling"
+_ROOT = Path(__file__).resolve().parents[1] / "experiments" / "snr_scaling" / "src"
 
 
 def _load(name):

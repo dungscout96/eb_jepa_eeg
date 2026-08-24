@@ -7,7 +7,11 @@ Establishes what fraction of the achievable signal the CLIP/JEPA checkpoints in
 so results can be reported as *r*/ceiling rather than raw *r*.
 
 Forward-looking experiment design lives in [`PLAN.md`](PLAN.md); this file is
-the record of what has been measured. Commits `b4492fe`, `6dd992d`, `fdf0b3b`.
+the record of what has been measured **within ThePresent**. Cross-movie
+generalization — the same checkpoints evaluated on DespicableMe — is in
+[`RESULTS_cross_task.md`](RESULTS_cross_task.md): the features transfer at
+**58 % of DM-native** and improve with subjects (2 % → 58 % from S=10 to 1863),
+while zero-shot CLIP alignment does **not** transfer at all. Commits `b4492fe`, `6dd992d`, `fdf0b3b`.
 
 ---
 
@@ -61,24 +65,26 @@ the record of what has been measured. Commits `b4492fe`, `6dd992d`, `fdf0b3b`.
    a 3 % difference — and the δ/θ-over-α ratio replicates at 3.06 vs 2.84. The
    cohorts are 98.9 % shared, so stimulus is the only thing varying. Say
    "replicates across movies within HBN," not "replicates."
-11. **The 12-feature linear probe saturates at ~700 subjects; CLIP-space
-   retrieval does not** (§2.11, §2.12). With nested draws, 3 draws per S and
-   smoothed selection, Δr² rises steeply to 701 (exponent **+0.441**, 8 sd) then
-   flattens. **Three scalar readouts agree** — CV-val Δr² **+4.9 %**,
-   train→test val *r* **+2.5 %**, train→test **test** *r* **+1.9 %** over
-   701 → 1863 — while **e→v scene retrieval gains +26 % (top-1) / +18 %
-   (top-5)** on the same checkpoints and the same test split. The split is by
-   *readout*, not by split, so never write "the subject axis saturates" without
-   naming the metric. Caveat: R7–R10 subjects are worth **8–15 % less** than
-   R1–R4 at matched count, so part of the probe flattening may be dilution.
-12. **Anchors stay flat, and subjects beat anchors at matched budget** (§2.10).
+11. **Learning starts below 10 subjects and has no knee; the probe saturates at ~700 while
+   retrieval does not** (§2.11–§2.13). Down at the bottom, *every* cell at *every* S ≥ 10
+   clears random on all three draws, on both the probe and retrieval — onset is **gradual,
+   not a threshold**, so "how many subjects before it works" has no threshold answer on this
+   recipe. At the top the two readouts split: over 701 → 1863 the scalar readouts gain
+   **+2–5 %** (CV-val Δr² +4.9 %, train→test test *r* +1.9 %) while e→v scene retrieval gains
+   **+18–26 %**. Onset is a property of the data; saturation is a property of the *readout* —
+   never write "the subject axis saturates" without naming the metric. Caveat: R7–R10
+   subjects are worth **8–15 % less** than R1–R4 at matched count.
+12. **v→e retrieval is at chance at every subject count tested** (§2.13). 1.00× at S=10 and
+   1.00× at S=1863 — 186× more subjects moves it not at all, so the modality-gap failure is
+   **not a data-quantity problem** and will not be fixed by collecting more people.
+13. **Anchors stay flat, and subjects beat anchors at matched budget** (§2.10).
    Δr² is flat in anchors (**−0.007** over A=50→101), and subject-heavy beats
    anchor-heavy **4/4, median 1.30×** at a matched (subjects × anchors) budget —
    model-free, and stable under every protocol tried. Two measurement problems
    were found and corrected en route: the "overfitting worsens with less data"
    motivation was an artifact of `argmax`-ing a 29-window AUC (§2.10 protocol
    note), and the S-axis draws were originally not nested (§2.11).
-13. Two artifacts found and fixed that would have corrupted the headline: a flat
+14. Two artifacts found and fixed that would have corrupted the headline: a flat
    reference channel faking ISC ≈ 0.4, and CorrCA component 1 failing to
    generalise despite the largest in-sample eigenvalue — the latter now known to
    be **rank-unstable across movies** (§2.9), which is a stronger reason to avoid
@@ -338,7 +344,7 @@ Top-K retrieval from
 — by pooling more EEG into the **query** while holding the candidate pool
 byte-identical. Same centroids, same N, so chance stays `K/N` and every row is
 comparable. Implementation:
-[`aggregation_curves.py`](aggregation_curves.py).
+[`src/aggregation_curves.py`](src/aggregation_curves.py).
 
 Three regimes, in increasing order of what they assume:
 
@@ -441,12 +447,12 @@ first guesses landing on one pool entry is not visible in Top-K.
 
 Job 20654647, R5 val, 293 subjects, 101 anchors, 20 draws per K, best
 from-scratch checkpoint (soft τ=0.05 seed 2026). Ridge heads fit on the full
-train split. Artifacts: [`k_averaging_val.json`](k_averaging_val.json), code
-[`k_averaging.py`](k_averaging.py), figure
-[`k_averaging.png`](k_averaging.png) / [`.pdf`](k_averaging.pdf) via
-[`plot_k_averaging.py`](plot_k_averaging.py).
+train split. Artifacts: [`raw_results/k_averaging_val.json`](raw_results/k_averaging_val.json), code
+[`src/k_averaging.py`](src/k_averaging.py), figure
+[`figures/k_averaging.png`](figures/k_averaging.png) / [`.pdf`](figures/k_averaging.pdf) via
+[`src/plot_k_averaging.py`](src/plot_k_averaging.py).
 
-![K-averaging curves](k_averaging.png)
+![K-averaging curves](figures/k_averaging.png)
 
 *Panel (a) tests SHAPE only: the prediction is anchored at the measured R(1),
 so K=1 agrees by construction. Panel (b)'s ceiling uses the E0.1 CorrCA
@@ -537,7 +543,7 @@ across movies within HBN," not "replicates."
 **Do not pair the DM ceiling with any TP probe number.** No probe has been
 trained or evaluated on DespicableMe, so there is no CC_norm for this column.
 The first DM run printed one anyway, because `OBSERVED_PROBE_R` in
-[`measure_isc.py`](measure_isc.py) is hardcoded to R6-test/ThePresent values —
+[`src/measure_isc.py`](src/measure_isc.py) is hardcoded to R6-test/ThePresent values —
 the same split-mismatch class of error as §2.2, now in the task axis too. The
 script now refuses to emit CC_norm unless the run's `(split, task)` matches
 where those probe numbers came from, with tests covering all three mismatch
@@ -614,7 +620,7 @@ SNR-combined statistics used throughout are unaffected.
 gradient steps** — `data.epoch_size=703` fixes steps/epoch at 11 regardless of
 how many subjects survive, so data scale is never confounded with optimisation
 budget. **Every cell is evaluated on the identical full val set** (293
-recordings, 29 593 windows), verified in [`analyse_e03.py`](analyse_e03.py)
+recordings, 29 593 windows), verified in [`src/analyse_e03.py`](src/analyse_e03.py)
 rather than assumed.
 
 Metric is **Δr² above a random encoder of identical shape** (measured:
@@ -661,7 +667,7 @@ the anchor-heavy arm it beats. At a fixed data budget, spend it on subjects.
 This is the most robust claim in the section: it held under both protocols
 (median 1.34× endpoint, 1.30× early-stopped) and needs no fitted model.
 
-![E0.3 scaling surface](e03_scaling.png)
+![E0.3 scaling surface](figures/e03_scaling.png)
 
 *(a) plots Δr² **relative to each axis's own full-data value** — absolute Δr²
 would put anchors above subjects everywhere (at A=13 the model still has all 701
@@ -669,7 +675,7 @@ subjects) and a reader would take the higher line for the better axis. The claim
 is about slope, so the level is normalised away; both curves therefore reach 1.0
 by construction and only the shapes are comparable. Error bars are jul7's
 seed noise, not a within-run error. (b) is model-free. Produced by
-[`plot_e03.py`](plot_e03.py).*
+[`src/plot_e03.py`](src/plot_e03.py).*
 
 **The axes are not cleanly separable.** A multiplicative `Δr² ~ S^0.636 · A^0.349`
 anchored at the corner under-predicts every diagonal cell by 5–43 %, so
@@ -849,6 +855,65 @@ improving to 1863. The honest headline is narrower than "the subject axis
 saturates at ~700": scalar-feature readout saturates there; CLIP-space retrieval
 does not.
 
+### 2.13 Low-S: learning starts below 10 subjects, and there is no knee
+
+15 further cells at **S ∈ {10, 20, 50, 100, 200} × 3 draws**, nesting into the existing
+curve (10 ⊂ 20 ⊂ … ⊂ 1400, verified per seed), same protocol throughout: extended 1863 pool,
+`epoch_size=703` so all cells run 4400 steps, `save_every=25`.
+
+**Threshold pre-registered before looking:** a cell *learns* at S if **all three draws
+individually** beat the matched random baseline. This asks where learning is *reliable*, not
+merely possible, and cannot be carried by one lucky cohort. Only readouts with 3 draws can
+set it — the CV-val probe and retrieval. `probe_traintest` ran at 1 draw per S and is
+**corroborating only**.
+
+| S | probe Δr² | sd | retrieval scene e→v top-1 (test) | sd | × random |
+|---:|---:|---:|---:|---:|---:|
+| 10 | 0.00414 | 0.00075 | 0.0502 | 0.0054 | 3.44 |
+| 20 | 0.00441 | 0.00061 | 0.0546 | 0.0050 | 3.75 |
+| 50 | 0.00941 | 0.00040 | 0.0631 | 0.0020 | 4.33 |
+| 100 | 0.01667 | 0.00172 | 0.0737 | 0.0045 | 5.06 |
+| 200 | 0.02480 | 0.00043 | 0.0800 | 0.0073 | 5.49 |
+| 400 | 0.03434 | 0.00057 | 0.1063 | — | 7.30 |
+
+> **Every cell at every S clears the bar, including S=10 — on both instruments,
+> all three draws.** The learning threshold is *below the tested range*. Corroborated by
+> `probe_traintest` on test: *r* = 0.1078 at S=10 against a random baseline of 0.1022.
+
+**There is no knee at the bottom.** Both curves rise smoothly and monotonically from 10 to
+1400; learning onset is **gradual, not a phase transition**. So "how many subjects before it
+works" has no threshold answer on this recipe — the honest form is a rate: Δr² roughly
+doubles from S=10 to S=50 and again from 50 to 200.
+
+**Probe and retrieval agree here**, which is worth stating because they *disagree* about
+saturation (§2.12). Onset is a property of the data; saturation is a property of the readout.
+
+**The one place the low-S cells differ methodologically.** At S ≤ 200 the smoothed val
+diagnostic is **flat** — no peak to select. Trajectories (smoothed, window 25):
+
+| cell | @50 | @150 | @250 | @325 |
+|---|---:|---:|---:|---:|
+| S=10 d11 | 0.5563 | 0.5658 | 0.5454 | 0.5460 |
+| S=200 d11 | 0.6437 | 0.6850 | 0.6538 | 0.6576 |
+| **S=400 d11** | 0.6300 | 0.7094 | 0.7219 | **0.7544** |
+
+At S≥400 the curve rises monotonically and smoothed argmax lands on epoch 330 every time; at
+S≤200 it wanders inside ~0.05 and argmax lands arbitrarily (25, 98, 118, 135, 154, 166, 197,
+225, 254, 294). **This does not distort the result** — the three S=50 draws selected epochs
+30, 25 and 254 yet scored 0.0098 / 0.0090 / 0.0095, so the probe is insensitive to epoch in
+that range, exactly as a flat curve implies. But it means an early selected epoch at low S is
+*not* evidence of a cell failing to learn, and should not be read that way.
+
+**That flatness is itself informative:** at S≤20 the diagnostic does not improve over training
+at all (S=10 d11 ends *below* where it started), while at S=400 it climbs throughout. The
+model extracts what little it can from 10 subjects almost immediately and then stops
+improving.
+
+**v→e remains at chance at every S.** 1.00× at 10 subjects and 1.00× at 1863 (occasional
+2.00× on single draws is within the granularity of a 35-entry pool). Since 186× more subjects
+moves it not at all, **the v→e failure is not a data-quantity problem** and will not be fixed
+by collecting more people — the most actionable negative in this section.
+
 ## §3. Two artifacts that would have corrupted the headline
 
 ### 3.1 A flat reference channel faking ISC ≈ 0.4
@@ -963,12 +1028,12 @@ ssh delta "srun --account=bbnv-delta-gpu --partition=gpuA40x4-interactive \
 Single split directly:
 
 ```bash
-PYTHONPATH=. uv run --group eeg python experiments/snr_scaling/measure_isc.py \
+PYTHONPATH=. uv run --group eeg python experiments/snr_scaling/src/measure_isc.py \
     --split=val --task=ThePresent --n-components=5 --seed=2025 \
     --output=experiments/snr_scaling/isc_val_ThePresent.json
 ```
 
-Batch submission (`_submit_isc.py`) packs both splits into one job. Note it
+Batch submission (`submit/_submit_isc.py`) packs both splits into one job. Note it
 defaults to a **gpu** partition deliberately: `sinfo` lists Delta's `cpu`
 partition but this account holds only `bbnv-delta-gpu`, so a `cpu` submit is
 rejected.
@@ -978,7 +1043,7 @@ The CorrCA subject split is seeded; re-runs reproduce the numbers exactly.
 Analytic design calculator (no cluster needed):
 
 ```bash
-uv run --group eeg python experiments/snr_scaling/scaling_calculator.py
+uv run --group eeg python experiments/snr_scaling/src/scaling_calculator.py
 ```
 
 Aggregation curves (§2.6, §2.7). Runs locally in seconds — it consumes the
@@ -990,9 +1055,9 @@ python demo/_submit_export.py interactive
 
 # Then locally, per split:
 PYTHONPATH=. uv run --group eeg python \
-    experiments/snr_scaling/aggregation_curves.py \
+    experiments/snr_scaling/src/aggregation_curves.py \
     --npz demo/data/demo_val.npz \
-    --output experiments/snr_scaling/aggregation_val_ThePresent.json
+    --output experiments/snr_scaling/raw_results/aggregation_val_ThePresent.json
 ```
 
 Subject draws are seeded (`--seed`, default 0); the `n ≤ 16` rows are means over
@@ -1003,7 +1068,7 @@ Subject draws are seeded (`--seed`, default 0); the `n ≤ 16` rows are means ov
 ## §6. Artifacts
 
 **Results:**
-- `k_averaging_val.json` — E0.2: empirical R(K), Spearman-Brown prediction, and
+- `raw_results/k_averaging_val.json` — E0.2: empirical R(K), Spearman-Brown prediction, and
   probe *r* vs K in both embedding- and signal-space.
 - `isc_val_ThePresent.json`, `isc_test_ThePresent.json` — per-channel waveform
   and band ISC, cross-validated CorrCA, all three literature ceilings,
@@ -1011,32 +1076,32 @@ Subject draws are seeded (`--seed`, default 0); the `n ≤ 16` rows are means ov
 - `isc_val_DespicableMe.json` — §2.9, the same-cohort second-movie replication.
   Carries **no** CC_norm by design: `OBSERVED_PROBE_R` is R6-test/ThePresent, so
   the script suppresses it and records `cc_norm_skipped_because` instead.
-- `snr_scaling.png` / `.pdf` — ceiling vs K, and the (anchors × subjects)
+- `figures/snr_scaling.png` / `.pdf` — ceiling vs K, and the (anchors × subjects)
   design space.
-- `k_averaging.png` / `.pdf` — E0.2 two-panel figure (Spearman-Brown
+- `figures/k_averaging.png` / `.pdf` — E0.2 two-panel figure (Spearman-Brown
   validation; probe *r* vs K, embedding- vs signal-space).
 - `e03_probe_val_e03_s*_a*.json` (11 cells) + `e03_probe_val_random.json` — E0.3
   raw probes. `e03_surface.json` — fitted exponents, corner slopes, iso-budget.
-- `e03_scaling.png` / `.pdf` — E0.3 two-panel figure (normalised slope contrast;
+- `figures/e03_scaling.png` / `.pdf` — E0.3 two-panel figure (normalised slope contrast;
   iso-budget dumbbell).
-- `aggregation_val_ThePresent.json`, `aggregation_test_ThePresent.json` — §2.6
+- `raw_results/aggregation_val_ThePresent.json`, `raw_results/aggregation_test_ThePresent.json` — §2.6
   temporal / oracle-segment / n-subject curves at shot and scene level, plus the
   §2.7 modal-answer shares. Produced from the shared-space export, so the
   checkpoint provenance travels inside the file.
 
 **Code:**
-- [`measure_isc.py`](measure_isc.py) — the E0.1 measurement.
-- [`k_averaging.py`](k_averaging.py) + [`_submit_k_averaging.py`](_submit_k_averaging.py)
-  + [`plot_k_averaging.py`](plot_k_averaging.py) — E0.2.
-- [`_submit_e03.py`](_submit_e03.py) + [`analyse_e03.py`](analyse_e03.py)
-  + [`plot_e03.py`](plot_e03.py) — E0.3. Subsampling knobs live in
+- [`src/measure_isc.py`](src/measure_isc.py) — the E0.1 measurement.
+- [`src/k_averaging.py`](src/k_averaging.py) + [`submit/_submit_k_averaging.py`](submit/_submit_k_averaging.py)
+  + [`src/plot_k_averaging.py`](src/plot_k_averaging.py) — E0.2.
+- [`submit/_submit_e03.py`](submit/_submit_e03.py) + [`src/analyse_e03.py`](src/analyse_e03.py)
+  + [`src/plot_e03.py`](src/plot_e03.py) — E0.3. Subsampling knobs live in
   `JEPAMovieDataset`; see [`tests/unit/test_scaling_subsample.py`](../../tests/unit/test_scaling_subsample.py) (15).
-- [`aggregation_curves.py`](aggregation_curves.py) — §2.6 / §2.7 curves.
+- [`src/aggregation_curves.py`](src/aggregation_curves.py) — §2.6 / §2.7 curves.
   Depends on `demo/export_retrieval_npz.py` for *data* only; it imports nothing
   from `demo/`.
-- [`noise_ceiling.py`](noise_ceiling.py) — Sahani-Linden, split-half, Schoppe.
-- [`scaling_calculator.py`](scaling_calculator.py) — analytic design calculator.
-- [`_submit_isc.py`](_submit_isc.py) — Delta submission.
+- [`src/noise_ceiling.py`](src/noise_ceiling.py) — Sahani-Linden, split-half, Schoppe.
+- [`src/scaling_calculator.py`](src/scaling_calculator.py) — analytic design calculator.
+- [`submit/_submit_isc.py`](submit/_submit_isc.py) — Delta submission.
 - [`tests/test_isc_estimator.py`](../../tests/test_isc_estimator.py) (15),
   [`tests/test_noise_ceiling.py`](../../tests/test_noise_ceiling.py) (40),
   [`tests/test_k_averaging.py`](../../tests/test_k_averaging.py) (20) —

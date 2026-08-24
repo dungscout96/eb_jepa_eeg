@@ -13,7 +13,7 @@ import pytest
 
 _SPEC = importlib.util.spec_from_file_location(
     "measure_isc",
-    Path(__file__).resolve().parents[1] / "experiments" / "snr_scaling" / "measure_isc.py",
+    Path(__file__).resolve().parents[1] / "experiments" / "snr_scaling" / "src" / "measure_isc.py",
 )
 measure_isc = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(measure_isc)

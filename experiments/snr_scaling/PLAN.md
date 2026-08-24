@@ -18,8 +18,8 @@ The headline quantity is a **subject-scaling exponent** `dr / d log S` compared
 *across objectives*, not an absolute *r*. See "Related work — the delta" below
 for why the exponent, not the curve, has to be the contribution.
 
-Calculator: [`scaling_calculator.py`](scaling_calculator.py) →
-[`snr_scaling.png`](snr_scaling.png).
+Calculator: [`src/scaling_calculator.py`](src/scaling_calculator.py) →
+[`figures/snr_scaling.png`](figures/snr_scaling.png).
 
 ---
 
@@ -290,6 +290,229 @@ Together the two close the anchor-count objection from both sides —
 *in-distribution anchors have saturated* **and** *out-of-distribution anchors do
 not help* — which is a sharper claim than either alone, and converts jul2's
 negative-transfer dead end into a result this paper needs.
+
+### E0.4 — Depth as a second axis: does capacity change the subject-scaling curve? (in progress, 2026-08-13)
+Every experiment above holds the encoder fixed at `encoder_depth=12` (e03's
+architecture) and varies only `S`. kkokate independently trained the same S-grid
+— `S ∈ {10, 20, 50, 100, 200, 400, 701, 1000, 1400, 1863}`, 3 draws each plus
+the full-pool cell — at `encoder_depth=22`
+(`/work/hdd/bbnv/kkokate/eb_jepa/e04_reve_scaling`, experiment tag
+`e04_reve_scaling`), everything else held bit-identical to e03 except
+`patch_size`/`patch_overlap` (200/20 vs 400/0, required by the deeper stack).
+28 cells total (2 failed-and-abandoned reruns and 3 smoke-test dirs excluded;
+one alternate-seed full-pool replicate, `e04_s1863_a101_seed7`, also excluded
+from the main sweep pending a decision on whether to fold it in as a
+robustness check).
+
+**Question:** is the subject-scaling exponent from E1.1's framing a property of
+the *objective*, or does it also shift with model capacity? A depth-22 encoder
+could convert subjects into SNR more efficiently (more capacity to extract the
+shared response) or less efficiently (more capacity to overfit
+subject-specific fingerprint at low `S`) — the S-sweep at both depths is the
+only way to tell them apart. `figures/depth-12-vs-22-subject-scaling.pdf` is
+the first cut at this comparison.
+
+**Protocol difference from e03's own published tables, deliberate:** e03's
+`RESULTS.md` 2.12/2.13 numbers all evaluate a single fixed epoch (325) across
+every cell. For the depth-22 arm we instead run per-cell smoothed epoch
+selection — the same `select_epoch` logic as `select_and_probe_e03.py`
+(rolling-mean-smoothed `val/clip_scene_auc`, argmax, snap to nearest saved
+checkpoint) — via `src/select_e04.py`, writing
+`experiments/snr_scaling/e04_selection.json`. Selected epochs range 75-375
+across cells, so a single shared epoch would have been wrong for several of
+them. If the depth-12 arm is re-compared against these numbers later, the
+comparison should ideally use the same per-cell-selection protocol on both
+arms rather than epoch 325 vs a selected epoch — currently that is *not* yet
+the case, and is a caveat on any depth-12-vs-22 delta until e03 is
+re-selected the same way.
+
+Infra added this pass, all depth-22-specific (mirrors the e03 scripts one for
+one, see each file's docstring for the exact deltas):
+- `src/select_e04.py` — per-cell epoch selection (run on Delta; needs the
+  wandb datastore files on local disk).
+- `config/config_probe_DM_e04.yaml` — DespicableMe cross-task eval config at
+  the depth-22 architecture (repo-relative, not copied into kkokate's
+  checkpoint root — this pipeline only *reads* from
+  `/work/hdd/bbnv/kkokate/...`, never writes there).
+- `submit/_submit_traintest_e04.py`, `submit/_submit_retrieval_e04.py` — job
+  submitters, `within` (ThePresent) and `cross` (DespicableMe) presets, both
+  val+test for probe, val+test (within) / test-only (cross) for retrieval,
+  matching e03's split convention.
+- `src/aggregate_e04.py` — collects the raw JSONs into the S-curve tables.
+
+Deliverable: `RESULTS_model_scaling.md` (in progress as of this entry) — full
+12-feature Pearson-r probe and time/shot/scene top-{1,5,10} e2v/v2e retrieval,
+val and test, plus DespicableMe cross-task transfer, across all 28 depth-22
+cells. Output files land in `raw_results/` as `e04_tt_*`, `e04_retr_*`,
+`xtask_tt_DM*_e04_*`, `xtask_retr_DMtest_e04_*`.
+
+### E0.5 - Does subject scaling facilitate cross-task transfer?
+
+Question: would model initialized with naturalistically trained data in one task perform better when finetuned in another task compared to training on that new task from scratch?
+
+### E0.6 — Add the val release to the training pool: is the saturation real? ✅ DONE 2026-08-17
+
+**Answer: no — the S=1863 drop was ONE BADLY-OPTIMISED RUN, and E0.4's headline
+is retracted.** The decisive test is E0.4's own never-evaluated alternate-seed
+replicate of the full-pool cell: that cell has exactly one possible cohort, so
+it varies only `meta.seed`, and it moves 0.2531 -> **0.3092** (final training
+loss 3.32 -> 2.62). E0.6's three-draw estimate from the larger pool, 0.3076 ±
+0.0008, agrees from a different direction. Three draws at S=1863 from the 2156 pool give within-task probe
+mean *r* = **0.3097 ± 0.0005**, above E0.4's S=1400 peak (0.2927 ± 0.0085) and
+**+0.052 above its single-draw S=1863 (0.2579)**. The decisive contrast is the
+same step in S measured two ways: **+0.0130 with three draws vs −0.0347 with
+one**, negative on all five readouts in the single-draw case and positive on
+three of five (never below −0.003) with three. The pools are near-exchangeable
+at matched S=1400 (offset +0.0041, under half of E0.4's own between-draw sd),
+so the comparison holds. Full detail in
+[`RESULTS_add_val_set.md`](RESULTS_add_val_set.md).
+
+**What it does not show:** S=2156 is again the whole pool, hence one draw, so it
+inherits exactly the weakness this experiment was built to expose. Its +0.0052
+over S=1863 is inside single-draw range and retrieval is flat across that step.
+Read it as *"no evidence of decline at 2156"*, not *"still rising"*. Settling
+that needs a pool above 2156 (R11, or DespicableMe-native cohorts) so S=2156
+becomes drawable in triplicate.
+
+**Three process lessons worth more than the result:**
+
+0. **On the cluster, `data.train_releases` in a config was silently ignored.**
+   Delta's checkout is an old commit with files rsynced over it, and its
+   `hbn.py` predated `_cfg_train_releases` — both call sites were bare
+   `_resolve_releases(split)`. Nothing caught it for months because every config
+   in use declares `train_releases` AND sets `HBN_TRAIN_RELEASES` to the same
+   value, so the env var did the work and the config field was decorative. The
+   R5 head-fit config was the first case where the two DISAGREED, and it failed
+   on the first artifact (n_train_recordings=1863 instead of 293). Fixed by
+   syncing `hbn.py`. **The lesson generalises: two mechanisms that always agree
+   hide each other's failure — the bug is only visible where they diverge.**
+   Same shape as lesson 1 below, and as the S=1863 headline.
+
+1. **A run's `config.yaml` is not the run.** The first sweep was invalid because
+   E0.4 warm-starts from `reve_base_eet_init.pth.tar` and uses seed 2026 via
+   *CLI overrides that no config file records*. A byte-for-byte config diff came
+   back clean while the arms differed in the most important way. Symptom: a
+   uniform ~37 % deficit at matched S with a **completely flat** S curve — an
+   under-trained encoder makes the axis under study stop mattering, which reads
+   as a dramatic finding rather than a bug. Always check
+   `wandb/latest-run/files/wandb-metadata.json` → `args`.
+2. **This recipe collapses at initialisation on ~10 % of cells, per seed.**
+   `ln(batch_size) = ln(64) = 4.1589` is InfoNCE's chance loss, and a failed
+   cell sits at 4.02–4.16 **flat for all 400 epochs** — it never leaves the
+   collapsed solution, while a healthy cell at the same S escapes within ~40
+   epochs. Measured 3/31 here and 3/28 in E0.4, so budget for it. Detect with
+   `_submit_e05_addval.py screen`, which reads *training loss* (no eval needed,
+   so a dead cell costs no probe GPU) *relative to same-S siblings* (loss scales
+   with cohort size: 0.70 at S=10 vs 2.8 at S=1863, so a fixed cutoff misses
+   low-S failures). Reseed to 7 — E0.4's own convention — and **cap retries at
+   three**, then report n=2 with the failure disclosed. Past a small fixed
+   budget, reseeding until a cell trains stops being a fix for a known
+   instability and becomes selection on the outcome. Full write-up in
+   [`RESULTS_add_val_set.md`](RESULTS_add_val_set.md) § "Failure mode".
+
+3. **Screening catches collapse; only REPLICATION catches partial failure.**
+   The instability is a spectrum. Full collapse is easy to detect (loss pinned
+   at ln 64 = 4.16, 1.67–3.09× the S-group median). But the retracted S=1863
+   cell was a *partial* failure — loss 3.32, i.e. **1.22×**, below the 1.30×
+   screen threshold and overlapping the worst healthy cell at 1.19×. The two
+   distributions genuinely overlap, so no threshold separates them. A clean
+   `screen` means "nothing collapsed", not "everything trained well". **Treat
+   every n=1 cell as provisional**, however clean it looks — that is the real
+   reason the S=1863 headline survived as long as it did, and the reason E0.6's
+   fix had to be replicates rather than a better detector.
+
+4. **The head-fit overlap confound was real, was tested, and is closed.** Every
+   cell fits its ridge head on the identical 1863 recordings, so the head's
+   *data* is not a variable — but the OVERLAP between an encoder's pretraining
+   cohort and that head-fit pool runs 0.5 % at S=10 to 100 % at S=2156, which
+   holding the pool fixed does not control.
+
+   **Measured 2026-08-18, at no training cost.** E0.4 pretrains on
+   [R1–R4, R7–R10], so R5 is disjoint from every one of its cohorts: fitting the
+   head on R5 alone makes overlap exactly 0 at every S. Re-evaluating the same
+   28 checkpoints at the same epoch on the same test split, changing only the
+   head-fit pool, leaves the curve's SHAPE intact — **r = 0.9989** between the
+   two normalised curves, max deviation 0.053, total S=10→1863 gain **5.90× vs
+   5.72×**. Absolute r drops (293 head-fit recordings vs 1863) but the scaling
+   is unaffected. Residuals are slightly positive at low-to-mid S, i.e. the
+   zero-overlap curve is marginally *steeper* — the direction predicted, and
+   negligible.
+
+   **So the ~300-recording holdout sweep previously required here is NOT
+   needed**, saving ~37 GPU-h of retraining. Infrastructure:
+   `config/config_probe_TP_headfit_R5.yaml` and the `within-holdout` preset.
+   Caveat: this tests E0.4, whose pool excludes R5 by accident of history. The
+   E0.6 arms contain R5, so the same trick is unavailable there and the carry-over
+   argument is by mechanism (same architecture, recipe, axis), not measurement.
+
+5. **Depth comparisons in this experiment are confounded by initialisation.**
+   e03 (depth-12) trains from scratch; E0.4/E0.6 (depth-22) warm-start from
+   `reve_base_eet_init.pth.tar`. At matched from-scratch init and S=1400 the two
+   depths are within 0.007 (0.1918 vs 0.1853, the deeper one lower) while the
+   warm start is worth **+0.111** — ~15x the depth difference. So
+   `RESULTS_model_scaling.md` § 9's deltas are predominantly the initialisation;
+   that section now carries a warning block. A clean depth ablation would hold
+   init *and* patchification (400/0 vs 200/20) fixed and does not exist yet.
+
+### Original design notes (E0.6, written 2026-08-14 before the runs)
+
+E0.4's depth-22 arm rises monotonically with `S` through 1400 and then **drops**
+at the full-pool S=1863 cell, across every independent readout. The drop cannot
+be believed as stated for one structural reason: **S=1863 *is* the pool**
+(R1–R4 + R7–R10), so it has exactly one possible draw, while every other point
+on the curve is a mean over three. A single-draw cell is exactly where smoothed
+epoch selection protects least — and §2.10 documents a prior case where
+selection variance manufactured an apparent scaling artifact in this experiment.
+
+**The manipulation is one config line.** Folding R5 — previously the val split,
+293 ThePresent recordings — into `data.train_releases` takes the pool from 1863
+to 2156. That buys two things a bigger pool alone would not:
+
+1. **S=1863 becomes a drawable cell with three replicates**, because 1863 <
+   2156 makes `max_subjects=1863` a real subsample rather than a no-op cap. If
+   three independent draws land at the S=1400 level, the drop was draw or
+   selection variance; if they reproduce it, it is a population-level effect.
+   This is the direct test, and it is the reason to do this rather than simply
+   preprocess another release.
+2. **A new max-S point at S=2156**, the first observation past the previous
+   ceiling of the data.
+
+**Cells (7):** S=1400 × 3 draws (pool-stitch calibration), S=1863 × 3 draws
+(the money cells), S=2156 × 1 draw (whole pool). Everything else held to E0.4:
+depth-22, `meta.seed=2025`, 400 epochs, `epoch_size=703` so every cell runs the
+same 4400 steps, `max_anchors=101`, `save_every=25`.
+
+**Three protocol consequences, all of them costs of putting R5 in train:**
+
+- **Test split only.** A val number for these cells would be measured on data
+  their encoder saw. R6 is untouched by both arms and is the only split on
+  which they are comparable.
+- **Fixed epoch 375, not per-cell selection.** `val/clip_scene_auc` is now
+  in-sample, so E0.4's smoothed-argmax selection is unavailable. 375 is where
+  4 of 4 high-S E0.4 cells' own selection landed (S=1400 d11/d33 and S=1863 at
+  375; S=1400 d22 at 350), so the arms are matched to within one 25-epoch
+  interval. `save_every=25` keeps the grid on disk for later re-evaluation.
+- **The probe head-fit pool is deliberately NOT changed** — both eval configs
+  still declare `[R1..R4, R7..R10]`, so every cell in both arms fits its ridge
+  head on the identical 1863/1832 recordings and only the *encoder's* cohort
+  varies.
+
+**The result that gates the rest:** the S=1400 calibration. Draws nest within a
+pool, but adding R5 changes the list being permuted, so the two arms' S=1400
+cohorts are not the same subjects. §2.11 already measured this kind of pool
+effect once (R7–R10 subjects worth 8–15 % less than R1–R4 at matched count), so
+a non-zero offset here is not hypothetical — and if there is one, every
+S=1863/2156 comparison must be read through it rather than at face value.
+
+Infra: `config/clip_pretrain_e05_addval.yaml` (frozen training config — E0.4's,
+plus R5), `submit/_submit_e05_addval.py` (training + `sync`/`verify`),
+`--arm addval` on `submit/_submit_traintest_e04.py` and
+`submit/_submit_retrieval_e04.py` (both restrict to test and pin epoch 375),
+`src/write_results_add_val_set.py`.
+
+Deliverable: `RESULTS_add_val_set.md`. Checkpoints land in
+`/work/hdd/bbnv/dtyoung/eb_jepa/e05_addval`; raw JSONs in `raw_results/` under
+`e05_*` slugs, which cannot collide with the E0.4 arm's `e04_*` ones.
 
 ---
 

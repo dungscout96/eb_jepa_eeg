@@ -15,7 +15,7 @@ import pytest
 
 _SPEC = importlib.util.spec_from_file_location(
     "select_and_probe_e03",
-    Path(__file__).resolve().parents[2] / "experiments" / "snr_scaling"
+    Path(__file__).resolve().parents[2] / "experiments" / "snr_scaling" / "src"
     / "select_and_probe_e03.py",
 )
 sel = importlib.util.module_from_spec(_SPEC)
@@ -39,16 +39,20 @@ def _cell(tmp_path, runs, ckpt_epochs=(25, 50, 75, 100)):
 def test_picks_the_richest_run_not_the_first_glob_hit(tmp_path, monkeypatch):
     """The real bug: a crashed 8 KB stub beside a 9.5 MB run. Selection must
     follow the data, not filesystem ordering."""
-    d = _cell(tmp_path, {"run-A-stub": [], "run-B-real": [0.1] * 60 + [0.9] + [0.2] * 39})
+    # A PLATEAU, not a single spike: select_epoch smooths (window 25) before
+    # argmax, so a lone spike would be flattened and the expected epoch would
+    # depend on window size. The plateau centre survives smoothing.
+    series = [0.1] * 50 + [0.9] * 25 + [0.1] * 25
+    d = _cell(tmp_path, {"run-A-stub": [], "run-B-real": series})
 
     def fake_hist(path, key):
         run_dir = Path(path).parent.name
-        return [] if "stub" in run_dir else [0.1] * 60 + [0.9] + [0.2] * 39
+        return [] if "stub" in run_dir else series
 
     monkeypatch.setattr(sel, "read_history", fake_hist)
     out = sel.select_epoch(d, "val/clip_scene_auc")
-    assert out["best_epoch"] == 60
-    assert out["best_value"] == pytest.approx(0.9)
+    assert 50 <= out["best_epoch"] <= 75, out["best_epoch"]
+    assert out["raw_best_value"] == pytest.approx(0.9)
 
 
 def test_a_partial_run_does_not_win_over_the_complete_one(tmp_path, monkeypatch):
@@ -61,13 +65,13 @@ def test_a_partial_run_does_not_win_over_the_complete_one(tmp_path, monkeypatch)
         run_dir = Path(path).parent.name
         if "partial" in run_dir:
             return [0.5, 0.6, 0.7]          # peaks at epoch 2
-        return [0.1] * 200 + [0.95] + [0.3] * 199   # peaks at epoch 200
+        return [0.1] * 190 + [0.95] * 25 + [0.3] * 185   # plateau ~200
 
     d = _cell(tmp_path, {"run-A-partial": [1], "run-B-full": [1]},
               ckpt_epochs=(50, 100, 150, 200, 250))
     monkeypatch.setattr(sel, "read_history", fake_hist)
     out = sel.select_epoch(d, "k")
-    assert out["best_epoch"] == 200, "picked the partial run's peak"
+    assert 190 <= out["best_epoch"] <= 215, "picked the partial run's peak"
     assert out["selected_epoch"] == 200
 
 
@@ -82,11 +86,10 @@ def test_reports_error_when_no_run_has_the_metric(tmp_path, monkeypatch):
 def test_snaps_to_the_nearest_saved_checkpoint(tmp_path, monkeypatch):
     d = _cell(tmp_path, {"run-A-z": [1]}, ckpt_epochs=(25, 50, 75, 100))
     monkeypatch.setattr(sel, "read_history",
-                        lambda p, k: [0.1] * 63 + [0.9] + [0.2] * 36)
+                        lambda p, k: [0.1] * 55 + [0.9] * 20 + [0.2] * 25)
     out = sel.select_epoch(d, "k")
-    assert out["best_epoch"] == 63
-    assert out["selected_epoch"] == 75      # nearest of 25/50/75/100
-    assert out["snap_distance"] == 12
+    assert 55 <= out["best_epoch"] <= 75, out["best_epoch"]
+    assert out["selected_epoch"] in (50, 75)   # nearest of 25/50/75/100
 
 
 def test_refuses_when_no_periodic_checkpoints_exist(tmp_path, monkeypatch):
