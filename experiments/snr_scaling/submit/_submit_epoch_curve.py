@@ -415,13 +415,16 @@ def verify(arm: str) -> int:
         print(f"  UNEXPECTED cell(s) not in the {arm} cell list: {extra}")
         bad += len(extra)
 
+    # Checkpoint count is a property of the CELL's budget, not the arm's: an arm
+    # whose ladder splits budgets at some S legitimately holds both 15- and
+    # 31-checkpoint cells. Checking each cell against the budget its own slug
+    # declares catches a truncated job without flagging a deliberate mix.
+    for cell, curve in cells.items():
+        want = 31 if "_ep800" in cell else 15
+        if len(curve) != want:
+            print(f"  SHORT GRID {cell}: {len(curve)} checkpoints, expected {want}")
+            bad += 1
     n_ck = {len(v) for v in cells.values()}
-    if len(n_ck) > 1:
-        # Ragged means some cell was cut short: every cell of an arm saves on
-        # the same schedule, so a mixed count is a truncated job, not a
-        # difference between arms (15 for the 400-epoch arms, 31 for ep800).
-        print(f"  RAGGED coverage: cells have {sorted(n_ck)} checkpoints")
-        bad += 1
     for cell, curve in cells.items():
         for epoch, rec in curve.items():
             vals = [rec["probe_mean_r"], rec["e2v1_time"], rec["e2v1_scene"]]
