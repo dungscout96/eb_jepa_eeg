@@ -71,6 +71,7 @@ RANDOM_BASELINE_CELL = "e04_s1863_a101_nd"
 # throughout. A 2156 there means a probe read a pretraining config.
 E05_CKPT_ROOT = "/work/hdd/bbnv/dtyoung/eb_jepa/e05_addval"
 E05FS_CKPT_ROOT = "/work/hdd/bbnv/dtyoung/eb_jepa/e05_fromscratch"
+E03AV_CKPT_ROOT = "/work/hdd/bbnv/dtyoung/eb_jepa/e03_scaling"
 E05_DEFAULT_EPOCH = 375
 E05_S_AXIS = [10, 20, 50, 100, 200, 400, 701, 1000, 1400, 1863]
 
@@ -89,6 +90,19 @@ ARMS = {
     "e04": dict(root=None, cells=None, splits=None),
     "addval": dict(root=E05_CKPT_ROOT, cells=E05_CELLS, splits=["test"]),
     "fromscratch": dict(root=E05FS_CKPT_ROOT, cells=E05FS_CELLS, splits=["test"]),
+    # Depth 12 on the 2156 pool. Same pool and seeds as the depth-22 arms, so
+    # its draws are PAIRED with theirs -- d11 of each trains on the identical
+    # cohort -- which is what makes a depth contrast between them a paired
+    # comparison rather than two independent samples. Cells come from the
+    # selection file, since the ladder's two budget halves carry different
+    # slugs. TEST ONLY: this arm trained on R5.
+    # Its own configs, and this is not cosmetic: evaluating a depth-12
+    # checkpoint against the depth-22 config builds the wrong encoder, loads
+    # almost no weights under strict=False, and probes a random model while
+    # reporting normal-looking numbers.
+    "d12av": dict(root=E03AV_CKPT_ROOT, cells=None, splits=["test"],
+                  configs={"within": "experiments/snr_scaling/config/config_probe_TP_e03.yaml",
+                           "cross": "experiments/snr_scaling/config/config_probe_DM_e03.yaml"}),
 }
 ARM_SPLITS = {a: v["splits"] for a, v in ARMS.items()}
 
@@ -160,6 +174,9 @@ def build_steps(preset: str, epochs: dict[str, int], epoch_suffix: str = "",
     internally as part of its skip guard.
     """
     p = PRESETS[preset]
+    # An arm may override the preset's config -- a different architecture
+    # needs its own, and the mismatch is silent rather than fatal.
+    cfg = (ARMS[arm].get("configs") or {}).get(preset) or p["config"]
     allowed = ARM_SPLITS[arm]
     splits = p["splits"] if allowed is None else [
         s for s in p["splits"] if s in allowed]
@@ -244,7 +261,11 @@ def main() -> None:
     print(f"arm={args.arm}  preset={args.preset}  splits={splits}  "
           f"cells={len(epochs)}  "
           f"-> {len(steps)} retrieval run(s), {epoch_desc}, in {len(groups)} job(s)")
-    print(f"  config: {p['config'] or 'per-cell config_probe.yaml (ThePresent)'}\n")
+    # Report the config the RUNS will use, not the preset default -- an arm may
+    # override it, and printing the default would hide exactly the mismatch that
+    # matters (an architecture config that does not describe the checkpoints).
+    _cfg = (ARMS[args.arm].get("configs") or {}).get(args.preset) or p["config"]
+    print(f"  config: {_cfg or 'per-cell config_probe.yaml (ThePresent)'}\n")
 
     for i, group in enumerate(groups):
         job = Job(
