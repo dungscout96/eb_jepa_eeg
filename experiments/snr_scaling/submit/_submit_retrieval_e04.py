@@ -176,7 +176,7 @@ def build_steps(preset: str, epochs: dict[str, int], epoch_suffix: str = "",
     p = PRESETS[preset]
     # An arm may override the preset's config -- a different architecture
     # needs its own, and the mismatch is silent rather than fatal.
-    cfg = (ARMS[arm].get("configs") or {}).get(preset) or p["config"]
+    arm_cfg = (ARMS[arm].get("configs") or {}).get(preset)
     allowed = ARM_SPLITS[arm]
     splits = p["splits"] if allowed is None else [
         s for s in p["splits"] if s in allowed]
@@ -184,7 +184,11 @@ def build_steps(preset: str, epochs: dict[str, int], epoch_suffix: str = "",
     for split in splits:
         tag = f"{p['prefix']}{split}" if p["prefix"].endswith("DM") else f"{p['prefix']}_{split}"
         for slug, epoch in epochs.items():
-            cfg = p["config"] or f"{ckpt_root}/{slug}/config_probe.yaml"
+            # Precedence: the arm's own config, then the preset's, then the
+            # cell's snapshot. The inner loop used to reassign cfg and so
+            # discarded the arm override -- which put depth-12 checkpoints
+            # against the depth-22 config on the cross preset.
+            cfg = arm_cfg or p["config"] or f"{ckpt_root}/{slug}/config_probe.yaml"
             out = f"{OUT_DIR}/{tag}_{slug}{epoch_suffix}.json"
             steps.append(
                 f"([ -f {out} ] && echo 'SKIP {slug}') || "
@@ -204,7 +208,7 @@ def build_steps(preset: str, epochs: dict[str, int], epoch_suffix: str = "",
             cfg = f"{CKPT_ROOT}/{RANDOM_BASELINE_CELL}/config_probe.yaml"
         else:
             out = f"{OUT_DIR}/{tag}_random_e04.json"
-            cfg = p["config"]
+            cfg = arm_cfg or p["config"]
         steps.append(
             f"([ -f {out} ] && echo 'SKIP random') || "
             "PYTHONPATH=. uv run --group eeg python "
