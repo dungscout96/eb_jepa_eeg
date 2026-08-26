@@ -27,6 +27,7 @@ ana = importlib.util.module_from_spec(_S); _S.loader.exec_module(ana)
 
 WARM_SEL = RAW / "addval_selection_probe.json"
 SCRATCH_SEL = RAW / "fromscratch_optimum_selection.json"
+D12_SEL = RAW / "d12av_selection_probe.json"
 S_AXIS = [10, 20, 50, 100, 200, 400, 701, 1000, 1400, 1863]
 HI = [701, 1000, 1400, 1863]
 READOUTS = [
@@ -175,6 +176,81 @@ def main() -> None:
     w("~0.003 between-draw spread. That is the argument for leaving the official")
     w("curve at a fixed epoch: the change is only load-bearing for the *baseline*.")
     w("")
+    # ---- depth, paired ------------------------------------------------------
+    if D12_SEL.exists():
+        d12 = json.loads(D12_SEL.read_text())
+        s22 = json.loads(SCRATCH_SEL.read_text())
+        draw = lambda c: int(c.rsplit("_d", 1)[1])
+        w("## 5. Depth, at matched pool and matched budget")
+        w("")
+        w("The depth-12 arm was retrained on the 2156 pool so it draws cohorts from the")
+        w("same pool with the same seeds as the depth-22 from-scratch arm. Draw 11 of each")
+        w("therefore trains on the **identical subjects**, which makes this a paired")
+        w("comparison rather than two independent samples. Both arms use 800 epochs above")
+        w("S=701 and each cell sits at its own optimum.")
+        w("")
+        w("| readout | depth 12 | depth 22 | paired diff | pairs favouring d12 | paired sd |")
+        w("|---|---|---|---|---|---|")
+        rows5 = []
+        for lbl, prefix, kind in READOUTS:
+            hi = []
+            for c in d12:
+                S, dr = int(c.split("_")[1][1:]), draw(c)
+                m = [x for x in s22 if int(x.split("_")[1][1:]) == S and draw(x) == dr]
+                if S < 1000 or not m:
+                    continue
+                a = read(RAW / f"{prefix}_{c}_epprb.json", kind)
+                b = read(RAW / f"{prefix}_{m[0]}_epprb.json", kind)
+                if a is None or b is None:
+                    continue
+                hi.append((a, b))
+            if not hi:
+                w(f"| {lbl} | — | — | (incomplete) | | |")
+                continue
+            ds = [a - b for a, b in hi]
+            rows5.append((lbl, st.mean(ds), sum(1 for x in ds if x > 0), len(ds), st.stdev(ds)))
+            w(f"| {lbl} | {st.mean(a for a,_ in hi):.4f} | {st.mean(b for _,b in hi):.4f} | "
+              f"{st.mean(ds):+.4f} | {sum(1 for x in ds if x>0)}/{len(ds)} | {st.stdev(ds):.4f} |")
+        w("")
+        w("Averaged over S>=1000, where the arms separate. **The shallower model is better")
+        w("on the training task; the deeper one transfers better.** The sign flips between")
+        w("within-task and cross-task, which is why a single \"which depth is better\"")
+        w("answer does not exist.")
+        w("")
+        w("This replaces a null. The appendix reports that the two from-scratch arms *do")
+        w("not separate anywhere*; that comparison put a pool-1863 depth-12 arm against")
+        w("pool-2156 depth-22 arms, at a fixed epoch suiting neither, with both arms")
+        w("truncated above S=701. None of those apply here.")
+        w("")
+        w("**Quote these with their strengths, which differ a lot:**")
+        w("")
+        for lbl, m, wn, n, sd in rows5:
+            # Consistency is about the MAJORITY direction, whichever it is. A
+            # readout where 1 of 9 pairs favours d12 is 8/9 consistent, not
+            # 1/9 -- reporting the raw count reads as weak evidence when it is
+            # strong evidence the other way.
+            agree = max(wn, n - wn)
+            who = "depth-12" if wn > n - wn else "depth-22"
+            if agree <= (n + 1) // 2 + 1:
+                note = (f"no reliable direction — {agree}/{n} is near a coin flip "
+                        f"and the values sit at the chance floor; carries nothing")
+            elif abs(m) > 3 * sd:
+                note = f"firmest — {abs(m)/sd:.0f}x its paired sd, {agree}/{n} favouring {who}"
+            elif agree == n:
+                note = f"solid — {abs(m)/sd:.0f}x its paired sd, unanimous for {who}"
+            else:
+                note = (f"weakest — its paired sd ({sd:.4f}) exceeds the effect, so it "
+                        f"rests on {agree}/{n} of pairs favouring {who}; report the "
+                        f"direction, not the size")
+            w(f"- **{lbl}** ({m:+.4f}): {note}.")
+        w("")
+        w("**Residual truncation does not explain it.** Both arms rest at optima of")
+        w("500--775, both pin at the last checkpoint on 3 of 12 high-S cells, and both")
+        w("gain +0.0002 over their final 75 epochs — flat pinning, where the argmax lands")
+        w("at the end because the curve is level and noise picks the bin. Over 600->775")
+        w("every cell of both arms gains a uniform +0.0038 to +0.0067. The residual is")
+        w("symmetric and an order of magnitude below the depth differences above.")
+        w("")
     w("## Decisions this leaves open")
     w("")
     w("1. **Does the official curve move to per-cell epochs?** Recommendation: no.")

@@ -97,6 +97,45 @@ gain** — it buys a little probe and costs a little retrieval, both inside the
 ~0.003 between-draw spread. That is the argument for leaving the official
 curve at a fixed epoch: the change is only load-bearing for the *baseline*.
 
+## 5. Depth, at matched pool and matched budget
+
+The depth-12 arm was retrained on the 2156 pool so it draws cohorts from the
+same pool with the same seeds as the depth-22 from-scratch arm. Draw 11 of each
+therefore trains on the **identical subjects**, which makes this a paired
+comparison rather than two independent samples. Both arms use 800 epochs above
+S=701 and each cell sits at its own optimum.
+
+| readout | depth 12 | depth 22 | paired diff | pairs favouring d12 | paired sd |
+|---|---|---|---|---|---|
+| within probe | 0.2159 | 0.2078 | +0.0081 | 9/9 | 0.0041 |
+| within retrieval | 0.0631 | 0.0478 | +0.0153 | 9/9 | 0.0036 |
+| cross probe | 0.1762 | 0.1811 | -0.0049 | 1/9 | 0.0058 |
+| cross retrieval | 0.0145 | 0.0138 | +0.0006 | 5/9 | 0.0014 |
+
+Averaged over S>=1000, where the arms separate. **The shallower model is better
+on the training task; the deeper one transfers better.** The sign flips between
+within-task and cross-task, which is why a single "which depth is better"
+answer does not exist.
+
+This replaces a null. The appendix reports that the two from-scratch arms *do
+not separate anywhere*; that comparison put a pool-1863 depth-12 arm against
+pool-2156 depth-22 arms, at a fixed epoch suiting neither, with both arms
+truncated above S=701. None of those apply here.
+
+**Quote these with their strengths, which differ a lot:**
+
+- **within probe** (+0.0081): solid — 2x its paired sd, unanimous for depth-12.
+- **within retrieval** (+0.0153): firmest — 4x its paired sd, 9/9 favouring depth-12.
+- **cross probe** (-0.0049): weakest — its paired sd (0.0058) exceeds the effect, so it rests on 8/9 of pairs favouring depth-22; report the direction, not the size.
+- **cross retrieval** (+0.0006): no reliable direction — 5/9 is near a coin flip and the values sit at the chance floor; carries nothing.
+
+**Residual truncation does not explain it.** Both arms rest at optima of
+500--775, both pin at the last checkpoint on 3 of 12 high-S cells, and both
+gain +0.0002 over their final 75 epochs — flat pinning, where the argmax lands
+at the end because the curve is level and noise picks the bin. Over 600->775
+every cell of both arms gains a uniform +0.0038 to +0.0067. The residual is
+symmetric and an order of magnitude below the depth differences above.
+
 ## Decisions this leaves open
 
 1. **Does the official curve move to per-cell epochs?** Recommendation: no.
