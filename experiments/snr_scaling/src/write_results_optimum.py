@@ -189,6 +189,8 @@ def main() -> None:
         w("comparison rather than two independent samples. Both arms use 800 epochs above")
         w("S=701 and each cell sits at its own optimum.")
         w("")
+        w("![depth](figures/depth_arms.png)")
+        w("")
         w("| readout | depth 12 | depth 22 | paired diff | pairs favouring d12 | paired sd |")
         w("|---|---|---|---|---|---|")
         rows5 = []
@@ -243,6 +245,13 @@ def main() -> None:
                         f"rests on {agree}/{n} of pairs favouring {who}; report the "
                         f"direction, not the size")
             w(f"- **{lbl}** ({m:+.4f}): {note}.")
+        w("")
+        w("The means above hide what actually carries the claim, which is that the")
+        w("differences are *paired*: every pair below is two arms trained on the same")
+        w("subjects. A readout where all nine point the same way is believable at")
+        w("+0.008 in a way that a difference of two independent means would not be.")
+        w("")
+        w("![depth pairs](figures/depth_paired.png)")
         w("")
         w("**Residual truncation does not explain it.** Both arms rest at optima of")
         w("500--775, both pin at the last checkpoint on 3 of 12 high-S cells, and both")

@@ -105,6 +105,8 @@ therefore trains on the **identical subjects**, which makes this a paired
 comparison rather than two independent samples. Both arms use 800 epochs above
 S=701 and each cell sits at its own optimum.
 
+![depth](figures/depth_arms.png)
+
 | readout | depth 12 | depth 22 | paired diff | pairs favouring d12 | paired sd |
 |---|---|---|---|---|---|
 | within probe | 0.2159 | 0.2078 | +0.0081 | 9/9 | 0.0041 |
@@ -128,6 +130,13 @@ truncated above S=701. None of those apply here.
 - **within retrieval** (+0.0153): firmest — 4x its paired sd, 9/9 favouring depth-12.
 - **cross probe** (-0.0049): weakest — its paired sd (0.0058) exceeds the effect, so it rests on 8/9 of pairs favouring depth-22; report the direction, not the size.
 - **cross retrieval** (+0.0006): no reliable direction — 5/9 is near a coin flip and the values sit at the chance floor; carries nothing.
+
+The means above hide what actually carries the claim, which is that the
+differences are *paired*: every pair below is two arms trained on the same
+subjects. A readout where all nine point the same way is believable at
++0.008 in a way that a difference of two independent means would not be.
+
+![depth pairs](figures/depth_paired.png)
 
 **Residual truncation does not explain it.** Both arms rest at optima of
 500--775, both pin at the last checkpoint on 3 of 12 high-S cells, and both
