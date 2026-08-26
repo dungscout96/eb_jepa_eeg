@@ -1,0 +1,133 @@
+{
+  "random_baseline": false,
+  "eval_split": "test",
+  "n_train_recordings": 1832,
+  "n_test_recordings": 108,
+  "n_train_windows": 155720,
+  "n_test_windows": 9180,
+  "encoder_dim": 512,
+  "features": {
+    "luminance_mean": {
+      "r2": 0.024723708629608154,
+      "pearson_r": 0.16343535482883453,
+      "alpha": 3162.2776601683795,
+      "n_train": 155720,
+      "n_test": 9180,
+      "pearson_r_boot_median": 0.16313688457012177,
+      "pearson_r_boot_ci_lo": 0.13681783266365527,
+      "pearson_r_boot_ci_hi": 0.18923008255660534
+    },
+    "contrast_rms": {
+      "r2": 0.01822417974472046,
+      "pearson_r": 0.1423986256122589,
+      "alpha": 3162.2776601683795,
+      "n_train": 155720,
+      "n_test": 9180,
+      "pearson_r_boot_median": 0.1422186642885208,
+      "pearson_r_boot_ci_lo": 0.12087494749575853,
+      "pearson_r_boot_ci_hi": 0.16361725591123105
+    },
+    "edge_density": {
+      "r2": 0.031199395656585693,
+      "pearson_r": 0.18437309563159943,
+      "alpha": 3162.2776601683795,
+      "n_train": 155720,
+      "n_test": 9180,
+      "pearson_r_boot_median": 0.18467044830322266,
+      "pearson_r_boot_ci_lo": 0.15910886488854886,
+      "pearson_r_boot_ci_hi": 0.20775663182139395
+    },
+    "saturation_mean": {
+      "r2": 0.02593696117401123,
+      "pearson_r": 0.16405197978019714,
+      "alpha": 3162.2776601683795,
+      "n_train": 155720,
+      "n_test": 9180,
+      "pearson_r_boot_median": 0.16389022767543793,
+      "pearson_r_boot_ci_lo": 0.1409331664443016,
+      "pearson_r_boot_ci_hi": 0.186338410153985
+    },
+    "entropy": {
+      "r2": 0.02258157730102539,
+      "pearson_r": 0.1569620668888092,
+      "alpha": 3162.2776601683795,
+      "n_train": 155720,
+      "n_test": 9180,
+      "pearson_r_boot_median": 0.15717973560094833,
+      "pearson_r_boot_ci_lo": 0.13317510671913624,
+      "pearson_r_boot_ci_hi": 0.1801039613783359
+    },
+    "motion_energy": {
+      "r2": 0.029752612113952637,
+      "pearson_r": 0.1762750744819641,
+      "alpha": 3162.2776601683795,
+      "n_train": 155720,
+      "n_test": 9180,
+      "pearson_r_boot_median": 0.17653422057628632,
+      "pearson_r_boot_ci_lo": 0.14751292280852796,
+      "pearson_r_boot_ci_hi": 0.20441411919891833
+    },
+    "n_faces": {
+      "r2": 0.023498892784118652,
+      "pearson_r": 0.15333904325962067,
+      "alpha": 10000.0,
+      "n_train": 155720,
+      "n_test": 9180,
+      "pearson_r_boot_median": 0.15314817428588867,
+      "pearson_r_boot_ci_lo": 0.13164309747517108,
+      "pearson_r_boot_ci_hi": 0.17350550815463064
+    },
+    "face_area_frac": {
+      "r2": 0.02830749750137329,
+      "pearson_r": 0.16843120753765106,
+      "alpha": 10000.0,
+      "n_train": 155720,
+      "n_test": 9180,
+      "pearson_r_boot_median": 0.16841226071119308,
+      "pearson_r_boot_ci_lo": 0.1473543405532837,
+      "pearson_r_boot_ci_hi": 0.19165778458118435
+    },
+    "depth_mean": {
+      "r2": 0.030166327953338623,
+      "pearson_r": 0.1745298206806183,
+      "alpha": 3162.2776601683795,
+      "n_train": 155720,
+      "n_test": 9180,
+      "pearson_r_boot_median": 0.17502989619970322,
+      "pearson_r_boot_ci_lo": 0.15063032805919646,
+      "pearson_r_boot_ci_hi": 0.19907471723854542
+    },
+    "scene_natural_score": {
+      "r2": 0.03587782382965088,
+      "pearson_r": 0.19169126451015472,
+      "alpha": 3162.2776601683795,
+      "n_train": 155720,
+      "n_test": 9180,
+      "pearson_r_boot_median": 0.19176989048719406,
+      "pearson_r_boot_ci_lo": 0.16870661005377768,
+      "pearson_r_boot_ci_hi": 0.2139364995062351
+    },
+    "position_in_movie": {
+      "r2": 0.028898417949676514,
+      "pearson_r": 0.18027162551879883,
+      "alpha": 3162.2776601683795,
+      "n_train": 155720,
+      "n_test": 9180,
+      "pearson_r_boot_median": 0.180767722427845,
+      "pearson_r_boot_ci_lo": 0.14515397623181342,
+      "pearson_r_boot_ci_hi": 0.21803053356707086
+    },
+    "narrative_event_score": {
+      "r2": 0.018333137035369873,
+      "pearson_r": 0.13941402733325958,
+      "alpha": 3162.2776601683795,
+      "n_train": 155720,
+      "n_test": 9180,
+      "pearson_r_boot_median": 0.13869116455316544,
+      "pearson_r_boot_ci_lo": 0.11071466654539108,
+      "pearson_r_boot_ci_hi": 0.1686800099909305
+    }
+  },
+  "seed": 42,
+  "bootstrap_iters": 2000
+}
