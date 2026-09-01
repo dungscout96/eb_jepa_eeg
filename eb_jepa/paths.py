@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 PREPROCESSED_DIRS: list[Path] = [
     Path("/mnt/v1/dtyoung/data/eb_jepa_eeg/hbn_preprocessed"),                  # jamming
     Path("/expanse/projects/nemar/dtyoung/.cache/eb_jepa_eeg/hbn_preprocessed"),  # Expanse
-    Path("/projects/bbnv/kkokate/hbn_preprocessed"),                              # Delta
+    Path("/work/hdd/bbnv/kkokate/hbn_preprocessed"),                              # Delta
 ]
 
 

@@ -189,7 +189,7 @@ Compute is not the constraint. The analysis-code debt in §3 is.
 | item | status |
 |---|---|
 | REVE-base weights | cached, `/u/kkokate/.cache/huggingface/hub/models--eeg-telecom-paris--reve-base` |
-| R1–R6 | `/projects/bbnv/kkokate/hbn_preprocessed` — 703 train / 296 val / 109 test |
+| R1–R6 | `/work/hdd/bbnv/kkokate/hbn_preprocessed` — 703 train / 296 val / 109 test |
 | R7–R10 | readable at `/work/hdd/bbnv/dtyoung/hbn_preprocessed` — no re-preprocessing |
 | scratch | `/work/hdd/bbnv/kkokate`, 47 TB free |
 | allocation | 27,653 GPU-h of 30,000 on `bbnv-delta-gpu`; queue empty |

@@ -39,7 +39,7 @@ T_BUCKET_S = 0.5
 
 ENV = {
     "WANDB_MODE": "disabled",
-    "HBN_PREPROCESS_DIR": "/projects/bbnv/kkokate/hbn_preprocessed",
+    "HBN_PREPROCESS_DIR": "/work/hdd/bbnv/kkokate/hbn_preprocessed",
     "MNE_DATA": "/u/dtyoung/mne_data",
 }
 

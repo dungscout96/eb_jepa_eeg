@@ -132,7 +132,7 @@ def build_job(key: str) -> Job:
         branch="",
         env_vars={
             "WANDB_PROJECT": "eb_jepa",
-            "HBN_PREPROCESS_DIR": "/projects/bbnv/kkokate/hbn_preprocessed",
+            "HBN_PREPROCESS_DIR": "/work/hdd/bbnv/kkokate/hbn_preprocessed",
         },
     )
 

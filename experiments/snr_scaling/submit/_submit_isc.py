@@ -33,7 +33,7 @@ RESULTS_DIR = "experiments/snr_scaling/raw_results"   # jobs write measured JSON
 
 COMMON_ENV = {
     "WANDB_MODE": "disabled",
-    "HBN_PREPROCESS_DIR": "/projects/bbnv/kkokate/hbn_preprocessed",
+    "HBN_PREPROCESS_DIR": "/work/hdd/bbnv/kkokate/hbn_preprocessed",
     "MNE_DATA": "/u/dtyoung/mne_data",
 }
 
