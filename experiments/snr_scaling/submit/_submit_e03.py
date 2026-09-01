@@ -177,7 +177,7 @@ def build_job(subjects: int, anchors: int, partition: str,
             # bit-comparable.
             "HBN_PREPROCESS_DIR": (
                 "/work/hdd/bbnv/dtyoung/hbn_preprocessed" if extended
-                else "/projects/bbnv/kkokate/hbn_preprocessed"),
+                else "/work/hdd/bbnv/kkokate/hbn_preprocessed"),
             **({"HBN_TRAIN_RELEASES": "R1,R2,R3,R4,R7,R8,R9,R10"}
                if extended else {}),
         },

@@ -66,7 +66,7 @@ For top 2-3 Phase 1 configs, sweep:
 
 Add to `_PREPROCESSED_DIRS`:
 ```python
-Path("/projects/bbnv/kkokate/hbn_preprocessed"),  # Delta
+Path("/work/hdd/bbnv/kkokate/hbn_preprocessed"),  # Delta
 ```
 
 ### Step 2: Create `experiments/eeg_jepa/sweeps/phase1.py`

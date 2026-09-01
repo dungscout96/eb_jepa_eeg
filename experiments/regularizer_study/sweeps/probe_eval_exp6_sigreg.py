@@ -69,7 +69,7 @@ def build_jobs():
         mem_gb=64,
         gpus=1,
         env_vars={
-            "HBN_PREPROCESS_DIR": "/projects/bbnv/kkokate/hbn_preprocessed",
+            "HBN_PREPROCESS_DIR": "/work/hdd/bbnv/kkokate/hbn_preprocessed",
             "WANDB_PROJECT": "eb_jepa",
         },
     )
@@ -85,7 +85,7 @@ def build_jobs():
         mem_gb=64,
         gpus=1,
         env_vars={
-            "HBN_PREPROCESS_DIR": "/projects/bbnv/kkokate/hbn_preprocessed",
+            "HBN_PREPROCESS_DIR": "/work/hdd/bbnv/kkokate/hbn_preprocessed",
         },
     )
     return [("probe_eval_exp6sr", probe_job), ("vardec_exp6sr", vardec_job)]

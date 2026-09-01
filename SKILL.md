@@ -93,7 +93,7 @@ probe_acc=0.641, cosim=0.853, pred_loss=0.206
 
 ## Delta Environment
 - **Repo**: `/u/dtyoung/eb_jepa_eeg` (main branch, up to date)
-- **Data**: `/projects/bbnv/kkokate/hbn_preprocessed` (env var: `HBN_PREPROCESS_DIR`)
+- **Data**: `/work/hdd/bbnv/kkokate/hbn_preprocessed` (env var: `HBN_PREPROCESS_DIR`)
 - **Partition**: `gpuA40x4` (A40 48GB, 16 cores/SU)
 - **uv**: `/u/dtyoung/.local/bin/uv`
 - **W&B**: credentials in `/u/dtyoung/.netrc`

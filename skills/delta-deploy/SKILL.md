@@ -12,7 +12,7 @@ Concrete patterns for this repo on NCSA Delta. Read the sections in order; each 
 
 - **SSH alias**: `delta` → `dt-loginNN.delta.ncsa.illinois.edu`, user `kkokate`.
 - **Repo path on Delta**: `/projects/bbnv/kkokate/eb_jepa_eeg`.
-- **Preprocessed data**: `/projects/bbnv/kkokate/hbn_preprocessed` (`_PREPROCESSED_DIRS` in `main.py` auto-detects this).
+- **Preprocessed data**: `/work/hdd/bbnv/kkokate/hbn_preprocessed` (`_PREPROCESSED_DIRS` in `main.py` auto-detects this).
 - **Checkpoint output root**: `/projects/bbnv/kkokate/eb_jepa_eeg/checkpoints/` (per-sweep subdirs go under `/projects/bbnv/kkokate/eb_jepa_eeg/checkpoints/<sweep_name>/`).
 - **Conda env name**: `eb_jepa` (Python 3.12).
 - **Account / partition**: `bbnv-delta-gpu` / `gpuA40x4`. Default node type: A40 40GB.
@@ -38,7 +38,7 @@ This is the lesson from commit `2eaf5c0` ("drop per-job git checkout in sweep sb
 
 ### 2.3 Confirm preprocessed data + CorrCA filter presence
 ```bash
-ssh delta "ls -la /projects/bbnv/kkokate/hbn_preprocessed | head && ls /projects/bbnv/kkokate/eb_jepa_eeg/corrca_filters.npz"
+ssh delta "ls -la /work/hdd/bbnv/kkokate/hbn_preprocessed | head && ls /projects/bbnv/kkokate/eb_jepa_eeg/corrca_filters.npz"
 ```
 If the CorrCA file is missing (or you want a different `n_components`), compute it first via `scripts/compute_corrca.sbatch` and wait for it to finish before submitting downstream jobs.
 
@@ -62,7 +62,7 @@ Every new sbatch in this repo should follow this shape. Copy `scripts/train_exp6
 
 set -euo pipefail
 
-export HBN_PREPROCESS_DIR="${HBN_PREPROCESS_DIR:-/projects/bbnv/kkokate/hbn_preprocessed}"
+export HBN_PREPROCESS_DIR="${HBN_PREPROCESS_DIR:-/work/hdd/bbnv/kkokate/hbn_preprocessed}"
 export UV_LINK_MODE=copy  # avoids hardlink errors across projects/bbnv
 
 : "${SEED:?need SEED}"             # require every varying knob as an env var

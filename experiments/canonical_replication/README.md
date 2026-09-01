@@ -49,5 +49,5 @@ significantly above chance).
 
 - Library: `eb_jepa.training.jepa_pretrain`, `eb_jepa.evaluation.probe_eval_canonical`,
   `eb_jepa.evaluation.bootstrap_canonical`, `scripts/aggregate_and_print.py`
-- Delta: HBN preprocessed data at `/projects/bbnv/kkokate/hbn_preprocessed/`,
+- Delta: HBN preprocessed data at `/work/hdd/bbnv/kkokate/hbn_preprocessed/`,
   CorrCA filters at `corrca_filters.npz` (in repo root on Delta).

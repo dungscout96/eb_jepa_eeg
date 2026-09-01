@@ -30,7 +30,7 @@ EXP = "/work/hdd/bbnv/dtyoung/eb_jepa/soft_target_clip/jul7-tp_soft_target_clip_
 
 COMMON_ENV = {
     "WANDB_MODE": "disabled",
-    "HBN_PREPROCESS_DIR": "/projects/bbnv/kkokate/hbn_preprocessed",
+    "HBN_PREPROCESS_DIR": "/work/hdd/bbnv/kkokate/hbn_preprocessed",
     "MNE_DATA": "/u/dtyoung/mne_data",
 }
 

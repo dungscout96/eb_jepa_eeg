@@ -26,7 +26,7 @@ EXP_DIR = f"{REPO}/checkpoints/autoresearch/jul1/iter0_baseline"
 
 ENV = {
     "WANDB_PROJECT": "eb_jepa",
-    "HBN_PREPROCESS_DIR": "/projects/bbnv/kkokate/hbn_preprocessed",
+    "HBN_PREPROCESS_DIR": "/work/hdd/bbnv/kkokate/hbn_preprocessed",
 }
 
 # git pre-sync is done on the login node (neurolab skill guidance: avoid the

@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-export HBN_PREPROCESS_DIR="${HBN_PREPROCESS_DIR:-/projects/bbnv/kkokate/hbn_preprocessed}"
+export HBN_PREPROCESS_DIR="${HBN_PREPROCESS_DIR:-/work/hdd/bbnv/kkokate/hbn_preprocessed}"
 export UV_LINK_MODE=copy
 
 echo "========================================"

@@ -60,7 +60,7 @@ def build_job():
         mem_gb=64,
         gpus=1,
         env_vars={
-            "HBN_PREPROCESS_DIR": "/projects/bbnv/kkokate/hbn_preprocessed",
+            "HBN_PREPROCESS_DIR": "/work/hdd/bbnv/kkokate/hbn_preprocessed",
         },
     )
 

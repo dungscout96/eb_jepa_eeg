@@ -67,7 +67,7 @@ def build_job():
         gpus=1,
         env_vars={
             # wandb auto-reads ~/.netrc on Delta; no need to pipe the key.
-            "HBN_PREPROCESS_DIR": "/projects/bbnv/kkokate/hbn_preprocessed",
+            "HBN_PREPROCESS_DIR": "/work/hdd/bbnv/kkokate/hbn_preprocessed",
         },
     )
 
