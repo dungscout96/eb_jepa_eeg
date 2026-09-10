@@ -34,13 +34,17 @@
 #     dropout             0.1           upstream default, pretraining AND
 #                                       fine-tuning; kept for both arms
 #
-# input_scale is the one field that is a choice. CBraMod trains on microvolts
-# divided by 100; this repo feeds per-channel z-scores. HBN scalp EEG at 200 Hz
-# has a per-channel std of roughly 10-20 uV, so the checkpoint saw inputs with
-# std ~0.1-0.2 where ours have std 1. The spectral branch of the patch encoder
-# is linear in amplitude and the time branch is GroupNorm-ed, so a mismatch
-# shifts their balance rather than breaking anything. 0.2 puts the input in
-# the checkpoint's regime; it applies to BOTH arms so the random-init twin
+# input_scale is the one field that is a choice, and it is MEASURED, not
+# guessed. CBraMod trains on microvolts divided by 100; this repo feeds
+# per-channel z-scores (norm_mode per_recording), so the checkpoint saw inputs
+# with std = (channel std in uV) / 100 where ours have std 1. On 24 randomly
+# drawn R1 ThePresent recordings from the preprocessed root (2026-09-09,
+# exact-zero reference channel excluded) the per-recording median channel std
+# is 16.6 uV, IQR 14.7-20.9, min 11.5, max 75.4 -- a factor of 0.166 [0.147,
+# 0.209]. 0.17 puts a z-scored window at the checkpoint's own amplitude. The
+# spectral branch of the patch encoder is linear in amplitude while the time
+# branch is GroupNorm-ed, so a mismatch shifts their balance rather than
+# breaking anything. The value applies to BOTH arms, so the random-init twin
 # differs from the warm start in initialisation only.
 #
 # Consequences at 129 channels, n_windows=1, n_times=400: P = 2 patches per
@@ -94,7 +98,7 @@ model:
   patch_overlap: 0
   mlp_dim: 800
   dropout: 0.1
-  input_scale: 0.2
+  input_scale: 0.17
 
 loss:
   mode: scene_clip

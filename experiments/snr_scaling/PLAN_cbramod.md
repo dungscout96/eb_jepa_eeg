@@ -96,10 +96,10 @@ Scripts: `submit_e12_cbramod_sweep.sh`, `submit_e12_readouts.sh`,
 
 ## Caveats known before the first job
 
-- `input_scale=0.2` is an estimate from typical scalp-EEG amplitude, not a
-  measurement on HBN. Check the per-channel µV std in the preprocessed FIFs
-  before launch; both arms use the same value, so it cannot bias the level
-  ratio, only the warm arm's headroom.
+- `input_scale=0.17` is measured, not assumed: 24 random R1 ThePresent
+  recordings give a per-recording median channel std of 16.6 µV (IQR
+  14.7–20.9), i.e. a z-score→µV/100 factor of 0.166. Both arms use the same
+  value, so it cannot bias the level ratio, only the warm arm's headroom.
 - Fixed epoch 325 for both arms: RESULTS_epoch_curve.md shows from-scratch
   cells peak later at high S. The 25-epoch grid is saved; a complement-selected
   re-read is a follow-up, not part of the preliminary claim.
