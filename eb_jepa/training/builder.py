@@ -16,7 +16,10 @@ from eb_jepa.anti_collapse import (
     SIGRegAntiCollapse,
     VICRegAntiCollapse,
 )
+from torch import nn
+
 from eb_jepa.architectures import EEGEncoderTokens, MaskedPredictor, Projector
+from eb_jepa.cbramod import CBraModEncoderTokens
 from eb_jepa.jepa import CrossSubjectJEPA, MaskedJEPA
 from eb_jepa.mjepa import MJEPA
 from eb_jepa.losses import SIGRegLoss, VCLoss
@@ -76,8 +79,38 @@ def build_anti_collapse(cfg, encoder) -> AntiCollapse:
 
 
 def build_encoder(cfg, *, n_chans: int, n_times: int, chs_info,
-                  n_windows: int) -> EEGEncoderTokens:
-    """Build the EEG token encoder shared by JEPA and CLIP pretraining paths."""
+                  n_windows: int) -> nn.Module:
+    """Build the EEG token encoder shared by JEPA and CLIP pretraining paths.
+
+    ``cfg.model.encoder_arch`` selects the backbone. ``reve`` (the default, and
+    what every config written before the field existed gets) is
+    :class:`EEGEncoderTokens`; ``cbramod`` is the HBN-free warm start in
+    :mod:`eb_jepa.cbramod`. Both expose the same token interface, so this is
+    the ONLY place the choice is made -- the trainers and all three readouts
+    build through here, which is what keeps a warm-started cell, its
+    random-init twin and its shape-matched null on one code path.
+    """
+    arch = str(cfg.model.get("encoder_arch", "reve")).lower()
+    if arch == "cbramod":
+        if cfg.model.get("init_depth_scaled", False):
+            raise ValueError("init_depth_scaled is a REVE-encoder knob; "
+                             "CBraMod uses its own upstream init.")
+        return CBraModEncoderTokens(
+            n_chans=n_chans,
+            n_times=n_times,
+            n_windows=n_windows,
+            d_model=cfg.model.encoder_embed_dim,
+            depth=cfg.model.encoder_depth,
+            heads=cfg.model.encoder_heads,
+            dim_feedforward=cfg.model.get("mlp_dim", 800),
+            patch_size=cfg.model.get("patch_size", 200),
+            dropout=cfg.model.get("dropout", 0.1),
+            input_scale=cfg.model.get("input_scale", 1.0),
+        )
+    if arch != "reve":
+        raise ValueError(
+            f"Unknown model.encoder_arch={arch!r}. Expected 'reve' or 'cbramod'."
+        )
     return EEGEncoderTokens(
         n_chans=n_chans,
         n_times=n_times,

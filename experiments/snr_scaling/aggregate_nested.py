@@ -70,8 +70,12 @@ READOUT_LABELS = {
 RETR_LEVEL = "scene"
 RETR_TOPKS = ("1", "5", "10")
 
+# The study token is everything before the first "_s<digits>": "e03", "e04",
+# and the arm-carrying prefixes that came later ("e12cb" / "e12cbr" for the
+# CBraMod warm / random arms). It is opaque here -- the arm is chosen by the
+# caller's --prefix and --cells-glob, never inferred from this token.
 SLUG_RE = re.compile(
-    r"^(?P<study>e0\d)_s(?P<s>\d+)_a(?P<a>\d+)"
+    r"^(?P<study>e\d[^_]*)_s(?P<s>\d+)_a(?P<a>\d+)"
     r"(?P<tag>(?:_[A-Za-z][A-Za-z0-9]*)*?)(?:_d(?P<draw>\d+))?$"
 )
 

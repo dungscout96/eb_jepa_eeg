@@ -1,0 +1,147 @@
+# FROZEN CONFIG — experiments/snr_scaling, E1.2 (CBraMod arms)
+#
+# A copy of experiments/snr_scaling/clip_pretrain_reve.yaml (the E0.4 frozen
+# shape, itself a snapshot of config/clip_pretrain.yaml @ eb22b48) with the
+# encoder swapped for CBraMod. Scripts in this folder read THIS file; the
+# shared template is never consulted, so E1.2 keeps reproducing whatever
+# happens to config/clip_pretrain.yaml later.
+#
+# Do not "update" this file. Per-cell knobs (max_subjects, subsample_seed,
+# max_anchors, epoch_size, loss.mode/soft_*) are patched into a COPY inside the
+# job by train_e04_cell.sbatch, exactly as for the REVE arms.
+#
+# WHY THIS ARM EXISTS. reve-base was pretrained on HBN R1-R9, which contains
+# the R6 test release, so the paper's warm-started arm cannot be called
+# "unseen subjects" (see the memory note reve-pretraining-includes-hbn-r6 and
+# PLAN_cbramod.md). CBraMod (Wang et al., ICLR 2025) was pretrained on TUEG
+# only -- 19-channel 10-20 clinical EEG, 200 Hz, 1 s patches, 30 s samples --
+# and has never seen HBN. If its warm start reproduces E0.4/E0.5's finding
+# (init sets the LEVEL; subjects keep buying signal), the finding is not an
+# artifact of subject exposure.
+#
+# The model block is CBraMod's released geometry, and every field in it is
+# forced by the checkpoint, not chosen:
+#
+#     encoder_arch        cbramod       selects eb_jepa.cbramod.CBraModEncoderTokens
+#     encoder_embed_dim   200           d_model; ALSO fixed by the patch encoder
+#                                       (25 filters x 8 steps = 200)
+#     encoder_depth       12            criss-cross layers in the checkpoint
+#     encoder_heads       8             4 spatial + 4 temporal heads of 25 dims
+#     patch_size          200           1 s at 200 Hz; the time conv and the
+#                                       101-bin rfft both assume it
+#     patch_overlap       0             CBraMod tiles the window; no stride knob
+#     mlp_dim             800           feed-forward width in the checkpoint
+#     dropout             0.1           upstream default, pretraining AND
+#                                       fine-tuning; kept for both arms
+#
+# input_scale is the one field that is a choice. CBraMod trains on microvolts
+# divided by 100; this repo feeds per-channel z-scores. HBN scalp EEG at 200 Hz
+# has a per-channel std of roughly 10-20 uV, so the checkpoint saw inputs with
+# std ~0.1-0.2 where ours have std 1. The spectral branch of the patch encoder
+# is linear in amplitude and the time branch is GroupNorm-ed, so a mismatch
+# shifts their balance rather than breaking anything. 0.2 puts the input in
+# the checkpoint's regime; it applies to BOTH arms so the random-init twin
+# differs from the warm start in initialisation only.
+#
+# Consequences at 129 channels, n_windows=1, n_times=400: P = 2 patches per
+# channel, 258 tokens/sample (same count as E0.4's 200/20 geometry), 4.88M
+# parameters against E0.4's 69.2M and E0.3's 37.9M. That is the intended
+# contrast: a 14x smaller, HBN-free encoder on the identical recipe and axis.
+#
+# loss.proj_dim follows the recipe rule that the EEG projector does not expand:
+# 200 to match encoder_embed_dim (jul1 iter 12 set 512 for the same reason).
+#
+# Everything else -- loss recipe, lr, batch size, n_windows=1 -- is E0.3/E0.4's
+# unchanged, so the rows compare. lr=1e-4 is kept rather than CBraMod's own
+# fine-tuning default (also 1e-4 in finetune_main.py, so no tension there).
+
+# EEG CLIP Training Configuration
+# Train an EEG encoder via symmetric InfoNCE against V-JEPA-2 frame embeddings.
+# No masking, no predictor, no anti-collapse — the CLIP objective is the only loss.
+
+meta:
+  seed: 2025
+  device: auto  # auto, cuda, or cpu
+  # Path to a checkpoint with `encoder.*` state-dict keys. When set, only
+  # encoder weights are copied; optimizer / LR / step start fresh.
+  # The sweep passes /work/hdd/bbnv/kkokate/eb_jepa/cbramod_eet_init.pth.tar
+  # (produced by prepare_cbramod_checkpoint.py) on the CLI for the warm arm
+  # and omits it for the random arm.
+  encoder_init_from: null
+
+data:
+  batch_size: 64
+  num_workers: 4
+  task: [ThePresent, DespicableMe]
+  n_windows: 1
+  window_size_seconds: 2
+  temporal_stride: 1
+  preprocessed: true
+  preprocessed_dir: null
+  norm_mode: per_recording
+  add_envelope: false
+  corrca_filters: null
+  annotation_duration_tolerance_s: 1.0
+  max_recording_overshoot_s: 60.0
+  channel_dropout_p: 0.0
+
+model:
+  encoder_arch: cbramod
+  encoder_embed_dim: 200
+  encoder_depth: 12
+  encoder_heads: 8
+  patch_size: 200
+  patch_overlap: 0
+  mlp_dim: 800
+  dropout: 0.1
+  input_scale: 0.2
+
+loss:
+  mode: scene_clip
+  # Recipe knobs (used when mode in {scene_clip, soft_target_clip, cs_aligner}):
+  mean_center: true            # subtract V-JEPA-2 global mean at dataset init
+  target_kind: per_window      # per_window wins downstream on the val probe
+  temporal_buffer_s: 2.0       # mask cross-scene pairs with |Δt|<2s from denom
+  # Soft-target knobs (patched to alpha=0.5 / tau=0.05 by the sbatch):
+  soft_alpha: 0.5
+  soft_tau_teacher: 0.1
+  # CS-Aligner knobs (unused; mode is patched to soft_target_clip):
+  cs_weight: 1.0
+  kernel_bandwidth: null
+
+  vision_passthrough: false
+  proj_dim: 200        # matched to encoder_embed_dim so the EEG head doesn't expand
+  n_residual_blocks: 1
+  temperature: 0.07    # initial logit-scale value (learnable; clamped exp ≤ 100)
+  drop_proj: 0.5       # dropout inside the EEG-side residual block
+
+optim:
+  epochs: 50           # overridden to 400 on the CLI by the sbatch (4400 steps)
+  lr: 1.0e-4
+  lr_min: 1.0e-6
+  warmup_epochs: 5
+  optimizer: adam
+
+logging:
+  log_wandb: true
+  wandb_group:
+  log_every: 1
+  save_every: 10       # overridden to 25 on the CLI by the sbatch
+  tqdm_silent: false
+
+eval:
+  auto_run: false
+  n_passes: 20
+  probe_seed: 42
+  n_bootstrap: 2000
+  feature_names:
+    - contrast_rms
+    - luminance_mean
+    - position_in_movie
+    - narrative_event_score
+  visual_processing_delay_s: 0.0
+
+  # In-loop recipe diagnostics: val/{vision,clip}_{shot,scene}_auc etc.
+  val_every: 1                  # 0 disables
+  val_recording_fraction: 0.1
+  val_max_windows: 2000
