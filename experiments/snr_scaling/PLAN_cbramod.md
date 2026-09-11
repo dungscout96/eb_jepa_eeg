@@ -1,7 +1,7 @@
 # E1.2 — An HBN-free warm start: CBraMod on the subject-scaling axis
 
-Status: **infrastructure done, sweep pending** (drafted 2026-09-09, branch
-`cbramod-experiments`).
+Status: **sweep running; LR probe added 2026-09-11** (drafted 2026-09-09,
+branch `cbramod-experiments`). See "Interim observation" at the end.
 
 ## Why
 
@@ -106,3 +106,40 @@ Scripts: `submit_e12_cbramod_sweep.sh`, `submit_e12_readouts.sh`,
 - Δr² here is against the CBraMod-shape null. It must not be plotted on the
   same axis as E0.4's numbers without saying so; `aggregate_nested.py` will
   refuse a null with the wrong prefix, which is the intended friction.
+
+## Interim observation (2026-09-11) — lr 1e-4 under-trains CBraMod; LR probe added
+
+The first eight warm cells finished (S=50, 200 ×3; S=701 d11/d22; 39–59 min
+each). The smoke cell confirmed the pipeline (209 tensors loaded strictly,
+`encoder_arch: cbramod`, `input_scale: 0.17` in the on-disk config). But the
+final training losses sit far above the REVE arms' at the same S and the same
+4400 steps, against InfoNCE chance ln 64 = 4.159:
+
+| S (draw 11) | CBraMod warm | REVE warm (E0.4) | REVE random (E0.5) |
+|---:|---:|---:|---:|
+| 50 | 2.25 | — | — |
+| 200 | 3.88 | 0.80 | 1.12 |
+| 701 | 3.95 | 1.71 | 3.26 |
+
+The curves are not flat (S=50 falls 4.19 → 2.25; S=701 leaves chance only
+after epoch ~300), and the in-loop val `clip_scene_auc` is 0.745 at S=200
+against REVE-random's 0.743, so this is **slow optimisation, not collapse**:
+a 4.9M-parameter, 200-d encoder does not fit the batch-level contrastive
+task at lr 1e-4 in 4400 steps. Two cells (S=200 d33 at 4.11, S=701 d22 at
+4.08) trip the 3 %-of-ln 64 screen, but their siblings sit within 0.2 of them,
+so that is the same slow fit, not the seed-collapse mode E0.5/E0.6 met.
+
+Two confounds worth naming: the CBraMod layers carry dropout 0.1 during
+training (REVE's carry none), which inflates the *reported* train loss but
+not the val metrics; and the comparison model is 14× larger.
+
+**Action.** A learning-rate probe on one cell per arm — S=701, draw 11 — at
+lr ∈ {3e-4, 1e-3}, slugs `e12cb*_s701_a101_nd_lr{3e4,1e3}_d11`, excluded from
+the main aggregation glob by the `_lr*` tag. CBraMod's own pretraining used
+5e-4. The lr is chosen on **R5 val** (train loss, in-loop AUC, then
+`probe_val`), never on test, and the same value is then applied to both arms.
+The lr 1e-4 sweep continues to completion as the matched-recipe baseline; if
+the probe moves the answer, the axis is rerun at the chosen lr under a new
+suffix and the 1e-4 curve is reported alongside as the "recipe held fixed"
+condition. Precedent: E0.8 (`submit_e08_d44_lr_probe.sh`) and E1.1's
+`_lr2e4` / `_lr5e5` cells.
