@@ -69,9 +69,9 @@ Everything else is `train_e04_cell.sbatch`'s protocol: soft_target_clip
 `epoch_size=703` (4400 steps in every cell), `meta.seed=2026`, `save_every=25`.
 Frozen config: [`clip_pretrain_cbramod.yaml`](clip_pretrain_cbramod.yaml) —
 CBraMod's released geometry (d=200, 12 layers, 8 heads, patch 200, ff 800,
-dropout 0.1) plus `input_scale=0.2` to put z-scored input in the µV/100
-regime the weights were trained on, and `proj_dim=200` per the recipe's
-no-expansion rule.
+dropout 0.1) plus `input_scale=0.17` to put z-scored input in the µV/100
+regime the weights were trained on (measured, see caveats), and
+`proj_dim=200` per the recipe's no-expansion rule.
 
 Readouts at fixed epoch 325 (the paper's convention), three per cell:
 `probe_val` (Δr² vs the CBraMod-shape null), `tt_test` (r/ceiling on test),
