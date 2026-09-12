@@ -47,3 +47,16 @@ def test_parse_slug(slug, study, s, tag, draw):
 @pytest.mark.parametrize("bad", ["s701_a101_nd", "e12cb_701_a101", "e12cb_s701"])
 def test_rejects_non_slugs(bad):
     assert agg.parse_slug(bad) is None
+
+
+@pytest.mark.parametrize("ok", ["e03", "e04", "e12cb", "e12cbr", "e11scad12"])
+def test_prefix_type_accepts_study_tokens(ok):
+    assert agg._study_prefix(ok) == ok
+
+
+@pytest.mark.parametrize("bad", ["e12cb_s701", "x04", "", "e12cb_"])
+def test_prefix_type_rejects_non_tokens(bad):
+    import argparse
+
+    with pytest.raises(argparse.ArgumentTypeError):
+        agg._study_prefix(bad)

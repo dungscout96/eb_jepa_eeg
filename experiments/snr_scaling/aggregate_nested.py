@@ -104,6 +104,20 @@ def _load(path: Path, what: str) -> dict:
     return json.loads(path.read_text())
 
 
+def _study_prefix(value: str) -> str:
+    """argparse type for --prefix: the study token SLUG_RE would extract.
+
+    Replaces the former fixed ``choices=["e03", "e04"]``: the nulls are still
+    matched to the arm by filename prefix, so the value must be a whole study
+    token (no underscore) or the prefix check on the nulls becomes meaningless.
+    """
+    if not re.fullmatch(r"e\d[^_]*", value):
+        raise argparse.ArgumentTypeError(
+            f"{value!r} is not a study prefix (expected e.g. e03, e04, e12cb)"
+        )
+    return value
+
+
 def parse_slug(slug: str) -> dict | None:
     """``e03_s1863_a101_nd`` and ``e04_s400_a101_nd_d11`` -> S, A, tag, draw.
 
@@ -375,8 +389,9 @@ def main() -> None:
     ap.add_argument(
         "--prefix",
         default="e03",
-        choices=["e03", "e04"],
-        help="Study prefix of the result files and of the nulls.",
+        type=_study_prefix,
+        help="Study prefix of the result files and of the nulls, e.g. e03, "
+        "e04, e12cb, e12cbr. Must be the study token of SLUG_RE.",
     )
     ap.add_argument("--results-dir", default=str(RAW_DIR))
     ap.add_argument("--task", default="ThePresent")
