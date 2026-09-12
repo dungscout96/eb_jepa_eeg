@@ -68,6 +68,13 @@ cells() {  # $1 prefix -> slugs, one per line
 N=0
 SKIP=0
 
+# Job names already in the queue. A stage is skipped when its ARTIFACT exists
+# OR its job is already pending/running -- the artifact alone is not enough,
+# because a re-run while the first submission is still queued re-queues every
+# stage (this happened: 12 duplicates on 2026-09-12, cancelled by hand).
+QUEUED=$(squeue -u "$USER" -h -o "%j" 2>/dev/null | sort -u)
+queued() { grep -qx -- "$1" <<<"$QUEUED"; }
+
 submit_readouts() {
     local prefix=$1
     while read -r SLUG; do
@@ -77,7 +84,8 @@ submit_readouts() {
             continue
         fi
         for STAGE in "${STAGES[@]}"; do
-            if [ -s "${OUT}/${prefix}_${STAGE}_${SLUG}.json" ]; then
+            local name="ro_${STAGE}_${SLUG#e12}"
+            if [ -s "${OUT}/${prefix}_${STAGE}_${SLUG}.json" ] || queued "$name"; then
                 SKIP=$((SKIP + 1)); continue
             fi
             N=$((N + 1))
@@ -85,7 +93,7 @@ submit_readouts() {
             if [ -z "${DRY:-}" ]; then
                 SLUG="$SLUG" CKPT="$ckpt" STAGE="$STAGE" OUT_PREFIX="$prefix" \
                     CKPT_ROOT="$CKPT_ROOT" \
-                    sbatch --job-name="ro_${STAGE}_${SLUG#e12}" \
+                    sbatch --job-name="$name" \
                            --time="${TIME[$STAGE]}" "$READOUT_SBATCH" >/dev/null
                 sleep 1
             fi
