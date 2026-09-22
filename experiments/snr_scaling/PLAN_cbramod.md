@@ -1,7 +1,8 @@
 # E1.2 — An HBN-free warm start: CBraMod on the subject-scaling axis
 
-Status: **sweep running; LR probe added 2026-09-11** (drafted 2026-09-09,
-branch `cbramod-experiments`). See "Interim observation" at the end.
+Status: **COMPLETE 2026-09-22** (drafted 2026-09-09, branch `cbramod-experiments`).
+32 cells, 78 readouts, 0 failures. Results in
+[`RESULTS_cbramod.md`](RESULTS_cbramod.md); verdict at the end of this file.
 
 ## Why
 
@@ -143,3 +144,51 @@ the probe moves the answer, the axis is rerun at the chosen lr under a new
 suffix and the 1e-4 curve is reported alongside as the "recipe held fixed"
 condition. Precedent: E0.8 (`submit_e08_d44_lr_probe.sh`) and E1.1's
 `_lr2e4` / `_lr5e5` cells.
+
+
+## LR probe — RESOLVED 2026-09-22: lr 1e-4 was already the best of four
+
+The interim section above suspected the recipe's lr of under-training CBraMod.
+Six cells at S=701 draw 11, both arms, settle it — and the answer is no:
+
+| lr | warm final loss | warm val AUC | random final loss | random val AUC |
+|---|---:|---:|---:|---:|
+| **1e-4** (recipe) | 3.954 | **0.691** | 4.018 | 0.632 |
+| 3e-4 | 4.012 | 0.644 | 3.991 | 0.632 |
+| 5e-4 | 4.045 | 0.641 | 4.013 | 0.583 |
+| 1e-3 | 4.052 | 0.507 | 3.933 | 0.585 |
+
+Every higher lr is WORSE on the held-out AUC and none meaningfully lowers the
+loss; 1e-3 is close to destroying the warm arm. So the high-S plateau is **not
+an optimisation-hyperparameter artifact**, no re-sweep is warranted, and the
+lr 1e-4 sweep stands as the reported result. Selection was on R5 val only, and
+the same conclusion holds in both arms independently.
+
+What this does not rule out: a longer budget. Every cell here runs 4400 steps
+because that is what makes the rows comparable to E0.3/E0.4. `RESULTS_epoch_curve.md`
+already showed the budget binds the from-scratch depth-22 arm above S=1000, and
+these losses sit far from convergence. **The honest statement is that CBraMod
+does not fit this objective within the protocol's budget, not that it cannot.**
+
+## Verdict against the pre-registered criteria
+
+1. **Level — REPRODUCED, and more strongly than REVE.** Warm/random Δr² is
+   8.7× at S=200, 4.1× at 701, 3.8× at 1400, 3.5× at 1863, against E0.4/E0.5's
+   ~1.7×. Draws are tight (random-arm sd 0.00006–0.00072), so every ratio at
+   S ≥ 200 is many sd wide. At S=50 both arms are at the null and the ratio is
+   meaningless. **A warm start with zero HBN exposure sets the level, so the
+   E0.4 level result is not an artifact of REVE having seen R5/R6.**
+2. **Slope — NOT reproduced.** Both arms flatten after ~700 subjects: the
+   701→1863 exponent is −0.08 (warm) and +0.08 (random), both under 1 pooled sd,
+   against E0.4's +0.30 and E0.5's +0.27. This matches the *depth-12* pattern
+   (+0.05), not the depth-22 one.
+3. **Absolute level — as predicted, lower.** The 4.9M/200-d encoder sits well
+   below the 69M REVE arms at every S; only ratios and exponents are compared.
+
+**The two results must be read together.** The warm start is what buys the
+level, and that survives removing HBN from pretraining. The continued climb past
+700 subjects does not survive shrinking the encoder from 69M to 4.9M — which is
+what E0.4 itself concluded when it attributed the depth-12 saturation to
+capacity rather than to the subject axis. E1.2 is independent evidence for that
+reading: a small encoder saturates near 700 whatever its initialisation, and
+here it saturates while still ~4 Δr²-units above its own random-init twin.
